@@ -135,7 +135,7 @@ import { IconButton } from "@/components/icon-button";
 import { Menu } from "@/components/menu";
 import { ProductDrawer, blankProduct } from "../catalog/product-drawer";
 import { clipOf, compositeShell, fromSelection, isTableSet } from "@/lib/catalog/composition";
-import { Inspector, type BenchPanel, type BenchPatch, type BenchSidePatch, type EdgeKindId, type LockPanel, type StageEdgeRow, type StageGroupPanel, type StagePanel, type SwapPanel } from "./inspector";
+import { Inspector, type BenchPanel, type BenchPatch, type BenchSidePatch, type EdgeKindId, type InspectorProps, type LockPanel, type StageEdgeRow, type StageGroupPanel, type StagePanel, type SwapPanel } from "./inspector";
 import { AlignCenterVertical, Box, BringToFront, ClipboardPaste, Copy, FlipHorizontal2, Group, Lock, LockOpen, PackagePlus, Pin, PinOff, RotateCw, ScanEye, SendToBack, Square, Trash2, Ungroup, X } from "lucide-react";
 import { alignItems, type AlignPanel } from "./align-menu";
 import { ProposalReview } from "./proposal-review";
@@ -1764,7 +1764,9 @@ export function StudioScreen({
       items: placements.length,
       seats: groupSeats(doc, soleGroup),
       seated: groupSeated(doc, soleGroup),
-      tableIds: tables.map((t) => t.id),
+      // Counted from the right along the block, as the dressing bar names a member ("שולחן 1 מתוך 2")
+      // — the panel's member rows read in this order.
+      tableIds: [...tables].sort((a, b) => blockMemberIndex(doc, a) - blockMemberIndex(doc, b)).map((t) => t.id),
       unnumbered: tables.length > 0 && tables.every((t) => t.unnumbered),
     };
   }, [doc, soleGroup]);
@@ -5340,6 +5342,175 @@ export function StudioScreen({
   // dressing along, and how many of the currently selected tables that dressing would land on.
   const dressCandidateCount = copyTargets.length;
 
+  // The selection's two parts — the quick bar in the dock and the groups in the end panel — are ONE
+  // component rendered twice over this ONE object, so each kind's derived numbers live in one place.
+  const inspectorProps: Omit<InspectorProps, "part"> = {
+    selection: sole,
+    selectedCount: selected.length,
+    feature: featurePanel,
+    onResetFeature: resetFeature,
+    onSwapCurtain: swapCurtain,
+    facing: sharedFacing,
+    onFace: faceSelection,
+    spin,
+    onSpin: setSpin,
+    canRestack: stackRefs(selected).length > 0,
+    onRestack: restack,
+    // A block is one table to the seat count's "ל־N שולחנות", as to setSeatsForSelection.
+    selectedTables: new Set(selected.filter((r) => r.kind === "table").map((r) => unitOf(units, r.id)?.key ?? r.id)).size,
+    onSeatsForSelection: setSeatsForSelection,
+    onChairForSelection: setChairForSelection,
+    onChair: (id, variantId) => act({ type: "setTableChair", ids: [id], variantId }),
+    group: groupPanel,
+    onGroup: groupAny,
+    onUngroup: ungroupSelection,
+    onRenumberGroup: (groupId, number) => act({ type: "renumberGroup", groupId, number }),
+    onSeats: (id, seats) => act({ type: "setTableSeats", id, seats }),
+    onSeated: (id, seated) => act({ type: "setTableSeated", id, seated }),
+    onBlockedSides: (id, sides) => act({ type: "setTableBlockedSides", id, sides }),
+    // One number for the block, laid back over the tables it is made of — one history
+    // entry, because from the designer's side it was one number typed once.
+    onGroupSeated: (groupId, seated) =>
+      batch(spreadSeated(doc, groupId, seated).map((x) => ({ type: "setTableSeated" as const, id: x.id, seated: x.seated }))),
+    onGroupSeats: (groupId, seats) =>
+      batch(spreadSeats(doc, groupId, seats).map((x) => ({ type: "setTableSeats" as const, id: x.id, seats: x.seats }))),
+    doc,
+    structure: plan.structure,
+    onClose: () => setSelected([]),
+    onQuantity: changeQuantity,
+    onDelete: deleteSelection,
+    onDressTable: mode === "hall" ? undefined : dressTable,
+    onTablesNumbered: (tableIds, numbered) => act({ type: "setTablesNumbered", tableIds, numbered }),
+    renderPattern,
+    renderDesigns,
+    onScale: (id, scale) => act({ type: "setPlacementScale", id, scale }),
+    onHang: (id, heightMm) => act({ type: "setPlacementHang", id, heightMm }),
+    roofOf: (pt) => sketchRoofOf()(pt),
+    onCentreOver: centreHung,
+    onSpreadRow: spreadAlongRow,
+    onHangOverDressing: hangOverDressing,
+    onVessel: (ids, vessel) => act({ type: "setPlacementVessel", ids, vessel }),
+    onBorder: (ids, border) => act({ type: "setPlacementBorder", ids, border }),
+    onClimb: (id, edit) => act({ type: "setPlacementClimb", id, ...edit }),
+    onApplyToAllTables: spreadCloth,
+    onVariant: (id, variantId) => act({ type: "setPlacementVariant", id, variantId }),
+    onSpan: (id, span) => act({ type: "setPlacementSpan", id, span }),
+    onRail: (id, rail, dropMm) => act({ type: "setPlacementRail", id, rail, dropMm }),
+    onDrawRod: (id) => {
+      setRodDraw(id);
+      // An LED strip is drawn as a free run — its two ends (lib/venues/led.ts ledRunRail).
+      const drawn = doc.placements.find((x) => x.id === id);
+      if (drawn && isLedStrip(resolve(drawn.variantId)?.product)) return showHint("לחיצה בתחילת הפס ולחיצה בסופו · Esc לביטול");
+      showHint("לחיצה לכל עמוד של המוט · Enter או לחיצה כפולה לסיום · Esc לביטול");
+    },
+    onDrawCloth: (id, kind) => startClothDraw({ kind, placementId: id }),
+    onResize: (id, sizeMm) => act({ type: "resizePlacement", id, sizeMm }),
+    onBows: (id, bows) => act({ type: "setPlacementBows", id, bows }),
+    onCorners: (id, corners) => act({ type: "setPlacementCorners", id, corners }),
+    onCoverInset: (id, insetMm) => {
+      const cover = doc.placements.find((x) => x.id === id)?.cover;
+      if (cover) act({ type: "setPlacementCover", id, cover: { ...cover, insetMm } });
+    },
+    onDetachCover: (id) => act({ type: "setPlacementCover", id, cover: null }),
+    stageCoverItems: soleStage ? coverItems(stageAim(soleStage), true) : undefined,
+    onRenumber: (id, number) => act({ type: "renumberTable", id, number }),
+    onStyleTable: (id, style) => act({ type: "styleTable", id, style }),
+    onDuplicate: duplicate,
+    onRemovePlacement: (id) => act({ type: "removePlacement", id }),
+    zoneFocused: !!focusZoneId,
+    onSelectInZone: selectInZone,
+    layerActive: activeLayer !== null,
+    onSelectLayer: selectLayer,
+    scopeLabel:
+      [
+        focusZoneId && `אזור: ${zoneOptions.find((z) => z.id === focusZoneId)?.name ?? ""}`,
+        activeLayer && `שכבה: ${PLANES.find((pl) => pl.id === activeLayer)?.label ?? ""}`,
+      ]
+        .filter(Boolean)
+        .join(" · ") || undefined,
+    onClearScope: () => {
+      setZoneFocus(null);
+      setActiveLayer(null);
+    },
+    onSelectSimilar: selectSimilar,
+    canDistribute,
+    onDistribute: distributeEvenly,
+    align: alignPanel,
+    lock: lockPanel,
+    dressCandidateCount,
+    onCopyDressing: copyDressingToSelection,
+    onMirror: canMirror ? mirrorSelection : undefined,
+    breaches,
+    sizePanel,
+    onSize: resizeSole,
+    spacing,
+    onSpace: spaceSelection,
+    stagePanel,
+    onEditStage: editStage,
+    onExplodeStage: explodeStage,
+    onStageHeight: setStageHeightMm,
+    onStairStep: setStairStep,
+    onStageSize: setStageSize,
+    onAddStagePieces: (infos) => {
+      if (soleStage) void addStagePieces(infos, soleStage.id);
+    },
+    onUseStagePieces: (ids) => {
+      if (soleStage) patchStage(soleStage.id, (s) => ({ ...s, decks: [...s.decks, ...ids.filter((id) => !s.decks.includes(id))] }));
+    },
+    onLevelHeight: setLevelHeight,
+    onRemoveLevel: removeLevel,
+    onAddLevel: startLevel,
+    onAddEdge: startEdge,
+    onFillEdges: fillEdges,
+    onSelectEdge: setActiveEdge,
+    onRemoveStair: removeStair,
+    onStairChange: changeStair,
+    benchPanel,
+    onBench: changeBench,
+    onChairRows: changeChairRows,
+    onStageSurface: setSurface,
+    onStageCorners: setCorners,
+    onStageExceed: setExceed,
+    onSaveTemplate: (name) => void saveTemplate(name),
+    stageGroup,
+    onGroupStageHeight: setGroupStageHeight,
+    onGroupFillEdges: fillGroupEdges,
+    onGroupStageSurface: setGroupSurface,
+    onGroupStageCorners: setGroupCorners,
+    onGroupStageExceed: setGroupExceed,
+    onGroupSaveTemplate: (name) => void saveGroupTemplates(name),
+    onGroupExplode: explodeGroup,
+    onPickStage: (id) => setSelected([{ kind: "placement", id }]),
+    onBackToGroup: backToGroup,
+    onStickStages: selectedStages.length >= 2 ? stickStages : undefined,
+    onMergeStages: selectedStages.length >= 2 ? mergeSelectedStages : undefined,
+    onMakeStage: makeStage,
+    swap: swapPanel,
+    onSwap: swapSelection,
+    onEditProduct: editProduct,
+    onSaveComposite: composeFromSelection,
+    clothOptions,
+    onReplaceCloth: (id, productId) => {
+      const product = productById(productId);
+      if (product) replaceItems([id], product);
+    },
+    onBlockCloth: (tableIds, op) => {
+      const covers = tableIds.map((id) => coverOn(doc, id)).filter((c): c is Placement => !!c);
+      if (op === "remove") batch(covers.map((c) => ({ type: "removePlacement" as const, id: c.id })));
+      else if ("variantId" in op) batch(covers.filter((c) => c.variantId !== op.variantId).map((c) => ({ type: "setPlacementVariant" as const, id: c.id, variantId: op.variantId })));
+      else {
+        const product = productById(op.productId);
+        if (product) replaceItems(covers.map((c) => c.id), product);
+      }
+    },
+    onStyleTables: (ids, style) => batch(ids.map((id) => ({ type: "styleTable" as const, id, style }))),
+    onCopy: copy,
+    onCut: cut,
+  };
+  // While the stage fill tool is out its own bars take the dock (StageDrawBar, StageFillPanel), and
+  // the selection's groups stand down with the selection's bar.
+  const fillToolOut = (stageFill?.phase === "draw" && stageTool?.kind !== "level") || stageFill?.phase === "pick";
+
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* No header (the "Studio + Halls" board, 1b — everything floats): history is on the canvas
@@ -5687,170 +5858,7 @@ export function StudioScreen({
                   onClose={() => setStageFill(null)}
                 />
               ) : (
-              <Inspector
-                selection={sole}
-                selectedCount={selected.length}
-                feature={featurePanel}
-                onResetFeature={resetFeature}
-                onSwapCurtain={swapCurtain}
-                facing={sharedFacing}
-                onFace={faceSelection}
-                spin={spin}
-                onSpin={setSpin}
-                canRestack={stackRefs(selected).length > 0}
-                onRestack={restack}
-                // A block is one table to the seat count's "ל־N שולחנות", as to setSeatsForSelection.
-                selectedTables={new Set(selected.filter((r) => r.kind === "table").map((r) => unitOf(units, r.id)?.key ?? r.id)).size}
-                onSeatsForSelection={setSeatsForSelection}
-                onChairForSelection={setChairForSelection}
-                onChair={(id, variantId) => act({ type: "setTableChair", ids: [id], variantId })}
-                group={groupPanel}
-                onGroup={groupAny}
-                onUngroup={ungroupSelection}
-                onRenumberGroup={(groupId, number) => act({ type: "renumberGroup", groupId, number })}
-                onSeats={(id, seats) => act({ type: "setTableSeats", id, seats })}
-                onSeated={(id, seated) => act({ type: "setTableSeated", id, seated })}
-                onBlockedSides={(id, sides) => act({ type: "setTableBlockedSides", id, sides })}
-                // One number for the block, laid back over the tables it is made of — one history
-                // entry, because from the designer's side it was one number typed once.
-                onGroupSeated={(groupId, seated) =>
-                  batch(spreadSeated(doc, groupId, seated).map((x) => ({ type: "setTableSeated" as const, id: x.id, seated: x.seated })))
-                }
-                onGroupSeats={(groupId, seats) =>
-                  batch(spreadSeats(doc, groupId, seats).map((x) => ({ type: "setTableSeats" as const, id: x.id, seats: x.seats })))
-                }
-                doc={doc}
-                structure={plan.structure}
-                onClose={() => setSelected([])}
-                onQuantity={changeQuantity}
-                onDelete={deleteSelection}
-                onDressTable={mode === "hall" ? undefined : dressTable}
-                onTablesNumbered={(tableIds, numbered) => act({ type: "setTablesNumbered", tableIds, numbered })}
-                renderPattern={renderPattern}
-                renderDesigns={renderDesigns}
-                onScale={(id, scale) => act({ type: "setPlacementScale", id, scale })}
-                onHang={(id, heightMm) => act({ type: "setPlacementHang", id, heightMm })}
-                roofOf={(pt) => sketchRoofOf()(pt)}
-                onCentreOver={centreHung}
-                onSpreadRow={spreadAlongRow}
-                onHangOverDressing={hangOverDressing}
-                onVessel={(ids, vessel) => act({ type: "setPlacementVessel", ids, vessel })}
-                onBorder={(ids, border) => act({ type: "setPlacementBorder", ids, border })}
-                onClimb={(id, edit) => act({ type: "setPlacementClimb", id, ...edit })}
-                onApplyToAllTables={spreadCloth}
-                onVariant={(id, variantId) => act({ type: "setPlacementVariant", id, variantId })}
-                onSpan={(id, span) => act({ type: "setPlacementSpan", id, span })}
-                onRail={(id, rail, dropMm) => act({ type: "setPlacementRail", id, rail, dropMm })}
-                onDrawRod={(id) => {
-                  setRodDraw(id);
-                  // An LED strip is drawn as a free run — its two ends (lib/venues/led.ts ledRunRail).
-                  const drawn = doc.placements.find((x) => x.id === id);
-                  if (drawn && isLedStrip(resolve(drawn.variantId)?.product)) return showHint("לחיצה בתחילת הפס ולחיצה בסופו · Esc לביטול");
-                  showHint("לחיצה לכל עמוד של המוט · Enter או לחיצה כפולה לסיום · Esc לביטול");
-                }}
-                onDrawCloth={(id, kind) => startClothDraw({ kind, placementId: id })}
-                onResize={(id, sizeMm) => act({ type: "resizePlacement", id, sizeMm })}
-                onBows={(id, bows) => act({ type: "setPlacementBows", id, bows })}
-                onCorners={(id, corners) => act({ type: "setPlacementCorners", id, corners })}
-                onCoverInset={(id, insetMm) => {
-                  const cover = doc.placements.find((x) => x.id === id)?.cover;
-                  if (cover) act({ type: "setPlacementCover", id, cover: { ...cover, insetMm } });
-                }}
-                onDetachCover={(id) => act({ type: "setPlacementCover", id, cover: null })}
-                stageCoverItems={soleStage ? coverItems(stageAim(soleStage), true) : undefined}
-                onRenumber={(id, number) => act({ type: "renumberTable", id, number })}
-                onStyleTable={(id, style) => act({ type: "styleTable", id, style })}
-                onDuplicate={duplicate}
-                onRemovePlacement={(id) => act({ type: "removePlacement", id })}
-                zoneFocused={!!focusZoneId}
-                onSelectInZone={selectInZone}
-                layerActive={activeLayer !== null}
-                onSelectLayer={selectLayer}
-                scopeLabel={
-                  [
-                    focusZoneId && `אזור: ${zoneOptions.find((z) => z.id === focusZoneId)?.name ?? ""}`,
-                    activeLayer && `שכבה: ${PLANES.find((pl) => pl.id === activeLayer)?.label ?? ""}`,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ") || undefined
-                }
-                onClearScope={() => {
-                  setZoneFocus(null);
-                  setActiveLayer(null);
-                }}
-                onSelectSimilar={selectSimilar}
-                canDistribute={canDistribute}
-                onDistribute={distributeEvenly}
-                align={alignPanel}
-                lock={lockPanel}
-                dressCandidateCount={dressCandidateCount}
-                onCopyDressing={copyDressingToSelection}
-                onMirror={canMirror ? mirrorSelection : undefined}
-                breaches={breaches}
-                sizePanel={sizePanel}
-                onSize={resizeSole}
-                spacing={spacing}
-                onSpace={spaceSelection}
-                stagePanel={stagePanel}
-                onEditStage={editStage}
-                onExplodeStage={explodeStage}
-                onStageHeight={setStageHeightMm}
-                onStairStep={setStairStep}
-                onStageSize={setStageSize}
-                onAddStagePieces={(infos) => {
-                  if (soleStage) void addStagePieces(infos, soleStage.id);
-                }}
-                onUseStagePieces={(ids) => {
-                  if (soleStage) patchStage(soleStage.id, (s) => ({ ...s, decks: [...s.decks, ...ids.filter((id) => !s.decks.includes(id))] }));
-                }}
-                onLevelHeight={setLevelHeight}
-                onRemoveLevel={removeLevel}
-                onAddLevel={startLevel}
-                onAddEdge={startEdge}
-                onFillEdges={fillEdges}
-                onSelectEdge={setActiveEdge}
-                onRemoveStair={removeStair}
-                onStairChange={changeStair}
-                benchPanel={benchPanel}
-                onBench={changeBench}
-                onChairRows={changeChairRows}
-                onStageSurface={setSurface}
-                onStageCorners={setCorners}
-                onStageExceed={setExceed}
-                onSaveTemplate={(name) => void saveTemplate(name)}
-                stageGroup={stageGroup}
-                onGroupStageHeight={setGroupStageHeight}
-                onGroupFillEdges={fillGroupEdges}
-                onGroupStageSurface={setGroupSurface}
-                onGroupStageCorners={setGroupCorners}
-                onGroupStageExceed={setGroupExceed}
-                onGroupSaveTemplate={(name) => void saveGroupTemplates(name)}
-                onGroupExplode={explodeGroup}
-                onPickStage={(id) => setSelected([{ kind: "placement", id }])}
-                onBackToGroup={backToGroup}
-                onStickStages={selectedStages.length >= 2 ? stickStages : undefined}
-                onMergeStages={selectedStages.length >= 2 ? mergeSelectedStages : undefined}
-                onMakeStage={makeStage}
-                swap={swapPanel}
-                onSwap={swapSelection}
-                onEditProduct={editProduct}
-                onSaveComposite={composeFromSelection}
-                clothOptions={clothOptions}
-                onReplaceCloth={(id, productId) => {
-                  const product = productById(productId);
-                  if (product) replaceItems([id], product);
-                }}
-                onBlockCloth={(tableIds, op) => {
-                  const covers = tableIds.map((id) => coverOn(doc, id)).filter((c): c is Placement => !!c);
-                  if (op === "remove") batch(covers.map((c) => ({ type: "removePlacement" as const, id: c.id })));
-                  else if ("variantId" in op) batch(covers.filter((c) => c.variantId !== op.variantId).map((c) => ({ type: "setPlacementVariant" as const, id: c.id, variantId: op.variantId })));
-                  else {
-                    const product = productById(op.productId);
-                    if (product) replaceItems(covers.map((c) => c.id), product);
-                  }
-                }}
-                onStyleTables={(ids, style) => batch(ids.map((id) => ({ type: "styleTable" as const, id, style })))}
-              />
+              <Inspector part="bar" {...inspectorProps} />
               )}
             </div>
           </div>
@@ -6093,6 +6101,9 @@ export function StudioScreen({
               onOpen={() => setUnfoldedFor(selected)}
             />
           )}
+          {/* The selection's groups — every field it has, under the folded list (or, with a zone or a
+              layer scope and nothing selected, the scope's). The same props as the quick bar. */}
+          {!fillToolOut && (selected.length > 0 || !!focusZoneId || activeLayer !== null) && <Inspector part="groups" {...inspectorProps} />}
           {/* Nothing selected: the sketch's own groups — who it seats, what is wrong with it, how its
               tables are numbered, the saved sketches, and what this event took out of the venue. The
               selection's groups (they arrive with the quick bar) take this place otherwise. */}

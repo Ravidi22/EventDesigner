@@ -58,6 +58,9 @@ import {
   Lock,
   LockOpen,
   RotateCcw,
+  Scissors,
+  Shirt,
+  type LucideIcon,
 } from "lucide-react";
 import type { MirrorAxis } from "@/lib/design-document/mirror";
 import type { Product, ResizeSpec } from "@/lib/catalog/types";
@@ -72,7 +75,7 @@ import { coverTarget } from "@/lib/studio/cover";
 import { formatDimensions } from "@/lib/catalog/format";
 import { SearchInput } from "@/components/search-input";
 import { ProductImage } from "../catalog/product-image";
-import type { BenchSideKind, BenchSpec, ChairRows, DesignDocumentContent, DesignTable, WallSpan } from "@/lib/design-document/types";
+import type { BenchSideKind, BenchSpec, ChairRows, DesignDocumentContent, DesignTable, Placement, WallSpan } from "@/lib/design-document/types";
 import { ChairRowsPopover } from "@/components/chair-rows-popover";
 import { BENCH_SIDE_KINDS, BENCH_SIDE_LABEL, SEAT_WIDTH_MM, type BenchLayout, type BenchSideLayout } from "@/lib/design-document/bench";
 import { placementFootprint, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
@@ -97,7 +100,8 @@ import {
   type ClimbHost,
 } from "@/lib/venues/climb";
 import { SeatSidesPicker } from "@/components/seat-sides-picker";
-import { Actions, Bar, BarButton, Note, PanelRow, Rotation, ltr } from "@/components/inspector-bar";
+import { Actions, Bar, BarButton, ModeVerb, Note, PanelRow, QuickLead, QuickNumber, QuickSep, QuickTail, QuickTurn, Rotation, ltr } from "@/components/inspector-bar";
+import { PanelGroups, PanelListRow, PickRow, type PanelGroup } from "@/components/end-panel";
 import { InspectorDivider } from "@/components/plan-canvas";
 import type { ElementStyle } from "@/lib/element-style";
 import type { FeatureKind, VenueStructure } from "@/lib/venues/structure";
@@ -162,6 +166,15 @@ import { MissingPieces } from "./missing-pieces";
 // Same card as the venue plan's inspector (radius, hairline, surface, shadow) and the same
 // InspectorHeader inside it, so the two floating inspectors over this app's two canvases still read
 // as one thing.
+//
+// AND NOW IN TWO PLACES (2026-11-09, the user's "Studio + Halls" board, /halls' halls-selection.tsx
+// first): the QUICK BAR at the canvas's foot — what it is, at most three numbers typed in place, one
+// mode verb, then copy · delete · ⋯ — and the END PANEL's groups, every other field, folded under a
+// title that reads its value back. The screen renders `Inspector` twice over one props object
+// (`part`). The chips' fields moved into the groups as they were; a chip that was a picker (a type
+// swap, a cloth) is a group's pick row opening the same list beside the panel. Kinds are converted
+// one at a time — the table and the block first; any kind not yet converted keeps its old bar for
+// "bar" and shows no groups.
 export type EdgeKindId = "stairs" | "bench" | "barrier" | "backdrop" | "ramp";
 export const EDGE_KIND_LABEL: Record<EdgeKindId, string> = {
   stairs: "מדרגות",
@@ -330,129 +343,13 @@ export interface StageGroupPanel {
   };
 }
 
-export function Inspector({
-  selection,
-  selectedCount,
-  feature,
-  onResetFeature,
-  onSwapCurtain,
-  facing,
-  onFace,
-  spin,
-  onSpin,
-  canRestack,
-  onRestack,
-  selectedTables,
-  onSeatsForSelection,
-  onChairForSelection,
-  onChair,
-  group,
-  onGroup,
-  onUngroup,
-  onRenumberGroup,
-  onSeats,
-  onSeated,
-  onBlockedSides,
-  onGroupSeated,
-  onGroupSeats,
-  doc,
-  structure,
-  onClose,
-  onQuantity,
-  onDelete,
-  onDressTable,
-  onTablesNumbered,
-  renderPattern,
-  renderDesigns,
-  onScale,
-  onHang,
-  roofOf,
-  onCentreOver,
-  onSpreadRow,
-  onHangOverDressing,
-  onVessel,
-  onBorder,
-  onClimb,
-  onApplyToAllTables,
-  onVariant,
-  onSpan,
-  onRail,
-  onDrawRod,
-  onDrawCloth,
-  onResize,
-  onBows,
-  onCorners,
-  onCoverInset,
-  onDetachCover,
-  stageCoverItems,
-  onRenumber,
-  onStyleTable,
-  onDuplicate,
-  onRemovePlacement,
-  zoneFocused,
-  onSelectInZone,
-  layerActive,
-  onSelectLayer,
-  scopeLabel,
-  onClearScope,
-  onSelectSimilar,
-  canDistribute,
-  onDistribute,
-  align,
-  lock,
-  dressCandidateCount,
-  onCopyDressing,
-  onMirror,
-  breaches,
-  sizePanel,
-  onSize,
-  spacing,
-  onSpace,
-  stagePanel,
-  onEditStage,
-  onExplodeStage,
-  onStageHeight,
-  onStairStep,
-  onStageSize,
-  onAddStagePieces,
-  onUseStagePieces,
-  onLevelHeight,
-  onRemoveLevel,
-  onAddLevel,
-  onAddEdge,
-  onFillEdges,
-  onSelectEdge,
-  onRemoveStair,
-  onStairChange,
-  benchPanel,
-  onBench,
-  onChairRows,
-  onStageSurface,
-  onStageCorners,
-  onStageExceed,
-  onSaveTemplate,
-  stageGroup,
-  onGroupStageHeight,
-  onGroupFillEdges,
-  onGroupStageSurface,
-  onGroupStageCorners,
-  onGroupStageExceed,
-  onGroupSaveTemplate,
-  onGroupExplode,
-  onPickStage,
-  onBackToGroup,
-  onStickStages,
-  onMergeStages,
-  onMakeStage,
-  swap,
-  onSwap,
-  clothOptions,
-  onReplaceCloth,
-  onEditProduct,
-  onSaveComposite,
-  onBlockCloth,
-  onStyleTables,
-}: {
+/** Everything the selection's two parts are given — ONE object, built once by the screen and rendered
+ *  twice (2026-11-09, the user's "Studio + Halls" board): `part="bar"` is the QUICK BAR at the canvas's
+ *  foot, `part="groups"` the END PANEL's groups. Each kind's derived numbers live in one place. */
+export type InspectorProps = {
+  /** "bar" — the quick bar at the canvas's foot; "groups" — the end panel's groups. A kind not yet
+   *  turned into groups renders its old bar for "bar" and nothing for "groups". */
+  part: "bar" | "groups";
   /** The one thing being edited — null when nothing, or several things, are selected. */
   selection: Selection;
   /** How many things are selected in total. A group has no fields to show (a quantity stepper over
@@ -714,7 +611,138 @@ export function Inspector({
   onBlockCloth?: (tableIds: string[], op: { variantId: string } | { productId: string } | "remove") => void;
   /** One look over several tables (a block's), in one history entry. */
   onStyleTables?: (tableIds: string[], style: ElementStyle | undefined) => void;
-}) {
+  /** The clipboard (Ctrl+C / Ctrl+X) — the first rows of a converted kind's ⋯. The quick bar's copy
+   *  button duplicates (onDuplicate); this copy can be pasted into another sketch. */
+  onCopy?: () => void;
+  onCut?: () => void;
+};
+
+export function Inspector({
+  part,
+  selection,
+  selectedCount,
+  feature,
+  onResetFeature,
+  onSwapCurtain,
+  facing,
+  onFace,
+  spin,
+  onSpin,
+  canRestack,
+  onRestack,
+  selectedTables,
+  onSeatsForSelection,
+  onChairForSelection,
+  onChair,
+  group,
+  onGroup,
+  onUngroup,
+  onRenumberGroup,
+  onSeats,
+  onSeated,
+  onBlockedSides,
+  onGroupSeated,
+  onGroupSeats,
+  doc,
+  structure,
+  onClose,
+  onQuantity,
+  onDelete,
+  onDressTable,
+  onTablesNumbered,
+  renderPattern,
+  renderDesigns,
+  onScale,
+  onHang,
+  roofOf,
+  onCentreOver,
+  onSpreadRow,
+  onHangOverDressing,
+  onVessel,
+  onBorder,
+  onClimb,
+  onApplyToAllTables,
+  onVariant,
+  onSpan,
+  onRail,
+  onDrawRod,
+  onDrawCloth,
+  onResize,
+  onBows,
+  onCorners,
+  onCoverInset,
+  onDetachCover,
+  stageCoverItems,
+  onRenumber,
+  onStyleTable,
+  onDuplicate,
+  onRemovePlacement,
+  zoneFocused,
+  onSelectInZone,
+  layerActive,
+  onSelectLayer,
+  scopeLabel,
+  onClearScope,
+  onSelectSimilar,
+  canDistribute,
+  onDistribute,
+  align,
+  lock,
+  dressCandidateCount,
+  onCopyDressing,
+  onMirror,
+  breaches,
+  sizePanel,
+  onSize,
+  spacing,
+  onSpace,
+  stagePanel,
+  onEditStage,
+  onExplodeStage,
+  onStageHeight,
+  onStairStep,
+  onStageSize,
+  onAddStagePieces,
+  onUseStagePieces,
+  onLevelHeight,
+  onRemoveLevel,
+  onAddLevel,
+  onAddEdge,
+  onFillEdges,
+  onSelectEdge,
+  onRemoveStair,
+  onStairChange,
+  benchPanel,
+  onBench,
+  onChairRows,
+  onStageSurface,
+  onStageCorners,
+  onStageExceed,
+  onSaveTemplate,
+  stageGroup,
+  onGroupStageHeight,
+  onGroupFillEdges,
+  onGroupStageSurface,
+  onGroupStageCorners,
+  onGroupStageExceed,
+  onGroupSaveTemplate,
+  onGroupExplode,
+  onPickStage,
+  onBackToGroup,
+  onStickStages,
+  onMergeStages,
+  onMakeStage,
+  swap,
+  onSwap,
+  clothOptions,
+  onReplaceCloth,
+  onEditProduct,
+  onSaveComposite,
+  onBlockCloth,
+  onStyleTables,
+  onCopy,
+  onCut,
+}: InspectorProps) {
   // Local to the one bar that offers it — a copy of another table's dressing has exactly one entry
   // point on this screen, so there is no second dialog to keep in sync (contrast the catalog's
   // delete, which the card menu AND the edit drawer can both open).
@@ -722,49 +750,121 @@ export function Inspector({
   const [confirmingReplace, setConfirmingReplace] = useState(false);
 
   const selectItems = selectionItems({ zoneFocused, onSelectInZone, layerActive, onSelectLayer, onSelectSimilar });
+  const bar = part === "bar";
+  /** A kind's groups in the end panel — open or closed as they were last left for this kind
+   *  (lib/studio/panel-groups.ts), warn ones first. */
+  const groupsOf = (kindKey: string, title: string, sub: string | undefined, groups: (PanelGroup | false | null | undefined)[], defaultOpen?: string[]) => (
+    <PanelGroups kind={`studio:${kindKey}`} title={title} sub={sub} defaultOpen={defaultOpen} groups={groups.filter((g): g is PanelGroup => !!g)} />
+  );
+  /** A converted kind's ⋯: the clipboard first (Ctrl+C / Ctrl+X — the quick bar's copy button
+   *  duplicates), then the kind's MoreMenu sections, flattened as MoreMenu flattens them. */
+  const moreOf = (sections: MenuItem[][]) => flatSections([clipboardItems(onCopy, onCut), ...sections]);
 
   // A GROUP — the designer pushed these together and said they are one thing. For tables that means
   // one number for the lot, so the number field here edits the group and not any table inside it.
   // (A group made only of stages is a STAGE group — its own bar, below, with the stage tools.)
   if (group && !(selectedCount > 1 && stageGroup)) {
-    // A block of TABLES is one table — the bar gives it what a table's bar gives a table: its cloth,
-    // its chair, its look, its focus mode, its saved designs and its pattern, each over every table
-    // of it at once. The cloth shown is the first table's that has one; a change goes on them all.
+    const facts = countLine([
+      [group.tables, "שולחן אחד", "שולחנות"],
+      [group.items, "פריט אחד", "פריטים"],
+      [group.seats, "כסא אחד", "כסאות"],
+    ]);
+
+    // A group of design items only — not yet asked in two places: its bar as it was.
+    if (group.tables === 0) {
+      if (!bar) return null;
+      return (
+        <Bar icon={Group} title="קבוצה" facts={facts} onClose={onClose}>
+          {swap && <SwapPopover swap={swap} onSwap={onSwap} label={swap.kind === "tables" ? "סוג השולחנות בקבוצה" : "החלפת הפריטים בקבוצה"} />}
+          <Rotation value={facing} onChange={onFace} />
+          <MoreMenu
+            label="עוד פעולות לקבוצה"
+            sections={[
+              mirrorItems(onMirror),
+              onSaveComposite ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : [],
+              [{ label: "פירוק הקבוצה", icon: Ungroup, onSelect: onUngroup }],
+              lockItems(lock),
+            ]}
+          />
+          <Actions onDuplicate={onDuplicate} duplicateLabel="שכפול הקבוצה" onDelete={onDelete} deleteLabel="מחיקת הקבוצה" />
+        </Bar>
+      );
+    }
+
+    // A BLOCK of tables is one table — it is given what a table is given: its number and seats, its
+    // cloth, its chair, its look, its saved designs and its pattern, each over every table of it at
+    // once. The cloth shown is the first table's that has one; a change goes on them all. Its
+    // members are listed (counted from the right, as the dressing bar counts them), and a member's
+    // row opens the block's focus mode on that member (D13).
     const members = group.tableIds.map((id) => doc.tables.find((x) => x.id === id)).filter((x): x is DesignTable => !!x);
     const covers = members.map((m) => coverOn(doc, m.id)).filter((c): c is NonNullable<typeof c> => !!c);
     const blockCloth = covers[0];
-    const blockShades = blockCloth ? shadesOf(blockCloth.variantId) : [];
     const blockVariant = members.length > 0 && members.every((m) => m.variantId && m.variantId === members[0].variantId) ? members[0].variantId : undefined;
     const blockChair = members.length > 0 && members.every((m) => (m.chairVariantId ?? "") === (members[0].chairVariantId ?? "")) ? (members[0].chairVariantId ?? "") : null;
     const blockDressed = doc.placements.some((p) => (p.layer === "table" && !!p.tableId && group.tableIds.includes(p.tableId)) || (p.layer === "ceiling" && !!p.over && group.tableIds.includes(p.over)));
     const lead = members[0];
-    return (
-      <Bar
-        icon={Group}
-        title={group.tables > 0 ? (group.unnumbered ? "שולחן ללא מספר" : group.number ? `שולחן ${group.number}` : group.number === 0 ? "שולחן ראש" : "קבוצה") : "קבוצה"}
-        facts={countLine([
-          [group.tables, "שולחן אחד", "שולחנות"],
-          [group.items, "פריט אחד", "פריטים"],
-          [group.seats, "כסא אחד", "כסאות"],
-        ])}
-        onClose={onClose}
-      >
-        {swap && (
-          <SwapPopover swap={swap} onSwap={onSwap} label={swap.kind === "tables" ? "סוג השולחנות בקבוצה" : "החלפת הפריטים בקבוצה"} />
-        )}
-        {group.tables > 0 && (
-          <Popover label="מספר שולחן" icon={Hash} value={group.unnumbered ? "ללא" : ltr(`#${group.number ?? 0}`)}>
-            {!group.unnumbered && (
-              <PanelRow>
-                <NumberField
-                  id="group-number"
-                  aria-label="מספר שולחן"
-                  decimals={0}
-                  min={0}
-                  value={group.number ?? 0}
-                  onChange={(v) => onRenumberGroup(group.id, v)}
-                  className="w-20"
+    const title = group.unnumbered ? "שולחן ללא מספר" : group.number ? `שולחן ${group.number}` : group.number === 0 ? "שולחן ראש" : "קבוצה";
+    const blockMore = moreOf([
+      mirrorItems(onMirror),
+      [
+        ...(onEditProduct && blockVariant && resolve(blockVariant) ? [{ label: "עריכת סוג השולחנות בקטלוג", icon: Pencil, onSelect: () => onEditProduct(blockVariant) }] : []),
+        ...(onSaveComposite ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
+      ],
+      lockItems(lock),
+    ]);
+
+    if (bar)
+      return (
+        <Bar icon={Group} title={title} facts={facts} onClose={onClose}>
+          <NumberAndSeats
+            number={group.number ?? 0}
+            unnumbered={group.unnumbered}
+            onNumber={(v) => onRenumberGroup(group.id, v)}
+            seats={group.seats}
+            onSeats={(v) => onGroupSeats(group.id, v)}
+          />
+          <QuickTurn value={facing} onChange={onFace} />
+          <QuickSep />
+          <ModeVerb icon={Ungroup} label="פירוק הבלוק" onClick={onUngroup} />
+          <QuickTail onCopy={onDuplicate} copyLabel="שכפול הבלוק" onDelete={onDelete} deleteLabel="מחיקת הבלוק" more={blockMore} moreLabel="עוד פעולות לבלוק" />
+        </Bar>
+      );
+
+    return groupsOf(
+      "block",
+      title,
+      facts,
+      [
+        G(
+          "members",
+          Group,
+          "שולחנות בבלוק",
+          `${members.length} שולחנות`,
+          <>
+            <div className="-mx-1.5 flex flex-col gap-px">
+              {members.map((m, i) => (
+                <PanelListRow
+                  key={m.id}
+                  glyph={<TableIcon aria-hidden className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />}
+                  label={`שולחן ${i + 1}`}
+                  meta={m.type}
+                  onClick={onDressTable ? () => onDressTable(m.id) : undefined}
                 />
+              ))}
+            </div>
+            {onDressTable && <Note>לחיצה על שולחן פותחת את עיצוב הבלוק — הזזה וסידור של הפריטים על כל הבלוק, עם השולחן הזה פעיל.</Note>}
+          </>,
+        ),
+        G(
+          "table",
+          TableIcon,
+          "שולחן",
+          group.unnumbered ? "ללא מספור" : ltr(`#${group.number ?? 0}`),
+          <>
+            {swap && <SwapPickRow swap={swap} onSwap={onSwap} label={swap.kind === "tables" ? "סוג השולחנות בקבוצה" : "החלפת הפריטים בקבוצה"} />}
+            {!group.unnumbered && (
+              <PanelRow label="מספר שולחן" htmlFor="group-number">
+                <NumberField id="group-number" decimals={0} min={0} value={group.number ?? 0} onChange={(v) => onRenumberGroup(group.id, v)} className="w-20" />
               </PanelRow>
             )}
             {!group.unnumbered && group.number !== undefined && group.number > 0 && duplicateNumbers(doc, benchOf).has(group.number) && <DuplicateNumber />}
@@ -772,36 +872,23 @@ export function Inspector({
               <UnnumberedSwitch checked={!!group.unnumbered} onChange={(off) => onTablesNumbered(group.tableIds, !off)} />
             </div>
             <Note>השולחנות נספרים כשולחן אחד, והכסאות מסודרים סביב הבלוק כולו.</Note>
-          </Popover>
-        )}
-
-        {/* One block, one chair count and one occupancy. What is typed here is spread back over the
-            tables underneath (chairs evenly; occupancy filling each to its own seat count, in order)
-            so that breaking the block up later leaves each table holding a number that is true of
-            it. Offered whenever the block has tables — a block of tables nobody seats yet is exactly
-            the one that needs its chairs typed. */}
-        {group.tables > 0 && (
-          <Popover label="ישיבה" icon={Armchair} value={group.seats > 0 ? ltr(`${group.seated}/${group.seats}`) : "—"}>
+          </>,
+        ),
+        // One block, one chair count and one occupancy. What is typed here is spread back over the
+        // tables underneath (chairs evenly; occupancy filling each to its own seat count, in order)
+        // so that breaking the block up later leaves each table holding a number that is true of it.
+        G(
+          "seating",
+          Armchair,
+          "ישיבה",
+          group.seats > 0 ? ltr(`${group.seated}/${group.seats}`) : "ללא כסאות",
+          <>
             <PanelRow label="כסאות" htmlFor="group-seats">
-              <NumberField
-                id="group-seats"
-                decimals={0}
-                min={0}
-                value={group.seats}
-                onChange={(v) => onGroupSeats(group.id, v)}
-                className="w-20"
-              />
+              <NumberField id="group-seats" decimals={0} min={0} value={group.seats} onChange={(v) => onGroupSeats(group.id, v)} className="w-20" />
             </PanelRow>
             {group.seats > 0 && (
               <PanelRow label="תפוסה" htmlFor="group-seated">
-                <NumberField
-                  id="group-seated"
-                  decimals={0}
-                  min={0}
-                  value={group.seated}
-                  onChange={(v) => onGroupSeated(group.id, v)}
-                  className="w-20"
-                />
+                <NumberField id="group-seated" decimals={0} min={0} value={group.seated} onChange={(v) => onGroupSeated(group.id, v)} className="w-20" />
                 <span className={"text-xs " + occupancyInk(group.seated, group.seats)}>מתוך {group.seats}</span>
               </PanelRow>
             )}
@@ -810,106 +897,53 @@ export function Inspector({
                 <Select
                   aria-label="סוג הכיסא סביב הבלוק"
                   value={blockChair === null ? "__mixed" : blockChair}
-                  options={[
-                    ...(blockChair === null ? [{ value: "__mixed", label: "כיסאות שונים" }] : []),
-                    { value: "", label: defaultChairLabel() },
-                    ...chairOptions(),
-                  ]}
+                  options={[...(blockChair === null ? [{ value: "__mixed", label: "כיסאות שונים" }] : []), { value: "", label: defaultChairLabel() }, ...chairOptions()]}
                   onChange={(v) => v !== "__mixed" && onChairForSelection(v || null)}
                 />
               </PanelRow>
             )}
             <Note>הכסאות מסודרים סביב הבלוק כולו ומתחלקים בין השולחנות שבו; התפוסה ממלאת כל שולחן עד מלוא הכסאות שלו.</Note>
-          </Popover>
-        )}
-
-        {blockCloth && onBlockCloth && (
-          <Popover label="מפה" leading={<Swatch color={blockShades.find((s) => s.id === blockCloth.variantId)?.swatch} size={14} />} value={resolve(blockCloth.variantId)?.product.name ?? "מפה"}>
-            {clothOptions.length > 1 && (
-              <Select
-                aria-label="סוג המפה"
-                value={resolve(blockCloth.variantId)?.product.id ?? ""}
-                options={clothOptions}
-                onChange={(v) => v && onBlockCloth(group.tableIds, { productId: v })}
-                className="mb-2 w-full"
-              />
-            )}
-            {blockShades.length > 0 && (
-              <SwatchPicker options={blockShades} value={blockCloth.variantId} onChange={(v) => onBlockCloth(group.tableIds, { variantId: v })} label="גוון המפה" />
-            )}
-            {/* Its contour — the first cloth's shown, a change hems every cloth of the block. */}
-            {onBorder && (
-              <div className="mt-3 border-t border-border-soft pt-2">
-                <span className={fieldLabelClassName}>קונטור</span>
-                <BorderPanel
-                  own={blockCloth.border}
-                  row={cleanBorder(resolve(blockCloth.variantId)?.product.appearance?.border)}
-                  category="tablecloths"
-                  onBorder={(b) => onBorder(covers.map((c) => c.id), b)}
-                  idPrefix={`border-${blockCloth.id}`}
-                />
-              </div>
-            )}
-            {covers.length < members.length && <Note>{`${members.length - covers.length} מהשולחנות בבלוק בלי מפה — שינוי כאן חל על מי שיש לו. להלבשת כולם: גוררים מפה מהסרגל על הבלוק.`}</Note>}
-            <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onApplyToAllTables(blockCloth.id)}>
-              <Copy className="h-3.5 w-3.5" strokeWidth={2} />
-              על כל השולחנות
-            </Button>
-            <Button size="sm" variant="danger" className="mt-1 w-full" onClick={() => onBlockCloth(group.tableIds, "remove")}>
-              <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
-              הסרת המפה
-            </Button>
-          </Popover>
-        )}
-
-        {/* The block's design, as a table's: its focus mode, its saved designs, and its whole
-            dressing onto other tables in a pattern — a block landing on a block, a round or a
-            rectangle at the same relative places. */}
-        {group.tables > 0 && onDressTable && lead && (
-          <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים על הבלוק · לחיצה כפולה" onClick={() => onDressTable(lead.id)} />
-        )}
-        {group.tables > 0 && lead && onDressTable && (
-          <Popover label="עיצובי שולחן" icon={BookmarkPlus} value="עיצובים" panelClassName="w-72">
-            {renderDesigns(lead.id)}
-          </Popover>
-        )}
-        {group.tables > 0 && lead && blockDressed && onDressTable && (
-          <Popover label="החלת עיצוב הבלוק על שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
-            {renderPattern(lead.id, undefined, true)}
-          </Popover>
-        )}
-        <Rotation value={facing} onChange={onFace} />
-        {group.tables > 0 && lead && onStyleTables && (
-          <Popover label="מראה" icon={Palette} panelClassName="w-72">
+          </>,
+        ),
+        !!blockCloth &&
+          !!onBlockCloth &&
+          G(
+            "cloth",
+            Shirt,
+            "מפה",
+            <ClothSummary cloth={blockCloth} />,
+            <ClothFields
+              cloth={blockCloth}
+              options={clothOptions}
+              onProduct={(productId) => onBlockCloth(group.tableIds, { productId })}
+              onShade={(variantId) => onBlockCloth(group.tableIds, { variantId })}
+              // Its contour — the first cloth's shown, a change hems every cloth of the block.
+              onBorder={onBorder ? (b) => onBorder(covers.map((c) => c.id), b) : undefined}
+              onAll={() => onApplyToAllTables(blockCloth.id)}
+              onRemove={() => onBlockCloth(group.tableIds, "remove")}
+              note={covers.length < members.length ? `${members.length - covers.length} מהשולחנות בבלוק בלי מפה — שינוי כאן חל על מי שיש לו. להלבשת כולם: גוררים מפה מהסרגל על הבלוק.` : undefined}
+            />,
+          ),
+        // The block's design, as a table's: its saved designs, and its whole dressing onto other
+        // tables in a pattern — a block landing on a block, a round or a rectangle at the same
+        // relative places. The design pass's only.
+        !!onDressTable && !!lead && G("designs", BookmarkPlus, "עיצובי שולחן", "שמירה והחלה", renderDesigns(lead.id)),
+        !!onDressTable && !!lead && blockDressed && G("pattern", LayoutGrid, "דפוס", "החלה על שולחנות", renderPattern(lead.id, undefined, true)),
+        !!lead &&
+          !!onStyleTables &&
+          G(
+            "look",
+            Palette,
+            "מראה",
+            lead.style?.fill ? <Swatch color={lead.style.fill} size={12} /> : "ברירת מחדל",
             <StyleFields
               style={lead.style}
               onChange={(style) => onStyleTables(group.tableIds, style)}
               strokeWidthDefault={(lead.variantId ? resolve(lead.variantId)?.product.appearance?.style?.strokeWidthPx : undefined) ?? 2.5}
-            />
-          </Popover>
-        )}
-
-        <MoreMenu
-          label="עוד פעולות לקבוצה"
-          sections={[
-            mirrorItems(onMirror),
-            [
-              ...(onEditProduct && blockVariant && resolve(blockVariant)
-                ? [{ label: "עריכת סוג השולחנות בקטלוג", icon: Pencil, onSelect: () => onEditProduct(blockVariant) }]
-                : []),
-              ...(onSaveComposite ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
-            ],
-            [{ label: "פירוק הקבוצה", icon: Ungroup, onSelect: onUngroup }],
-            lockItems(lock),
-          ]}
-        />
-        <Actions
-          onDuplicate={onDuplicate}
-          duplicateLabel="שכפול הקבוצה"
-          onDelete={onDelete}
-          deleteLabel="מחיקת הקבוצה"
-        />
-      </Bar>
+            />,
+          ),
+      ],
+      ["members", "seating"],
     );
   }
 
@@ -917,6 +951,8 @@ export function Inspector({
   // to be one platform, so the bar says so and leads with making them one: only a single stage has
   // stairs on every edge, levels, a surface and one build.
   if (selectedCount > 1 && stageGroup) {
+    // Not yet asked in two places: its bar as it was, and no groups.
+    if (!bar) return null;
     const gm = (mm: number) => String(Math.round(mm / 10) / 100);
     const sg = stageGroup;
     return (
@@ -1149,6 +1185,7 @@ export function Inspector({
   }
 
   if (selectedCount > 1) {
+    if (!bar) return null;
     // Equal air between things along whichever axis the selection spans more — the two ends stay
     // put. Only where the align menu does not already offer it (it spreads along either axis once
     // there are three units); left out, not disabled, when something has no free position to move.
@@ -1286,6 +1323,7 @@ export function Inspector({
   // toggles, so with nothing on the card naming them it read as a panel stuck over the plan with no
   // way out. It says what is holding it open, and its ✕ turns those off.
   if (selectedCount === 0 && (zoneFocused || layerActive)) {
+    if (!bar) return null;
     return (
       <Bar icon={ListChecks} title="בחירה" facts={scopeLabel} onClose={onClearScope}>
         <Menu label="דרכים לבחור" side="top" items={selectionItems({ zoneFocused, onSelectInZone, layerActive, onSelectLayer })} />
@@ -1301,7 +1339,7 @@ export function Inspector({
   // the bar wheeled out for this event (FeaturePlacement.removed); the venue keeps it, and the
   // toolbar's "פריטי מתחם שהוסרו" brings it back.
   if (selection.kind === "feature") {
-    if (!feature) return null;
+    if (!bar || !feature) return null;
     return (
       <Bar
         icon={Building2}
@@ -1337,7 +1375,7 @@ export function Inspector({
 
   if (selection.kind === "placement") {
     const p = doc.placements.find((x) => x.id === selection.id);
-    if (!p) return null;
+    if (!bar || !p) return null;
 
     // A STAGE. One thing on the plan, and the bar says what it is built of — which is the whole
     // point of it being one thing: the designer works with "the stage", and the decks are the
@@ -2245,6 +2283,10 @@ export function Inspector({
     );
   }
 
+  // A TABLE. The quick bar asks its number, its seats and its angle in place, and offers הלבשה; every
+  // other field is a group in the end panel — what is wrong first (a safety distance, a top that holds
+  // more than it has room for), then what it is (its type and number), its seating, its size, its
+  // cloth, its design, and how it is drawn.
   const t = doc.tables.find((x) => x.id === selection.id);
   if (!t) return null;
   const util = tableUtilization(doc, t);
@@ -2254,251 +2296,359 @@ export function Inspector({
   // The cloth is the table's surface, so it is edited from the table rather than selected as its own
   // object on the plan — there is nothing to click that isn't the table itself.
   const cloth = coverOn(doc, t.id);
-  const clothShades = cloth ? shadesOf(cloth.variantId) : [];
-  const clothShade = cloth ? clothShades.find((s) => s.id === cloth.variantId) : undefined;
-  const clothName = cloth ? resolve(cloth.variantId)?.product.name : undefined;
   const seats = t.seats ?? 0;
+  const title = tableLabel(doc, t);
+  // How full the top is, read off the title row — the group appears only when it overflows.
+  const facts = [t.type, count > 0 ? `${count} פריטים · ${pct}% מהשטח` : "0 פריטים"].join(" · ");
 
-  return (
-    <Bar
-      icon={TableIcon}
-      title={tableLabel(doc, t)}
-      // How full the top is, read off the title row — the chip below appears only when it overflows.
-      facts={[t.type, count > 0 ? `${count} פריטים · ${pct}% מהשטח` : "0 פריטים"].join(" · ")}
-      onClose={onClose}
-    >
-      {/* What is wrong first: a safety distance, a top that holds more than it has room for. */}
-      <BreachPopover breaches={breaches} />
-      {/* How full the top is. At rest the percentage rides the title row ("6 פריטים · 42% מהשטח");
-          the chip is here only when the items hold more than the top has room for. */}
-      {overflow && (
-        <Popover label="ניצול שטח" icon={Boxes} tone="warn" value={ltr(`${pct}%`)}>
-          <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
-            <span className="text-muted">{count} פריטים על השולחן</span>
-            <span className={"nums font-semibold " + (overflow ? "text-warn-ink" : "text-ink")}>{pct}%</span>
-          </div>
-          <div
-            role="progressbar"
-            aria-label="ניצול שטח"
-            aria-valuenow={pct}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            className="h-1.5 overflow-hidden rounded-full bg-border"
-          >
-            <div
-              className={"h-full rounded-full " + (overflow ? "bg-warn" : "bg-accent")}
-              style={{ width: `${Math.min(100, pct)}%` }}
-            />
-          </div>
-          {overflow && (
+  if (bar)
+    return (
+      <Bar icon={TableIcon} title={title} facts={facts} onClose={onClose}>
+        <NumberAndSeats number={t.number} unnumbered={!!t.unnumbered} onNumber={(v) => onRenumber(t.id, v)} seats={seats} onSeats={(v) => onSeats(t.id, v)} />
+        <QuickTurn value={facing} onChange={onFace} />
+        {/* Its focus mode — the items on it moved and arranged. The design pass's: the hall pass lays
+            tables out and does not dress them. */}
+        {onDressTable && (
+          <>
+            <QuickSep />
+            <ModeVerb icon={PaintRoller} label="הלבשה" onClick={() => onDressTable(t.id)} />
+          </>
+        )}
+        {/* The rest, in the "…": the clipboard, flipping and the floor stack (a head table stands on a
+            staging deck, two pushed together overlap — lib/design-document/stacking.ts), building a
+            selection from it, and its catalog row — edited, or the table with everything on it saved
+            as an item of its own, to place again, dressed, at the next event. */}
+        <QuickTail
+          onCopy={onDuplicate}
+          copyLabel="שכפול השולחן"
+          onDelete={onDelete}
+          deleteLabel="מחיקת השולחן"
+          more={moreOf([
+            mirrorItems(onMirror),
+            stackItems(canRestack, onRestack),
+            selectItems,
+            [
+              ...(onEditProduct && t.variantId && resolve(t.variantId) ? [{ label: "עריכת סוג השולחן בקטלוג", icon: Pencil, onSelect: () => onEditProduct(t.variantId!) }] : []),
+              ...(onSaveComposite ? [{ label: "שמירת השולחן עם העיצוב כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
+            ],
+            lockItems(lock),
+          ])}
+          moreLabel="עוד פעולות לשולחן"
+        />
+      </Bar>
+    );
+
+  // Its size as the plan draws it: the stretched size when the row may be stretched, else its row's.
+  const footprint = tableFootprint(t);
+  const box = footprintBounds(footprint);
+  const round = sizePanel ? sizePanel.axes.uniform : footprint.kind === "circle";
+  const sizeWords = sizePanel
+    ? round
+      ? `⌀${cm(sizePanel.size.widthMm)}`
+      : `${cm(sizePanel.size.widthMm)}×${cm(sizePanel.size.depthMm)}`
+    : round
+      ? `⌀${cm(box.w)}`
+      : `${cm(box.w)}×${cm(box.h)}`;
+
+  return groupsOf(
+    "table",
+    title,
+    facts,
+    [
+      breaches.length > 0 && G("clearance", ShieldAlert, "מרחק ביטחון", breaches.length === 1 ? "חריגה אחת" : `${breaches.length} חריגות`, <BreachList breaches={breaches} />, true),
+      // How full the top is. At rest the percentage rides the title row ("6 פריטים · 42% מהשטח"); the
+      // group is here only when the items hold more than the top has room for.
+      overflow &&
+        G(
+          "fill",
+          Boxes,
+          "ניצול שטח",
+          ltr(`${pct}%`),
+          <>
+            <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
+              <span className="text-muted">{count} פריטים על השולחן</span>
+              <span className="nums font-semibold text-warn-ink">{pct}%</span>
+            </div>
+            <div role="progressbar" aria-label="ניצול שטח" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} className="h-1.5 overflow-hidden rounded-full bg-border">
+              <div className="h-full rounded-full bg-warn" style={{ width: `${Math.min(100, pct)}%` }} />
+            </div>
             <p className="mt-1.5 inline-flex items-center gap-1 text-xs text-warn-ink">
               <TriangleAlert className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
               הפריטים חורגים משטח השולחן
             </p>
+          </>,
+          true,
+        ),
+      // What it is: its type (swapped from a picker) and its number (F-3.3: auto-running, editable
+      // per table).
+      G(
+        "table",
+        TableIcon,
+        "שולחן",
+        t.unnumbered ? "ללא מספור" : ltr(`#${t.number}`),
+        <>
+          {swap?.kind === "tables" && <SwapPickRow swap={swap} onSwap={onSwap} label="סוג שולחן" />}
+          {!t.unnumbered && (
+            <PanelRow label="מספר שולחן" htmlFor="table-number">
+              <NumberField id="table-number" decimals={0} min={0} value={t.number} onChange={(v) => onRenumber(t.id, v)} className="w-20" />
+            </PanelRow>
           )}
-        </Popover>
-      )}
-
-      {swap?.kind === "tables" && <SwapPopover swap={swap} onSwap={onSwap} label="סוג שולחן" />}
-      {/* F-3.3: auto-running numbering, editable per table */}
-      <Popover label="מספר שולחן" icon={Hash} value={t.unnumbered ? "ללא" : ltr(`#${t.number}`)}>
-        {!t.unnumbered && (
-          <PanelRow>
-            <NumberField
-              id="table-number"
-              aria-label="מספר שולחן"
-              decimals={0}
-              min={0}
-              value={t.number}
-              onChange={(v) => onRenumber(t.id, v)}
-              className="w-20"
-            />
-          </PanelRow>
-        )}
-        {!t.unnumbered && t.number > 0 && duplicateNumbers(doc, benchOf).has(t.number) && <DuplicateNumber />}
-        <div className="mt-2">
-          <UnnumberedSwitch checked={!!t.unnumbered} onChange={(off) => onTablesNumbered([t.id], !off)} />
-        </div>
-        <Note>המספור רץ מאליו; מה שנקבע כאן גובר עליו, לשולחן הזה בלבד. 0 הוא שולחן הראש.</Note>
-      </Popover>
-
-      {/* The chairs on the plan ARE this number — it came from the catalog row when the table was
-          dropped, and a head table that seats six rather than the standard twelve says so here.
-          Occupancy joins it because they are the same subject; it appears only once there are chairs,
-          since a field reading 0/0 on a cocktail table nobody sits at is a question with no answer. */}
-      <Popover label="ישיבה" icon={Armchair} value={seats > 0 ? ltr(`${t.seated ?? 0}/${seats}`) : "—"}>
-        <PanelRow label="כסאות" htmlFor="table-seats">
-          <NumberField
-            id="table-seats"
-            decimals={0}
-            min={0}
-            value={seats}
-            onChange={(v) => onSeats(t.id, v)}
-            className="w-20"
-          />
-        </PanelRow>
-        {/* Which chair stands round it. Most rooms are one chair — the default — so the plan only
-            names a table's chair where it differs; this is where it is made to differ. */}
-        {seats > 0 && onChair && chairOptions().length > 0 && (
-          <PanelRow label="כיסא" stack>
-            <Select
-              aria-label="סוג הכיסא"
-              value={t.chairVariantId ?? ""}
-              options={[
-                { value: "", label: defaultChairLabel() },
-                ...chairOptions(),
-              ]}
-              onChange={(v) => onChair(t.id, v || null)}
-            />
-          </PanelRow>
-        )}
-        {seats > 0 && (
-          <PanelRow label="תפוסה" htmlFor="table-seated">
-            <NumberField
-              id="table-seated"
-              decimals={0}
-              min={0}
-              value={t.seated ?? 0}
-              onChange={(v) => onSeated(t.id, v)}
-              className="w-20"
-            />
-            <span className={"text-xs " + occupancyInk(t.seated ?? 0, seats)}>מתוך {seats}</span>
-          </PanelRow>
-        )}
-        {/* Which sides are laid. The catalog row says what a table of this kind does (a head table
-            faces the room); a table pushed against a wall on THIS plan says so here, for itself.
-            Drawn turned as it stands, so the side against the wall is the side against the wall. */}
-        {seats > 0 && (
+          {!t.unnumbered && t.number > 0 && duplicateNumbers(doc, benchOf).has(t.number) && <DuplicateNumber />}
           <div className="mt-2">
-            <SeatSidesPicker
-              footprint={tableFootprint(t)}
-              seats={seats}
-              blocked={tableBlockedSides(t)}
-              rotation={t.rotation}
-              mirrored={t.mirrored}
-              onToggle={(i) => {
-                const now = tableBlockedSides(t);
-                onBlockedSides(t.id, now.includes(i) ? now.filter((x) => x !== i) : [...now, i]);
-              }}
-              className="h-40 w-full rounded-md bg-canvas"
-            />
-            <Note>
-              לחיצה על צד חוסמת אותו לישיבה — הכסאות עוברים לצדדים הפתוחים.
-              {t.blockedSides && (
-                <>
-                  {" "}
-                  <button
-                    type="button"
-                    onClick={() => onBlockedSides(t.id, null)}
-                    className="font-medium text-accent transition-colors hover:text-accent-hover"
-                  >
-                    חזרה להגדרת הקטלוג
-                  </button>
-                </>
-              )}
-            </Note>
+            <UnnumberedSwitch checked={!!t.unnumbered} onChange={(off) => onTablesNumbered([t.id], !off)} />
           </div>
-        )}
-      </Popover>
-
-      {sizePanel && <SizePopover panel={sizePanel} onSize={onSize} />}
-
-      {cloth && (
-        <Popover label="מפה" leading={<Swatch color={clothShade?.swatch} size={14} />} value={clothName ?? "מפה"}>
-          {clothOptions.length > 1 && (
-            <Select
-              aria-label="סוג המפה"
-              value={resolve(cloth.variantId)?.product.id ?? ""}
-              options={clothOptions}
-              onChange={(v) => v && onReplaceCloth(cloth.id, v)}
-              className="mb-2 w-full"
-            />
+          <Note>המספור רץ מאליו; מה שנקבע כאן גובר עליו, לשולחן הזה בלבד. 0 הוא שולחן הראש.</Note>
+        </>,
+      ),
+      // The chairs on the plan ARE this number — it came from the catalog row when the table was
+      // dropped, and a head table that seats six rather than the standard twelve says so here.
+      // Occupancy joins it because they are the same subject; it appears only once there are chairs,
+      // since a field reading 0/0 on a cocktail table nobody sits at is a question with no answer.
+      G(
+        "seating",
+        Armchair,
+        "ישיבה",
+        seats > 0 ? ltr(`${t.seated ?? 0}/${seats}`) : "ללא כסאות",
+        <>
+          <PanelRow label="כסאות" htmlFor="table-seats">
+            <NumberField id="table-seats" decimals={0} min={0} value={seats} onChange={(v) => onSeats(t.id, v)} className="w-20" />
+          </PanelRow>
+          {/* Which chair stands round it. Most rooms are one chair — the default — so the plan only
+              names a table's chair where it differs; this is where it is made to differ. */}
+          {seats > 0 && onChair && chairOptions().length > 0 && (
+            <PanelRow label="כיסא" stack>
+              <Select aria-label="סוג הכיסא" value={t.chairVariantId ?? ""} options={[{ value: "", label: defaultChairLabel() }, ...chairOptions()]} onChange={(v) => onChair(t.id, v || null)} />
+            </PanelRow>
           )}
-          {clothShades.length > 0 && (
-            <SwatchPicker
-              options={clothShades}
-              value={cloth.variantId}
-              onChange={(v) => onVariant(cloth.id, v)}
-              label="גוון המפה"
-            />
+          {seats > 0 && (
+            <PanelRow label="תפוסה" htmlFor="table-seated">
+              <NumberField id="table-seated" decimals={0} min={0} value={t.seated ?? 0} onChange={(v) => onSeated(t.id, v)} className="w-20" />
+              <span className={"text-xs " + occupancyInk(t.seated ?? 0, seats)}>מתוך {seats}</span>
+            </PanelRow>
           )}
-          {/* Its contour — the hem the plan draws round the table (ClothDrape). */}
-          {onBorder && (
-            <div className="mt-3 border-t border-border-soft pt-2">
-              <span className={fieldLabelClassName}>קונטור</span>
-              <BorderPanel
-                own={cloth.border}
-                row={cleanBorder(resolve(cloth.variantId)?.product.appearance?.border)}
-                category="tablecloths"
-                onBorder={(b) => onBorder([cloth.id], b)}
-                idPrefix={`border-${cloth.id}`}
+          {/* Which sides are laid. The catalog row says what a table of this kind does (a head table
+              faces the room); a table pushed against a wall on THIS plan says so here, for itself.
+              Drawn turned as it stands, so the side against the wall is the side against the wall. */}
+          {seats > 0 && (
+            <div className="mt-2">
+              <SeatSidesPicker
+                footprint={footprint}
+                seats={seats}
+                blocked={tableBlockedSides(t)}
+                rotation={t.rotation}
+                mirrored={t.mirrored}
+                onToggle={(i) => {
+                  const now = tableBlockedSides(t);
+                  onBlockedSides(t.id, now.includes(i) ? now.filter((x) => x !== i) : [...now, i]);
+                }}
+                className="h-40 w-full rounded-md bg-canvas"
               />
+              <Note>
+                לחיצה על צד חוסמת אותו לישיבה — הכסאות עוברים לצדדים הפתוחים.
+                {t.blockedSides && (
+                  <>
+                    {" "}
+                    <button type="button" onClick={() => onBlockedSides(t.id, null)} className="font-medium text-accent transition-colors hover:text-accent-hover">
+                      חזרה להגדרת הקטלוג
+                    </button>
+                  </>
+                )}
+              </Note>
             </div>
           )}
-          <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onApplyToAllTables(cloth.id)}>
-            <Copy className="h-3.5 w-3.5" strokeWidth={2} />
-            על כל השולחנות
-          </Button>
-          <Button size="sm" variant="danger" className="mt-1 w-full" onClick={() => onRemovePlacement(cloth.id)}>
-            <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
-            הסרת המפה
-          </Button>
-        </Popover>
-      )}
-
-      {/* Dressing: the table's focus mode, the designs saved from tables before it, and its whole
-          dressing onto others in a pattern. The design pass's — the hall pass lays tables out and
-          does not dress them, so none of the three is offered there. */}
-      {onDressTable && (
-        <>
-          <BarButton icon={PaintRoller} label="עיצוב השולחן — הזזה וסידור של הפריטים עליו · לחיצה כפולה על השולחן" onClick={() => onDressTable(t.id)} />
-          <Popover label="עיצובי שולחן" icon={BookmarkPlus} value="עיצובים" panelClassName="w-72">
-            {renderDesigns(t.id)}
-          </Popover>
-          {count > 0 && (
-            <Popover label="החלת עיצוב השולחן על שולחנות" icon={LayoutGrid} value="דפוס" panelClassName="w-72">
-              {renderPattern(t.id)}
-            </Popover>
-          )}
-        </>
-      )}
-
-      <Rotation value={facing} onChange={onFace} />
-      <Popover label="מראה" icon={Palette} panelClassName="w-72">
+        </>,
+      ),
+      G(
+        "size",
+        Scaling,
+        "מידות",
+        ltr(sizeWords),
+        sizePanel ? (
+          <SizeFields panel={sizePanel} onSize={onSize} />
+        ) : (
+          <>
+            <PanelRow label={round ? "קוטר (ס״מ)" : "רוחב × עומק (ס״מ)"}>
+              <span className="nums text-sm font-semibold text-ink">{ltr(round ? cm(box.w).toString() : `${cm(box.w)}×${cm(box.h)}`)}</span>
+            </PanelRow>
+            <Note>הגודל של סוג השולחן בקטלוג — שולחן מהסוג הזה לא נמתח על התוכנית. לגודל אחר: סוג שולחן אחר בקבוצה ״שולחן״.</Note>
+          </>
+        ),
+      ),
+      !!cloth &&
+        G(
+          "cloth",
+          Shirt,
+          "מפה",
+          <ClothSummary cloth={cloth} />,
+          <ClothFields
+            cloth={cloth}
+            options={clothOptions}
+            onProduct={(productId) => onReplaceCloth(cloth.id, productId)}
+            onShade={(variantId) => onVariant(cloth.id, variantId)}
+            // Its contour — the hem the plan draws round the table (ClothDrape).
+            onBorder={onBorder ? (b) => onBorder([cloth.id], b) : undefined}
+            onAll={() => onApplyToAllTables(cloth.id)}
+            onRemove={() => onRemovePlacement(cloth.id)}
+          />,
+        ),
+      // Dressing: the designs saved from tables before it, and its whole dressing onto others in a
+      // pattern. The design pass's — the hall pass lays tables out and does not dress them.
+      !!onDressTable && G("designs", BookmarkPlus, "עיצובי שולחן", "שמירה והחלה", renderDesigns(t.id)),
+      !!onDressTable && count > 0 && G("pattern", LayoutGrid, "דפוס", "החלה על שולחנות", renderPattern(t.id)),
+      G(
+        "look",
+        Palette,
+        "מראה",
+        t.style?.fill ? <Swatch color={t.style.fill} size={12} /> : "ברירת מחדל",
         <StyleFields
           style={t.style}
           onChange={(style) => onStyleTable(t.id, style)}
           // At rest the table is drawn at its catalog row's weight (productStyle, components/footprint-shape.tsx),
           // so that is the number to show for it — not the canvas's own 2.5 when the row says otherwise.
           strokeWidthDefault={(t.variantId ? resolve(t.variantId)?.product.appearance?.style?.strokeWidthPx : undefined) ?? 2.5}
-        />
-      </Popover>
+        />,
+      ),
+    ],
+    ["seating", "cloth"],
+  );
+}
 
-      {/* The rest, in the "…": flipping and the floor stack (a head table stands on a staging deck,
-          two pushed together overlap — lib/design-document/stacking.ts), building a selection from
-          it, and its catalog row — edited, or the table with everything on it saved as an item of
-          its own, to place again, dressed, at the next event. */}
-      <MoreMenu
-        label="עוד פעולות לשולחן"
-        sections={[
-          mirrorItems(onMirror),
-          stackItems(canRestack, onRestack),
-          selectItems,
-          [
-            ...(onEditProduct && t.variantId && resolve(t.variantId) ? [{ label: "עריכת סוג השולחן בקטלוג", icon: Pencil, onSelect: () => onEditProduct(t.variantId!) }] : []),
-            ...(onSaveComposite ? [{ label: "שמירת השולחן עם העיצוב כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
-          ],
-          lockItems(lock),
-        ]}
-      />
+const G = (key: string, icon: LucideIcon, title: string, summary: ReactNode, body: ReactNode, warn = false): PanelGroup => ({ key, icon, title, summary, body, warn });
 
-      <Actions
-        onDuplicate={onDuplicate}
-        duplicateLabel="שכפול השולחן"
-        onDelete={onDelete}
-        deleteLabel="מחיקת השולחן"
-      />
-    </Bar>
+/** A table's (or a block's) number and seats, typed in the quick bar. A table out of the numbering
+ *  shows "—" and takes nothing — its ״שולחן״ group puts it back. */
+function NumberAndSeats({
+  number,
+  unnumbered,
+  onNumber,
+  seats,
+  onSeats,
+}: {
+  number: number;
+  unnumbered: boolean;
+  onNumber: (n: number) => void;
+  seats: number;
+  onSeats: (n: number) => void;
+}) {
+  return (
+    <>
+      <QuickLead icon={Hash} label="מספר השולחן" />
+      <QuickNumber label="מספר השולחן" narrow min={0} value={unnumbered ? 0 : number} hideZero={unnumbered} placeholder={unnumbered ? "—" : undefined} disabled={unnumbered} onChange={onNumber} />
+      <QuickSep />
+      <QuickLead icon={Armchair} label="מושבים" />
+      <QuickNumber label="מושבים" narrow min={0} value={seats} onChange={onSeats} />
+      <QuickSep />
+    </>
+  );
+}
+
+/** The cloth a table wears, read back on its group's title row: its shade and its name. */
+function ClothSummary({ cloth }: { cloth: Placement }) {
+  const shade = shadesOf(cloth.variantId).find((s) => s.id === cloth.variantId);
+  return (
+    <>
+      {shade?.swatch && <Swatch color={shade.swatch} size={12} />}
+      <span className="truncate">{resolve(cloth.variantId)?.product.name ?? "מפה"}</span>
+    </>
+  );
+}
+
+/** A worn cloth's fields — which cloth (a picker), its shade, its contour, onto every table, off.
+ *  One body for a table's cloth and a block's, which differ only in what each change reaches. */
+function ClothFields({
+  cloth,
+  options,
+  onProduct,
+  onShade,
+  onBorder,
+  onAll,
+  onRemove,
+  note,
+}: {
+  cloth: Placement;
+  /** The studio's tablecloths, by product. */
+  options: { value: string; label: string }[];
+  onProduct: (productId: string) => void;
+  onShade: (variantId: string) => void;
+  onBorder?: (border: Border | null | undefined) => void;
+  onAll: () => void;
+  onRemove: () => void;
+  note?: string;
+}) {
+  const product = resolve(cloth.variantId)?.product;
+  const shades = shadesOf(cloth.variantId);
+  const shade = shades.find((s) => s.id === cloth.variantId);
+  const name = product?.name ?? "מפה";
+  return (
+    <>
+      {options.length > 1 ? (
+        <PickRow swatch={shade?.swatch} glyph={shade?.swatch ? undefined : <Shirt className="h-4 w-4 text-muted" strokeWidth={1.75} />} name={name} meta={shade?.name} pickerLabel="בחירת מפה" pickerIcon={Shirt}>
+          {(close) => (
+            <OptionList
+              options={options}
+              value={product?.id ?? ""}
+              onPick={(v) => {
+                onProduct(v);
+                close();
+              }}
+            />
+          )}
+        </PickRow>
+      ) : (
+        <div className="flex items-center gap-2.5 rounded-md border border-inset-border bg-inset p-2">
+          <Swatch color={shade?.swatch} size={40} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] font-semibold text-ink">{name}</span>
+            {shade && <span className="block truncate text-xs text-muted">{shade.name}</span>}
+          </span>
+        </div>
+      )}
+      {shades.length > 0 && (
+        <div className="mt-3">
+          <SwatchPicker options={shades} value={cloth.variantId} onChange={onShade} label="גוון המפה" />
+        </div>
+      )}
+      {onBorder && (
+        <div className="mt-3 border-t border-border-soft pt-2">
+          <span className={fieldLabelClassName}>קונטור</span>
+          <BorderPanel own={cloth.border} row={cleanBorder(product?.appearance?.border)} category="tablecloths" onBorder={onBorder} idPrefix={`border-${cloth.id}`} />
+        </div>
+      )}
+      {note && <Note>{note}</Note>}
+      <Button size="sm" variant="outline" className="mt-3 w-full" onClick={onAll}>
+        <Copy className="h-3.5 w-3.5" strokeWidth={2} />
+        על כל השולחנות
+      </Button>
+      <Button size="sm" variant="danger" className="mt-1 w-full" onClick={onRemove}>
+        <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
+        הסרת המפה
+      </Button>
+    </>
+  );
+}
+
+/** A picker's list of plain choices — the current one ticked, a pick applies. */
+function OptionList({ options, value, onPick }: { options: { value: string; label: string }[]; value: string; onPick: (value: string) => void }) {
+  return (
+    <ul className="scroll-slim -mx-1 flex max-h-72 flex-col gap-0.5 overflow-y-auto px-1">
+      {options.map((o) => {
+        const on = o.value === value;
+        return (
+          <li key={o.value}>
+            <button
+              type="button"
+              disabled={on}
+              aria-current={on || undefined}
+              onClick={() => onPick(o.value)}
+              className={"flex w-full items-center gap-2.5 rounded-sm p-1.5 text-start transition-colors " + (on ? "cursor-default bg-accent-tint" : "hover:bg-bg")}
+            >
+              <span className={"min-w-0 flex-1 truncate text-sm font-medium " + (on ? "text-accent" : "text-ink")}>{o.label}</span>
+              {on && <Check className="h-4 w-4 shrink-0 text-accent" strokeWidth={2} />}
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -2638,9 +2788,10 @@ export interface SwapPanel {
   options: Product[];
 }
 
-/** "Change these for that": the catalog's rows of the same kind, each as the rail shows it, and —
- *  when the plan holds more of the same thing than are selected — whether to change all of them. */
-function SwapPopover({ swap, onSwap, label }: { swap: SwapPanel; onSwap: (productId: string, all: boolean) => void; label: string }) {
+/** What a swap list remembers while its trigger stays up: what was typed into its search, and whether
+ *  the swap reaches the selection or every one like it. Held by the TRIGGER (the chip, the pick row),
+ *  not the list, which mounts only while its panel is open. */
+function useSwapScope(swap: SwapPanel) {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<"selected" | "all">("selected");
   // "All of them" is for the selection it was chosen over. Picking a different thing on the plan with
@@ -2651,6 +2802,60 @@ function SwapPopover({ swap, onSwap, label }: { swap: SwapPanel; onSwap: (produc
     setScopeFor(key);
     setScope("selected");
   }
+  return { query, setQuery, scope, setScope };
+}
+type SwapScope = ReturnType<typeof useSwapScope>;
+
+/** "120×180 · 12 כסאות" — a swap row's facts. */
+function swapFacts(swap: SwapPanel, p: Product): string {
+  const seats = Number(p.categoryFields?.seats);
+  return [formatDimensions(p.dimensions), swap.kind === "tables" && seats > 0 ? `${seats} כסאות` : null].filter(Boolean).join(" · ");
+}
+
+/** "Change these for that" as a chip — the bars not yet asked in two places. */
+function SwapPopover({ swap, onSwap, label }: { swap: SwapPanel; onSwap: (productId: string, all: boolean) => void; label: string }) {
+  const state = useSwapScope(swap);
+  const current = swap.options.find((p) => p.id === swap.current);
+  const many = swap.kind === "tables" ? "שולחנות" : "פריטים";
+  return (
+    <Popover label={label} icon={Replace} value={current?.name ?? (swap.count > 1 ? `${swap.count} ${many}` : undefined)} panelClassName="w-80">
+      <SwapList swap={swap} onSwap={onSwap} state={state} />
+    </Popover>
+  );
+}
+
+/** "Change these for that" as a group's pick row: what they are now, and "החלפה" opens the same list
+ *  as a picker beside the panel — a pick applies and the picker goes. */
+function SwapPickRow({ swap, onSwap, label }: { swap: SwapPanel; onSwap: (productId: string, all: boolean) => void; label: string }) {
+  const state = useSwapScope(swap);
+  const current = swap.options.find((p) => p.id === swap.current);
+  const many = swap.kind === "tables" ? "שולחנות" : "פריטים";
+  return (
+    <PickRow
+      glyph={current ? <span className="block h-full w-full overflow-hidden rounded-sm"><ProductImage product={current} /></span> : <Replace className="h-4 w-4 text-muted" strokeWidth={1.75} />}
+      name={current?.name ?? `${swap.count} ${many}`}
+      meta={current ? swapFacts(swap, current) : undefined}
+      pickerLabel={label}
+      pickerIcon={Replace}
+    >
+      {(close) => (
+        <SwapList
+          swap={swap}
+          state={state}
+          onSwap={(productId, all) => {
+            onSwap(productId, all);
+            close();
+          }}
+        />
+      )}
+    </PickRow>
+  );
+}
+
+/** The catalog's rows of the same kind, each as the rail shows it, and — when the plan holds more of
+ *  the same thing than are selected — whether to change all of them. */
+function SwapList({ swap, onSwap, state }: { swap: SwapPanel; onSwap: (productId: string, all: boolean) => void; state: SwapScope }) {
+  const { query, setQuery, scope, setScope } = state;
   const canAll = swap.current !== null && swap.similar > swap.count;
   const all = canAll && scope === "all";
   const current = swap.options.find((p) => p.id === swap.current);
@@ -2661,13 +2866,9 @@ function SwapPopover({ swap, onSwap, label }: { swap: SwapPanel; onSwap: (produc
     a === current?.category ? -1 : b === current?.category ? 1 : 0,
   );
   const [one, many] = swap.kind === "tables" ? ["שולחן", "שולחנות"] : ["פריט", "פריטים"];
-  const facts = (p: Product) => {
-    const seats = Number(p.categoryFields?.seats);
-    return [formatDimensions(p.dimensions), swap.kind === "tables" && seats > 0 ? `${seats} כסאות` : null].filter(Boolean).join(" · ");
-  };
 
   return (
-    <Popover label={label} icon={Replace} value={current?.name ?? (swap.count > 1 ? `${swap.count} ${many}` : undefined)} panelClassName="w-80">
+    <>
       {canAll && (
         <div className="mb-2">
           <Segmented
@@ -2712,7 +2913,7 @@ function SwapPopover({ swap, onSwap, label }: { swap: SwapPanel; onSwap: (produc
                         </span>
                         <span className="min-w-0 flex-1">
                           <span className={"block truncate text-sm font-medium " + (on ? "text-accent" : "text-ink")}>{p.name}</span>
-                          <span className="nums block truncate text-xs text-muted">{facts(p)}</span>
+                          <span className="nums block truncate text-xs text-muted">{swapFacts(swap, p)}</span>
                         </span>
                         {on && <Check className="h-4 w-4 shrink-0 text-accent" strokeWidth={2} />}
                       </button>
@@ -2729,7 +2930,7 @@ function SwapPopover({ swap, onSwap, label }: { swap: SwapPanel; onSwap: (produc
           ? "המספר, הקבוצה, התפוסה והעיצוב שעל השולחן נשארים; הגודל והכסאות באים מהשולחן החדש. שולחנות צמודים בקבוצה נשארים צמודים."
           : "המקום והכמות נשארים; הגוון חוזר לברירת המחדל של הפריט החדש."}
       </Note>
-    </Popover>
+    </>
   );
 }
 
@@ -2746,10 +2947,27 @@ const metres = (mm: number) => `${(mm / 1000).toFixed(2)} מ׳`;
  *  ABOUT — a dressed table's bar ran to nineteen controls, and the rare ones sat between the common
  *  ones in no order a hand could learn. */
 function MoreMenu({ label, sections }: { label: string; sections: MenuItem[][] }) {
-  const items: MenuItem[] = [];
-  for (const section of sections) section.forEach((it, i) => items.push(i === 0 && items.length > 0 ? { ...it, separated: true } : it));
+  const items = flatSections(sections);
   if (items.length === 0) return null;
   return <Menu label={label} side="top" items={items} />;
+}
+
+/** The "…"'s sections as one list of rows, a hairline before every section after the first — what
+ *  MoreMenu shows, and what a quick bar's ⋯ (QuickTail) is handed. */
+function flatSections(sections: MenuItem[][]): MenuItem[] {
+  const items: MenuItem[] = [];
+  for (const section of sections) section.forEach((it, i) => items.push(i === 0 && items.length > 0 ? { ...it, separated: true } : it));
+  return items;
+}
+
+/** The clipboard, the first section of a quick bar's ⋯: the header's העתקה / גזירה went with the
+ *  toolbar, Ctrl+C / Ctrl+X stay. The bar's own copy button is a DUPLICATE; this copy can be pasted
+ *  into another sketch. */
+function clipboardItems(onCopy?: () => void, onCut?: () => void): MenuItem[] {
+  return [
+    ...(onCopy ? [{ label: "העתקה · Ctrl+C", icon: Copy, onSelect: onCopy }] : []),
+    ...(onCut ? [{ label: "גזירה · Ctrl+X", icon: Scissors, onSelect: onCut }] : []),
+  ];
 }
 
 /** What the "…" says about pinning the selection in place: one row, worded by what it would do. */
@@ -2803,12 +3021,22 @@ function SaveTemplatePopover({ onSave, note }: { onSave: (name: string) => void;
 }
 
 function SizePopover({ panel, onSize }: { panel: SizePanel; onSize: (size: { widthMm: number; depthMm: number } | null) => void }) {
-  const { size, catalog, axes, spec, custom } = panel;
-  const step = spec.stepMm || 100;
+  const { size, axes } = panel;
   const value = axes.uniform ? `⌀${cm(size.widthMm)}` : `${cm(size.widthMm)}×${cm(size.depthMm)}`;
-  const range = (r?: { minMm: number; maxMm: number }) => (r ? `${cm(r.minMm)}–${cm(r.maxMm)}` : null);
   return (
     <Popover label="גודל (ס״מ)" icon={Scaling} value={ltr(value)}>
+      <SizeFields panel={panel} onSize={onSize} />
+    </Popover>
+  );
+}
+
+/** The size fields themselves — the chip's panel, and a table's ״מידות״ group. */
+function SizeFields({ panel, onSize }: { panel: SizePanel; onSize: (size: { widthMm: number; depthMm: number } | null) => void }) {
+  const { size, catalog, axes, spec, custom } = panel;
+  const step = spec.stepMm || 100;
+  const range = (r?: { minMm: number; maxMm: number }) => (r ? `${cm(r.minMm)}–${cm(r.maxMm)}` : null);
+  return (
+    <>
       {axes.width && spec.width && (
         <PanelRow label={axes.uniform ? "קוטר" : "רוחב"} htmlFor="resize-w">
           <NumberField
@@ -2850,7 +3078,7 @@ function SizePopover({ panel, onSize }: { panel: SizePanel; onSize: (size: { wid
           חזרה לגודל הקטלוג ({axes.uniform ? `⌀${cm(catalog.widthMm)}` : `${cm(catalog.widthMm)}×${cm(catalog.depthMm)}`})
         </Button>
       )}
-    </Popover>
+    </>
   );
 }
 
@@ -2860,6 +3088,15 @@ function BreachPopover({ breaches }: { breaches: { other: string; distance: numb
   if (breaches.length === 0) return null;
   return (
     <Popover label="מרחק ביטחון" icon={ShieldAlert} tone="warn" value={breaches.length === 1 ? "חריגה אחת" : `${breaches.length} חריגות`}>
+      <BreachList breaches={breaches} />
+    </Popover>
+  );
+}
+
+/** The breaches themselves, by the other thing's name — the chip's panel, and a table's group. */
+function BreachList({ breaches }: { breaches: { other: string; distance: number; required: number }[] }) {
+  return (
+    <>
       <ul className="space-y-1.5 text-xs">
         {breaches.map((b, i) => (
           <li key={i} className="flex items-center justify-between gap-3">
@@ -2871,7 +3108,7 @@ function BreachPopover({ breaches }: { breaches: { other: string; distance: numb
         ))}
       </ul>
       <Note>המרחק הנקי בין הפריטים, מקצה לקצה, קטן ממרחק הביטחון שהוגדר לפריט בקטלוג.</Note>
-    </Popover>
+    </>
   );
 }
 
