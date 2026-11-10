@@ -247,6 +247,7 @@ export function CanvasStage({
   clearance,
   showClearance,
   onToggleClearance,
+  stripExtras,
   onResizeTable,
   drawArea,
   rodDraw,
@@ -356,6 +357,8 @@ export function CanvasStage({
    *  switch off by switching off the view it lives in is not a warning. */
   showClearance: boolean;
   onToggleClearance: () => void;
+  /** The host's own view controls at the strip's end, after a hairline — the studio's 3D toggle. */
+  stripExtras?: ReactNode;
   /** A resizable table stretched by a handle: its new size, and the centre that keeps the edge
    *  opposite the handle where it was. */
   onResizeTable: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => void;
@@ -1943,6 +1946,12 @@ export function CanvasStage({
           >
             <ShieldAlert className="h-4 w-4" strokeWidth={2} />
           </IconButton>
+          {stripExtras && (
+            <>
+              <div className="mx-0.5 h-5 w-px bg-border" />
+              {stripExtras}
+            </>
+          )}
         </>
       }
       // The box, not the hits: everything selectable on this surface is drawn by this file, so this

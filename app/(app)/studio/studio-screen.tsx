@@ -131,7 +131,6 @@ import { clipCount, copySelection, heldClip, holdClip, nextPasteStep, pasteInto,
 import { escapeLeavesField, hasTextSelection, isShortcut, isTypingTarget } from "@/lib/keyboard";
 import { CatalogRail } from "./catalog-rail";
 import { HintPill, HintRow, SavePill, ViewCluster } from "@/components/canvas-chrome";
-import { IconButton } from "@/components/icon-button";
 import { Menu } from "@/components/menu";
 import { ProductDrawer, blankProduct } from "../catalog/product-drawer";
 import { clipOf, compositeShell, fromSelection, isTableSet } from "@/lib/catalog/composition";
@@ -382,9 +381,8 @@ export function StudioScreen({
     if (scenePrefs) saveScenePreview(scenePrefs);
   }, [scenePrefs]);
   const scenePane = scenePrefs ?? DEFAULT_SCENE_PREVIEW;
-  // The quick bar's dock — the 3D card stands above whatever it holds — and the canvas column, where
-  // a drag holds the end panel still (./hold-while-dragging.tsx).
-  const dockRef = useRef<HTMLDivElement>(null);
+  // The canvas column: where a drag holds the end panel still (./hold-while-dragging.tsx), and whose
+  // start edge — the catalog rail's — the 3D card is never dragged past.
   const columnRef = useRef<HTMLDivElement>(null);
   const patchScene = useCallback((patch: Partial<ScenePreviewPrefs>) => setScenePrefs((cur) => ({ ...(cur ?? DEFAULT_SCENE_PREVIEW), ...patch })), []);
   const toggleScene = useCallback(() => {
@@ -4280,17 +4278,12 @@ export function StudioScreen({
   const listDoc = useSettled(canvasDoc, STAGE_SETTLE_MS);
   const planRows = useMemo(
     () =>
-      planListRows(listDoc, {
-        resolve,
-        // The venue's furniture this sketch may move and has not taken out — the only venue things
-        // it can select (as Ctrl+A).
-        venueFeatures: plan.structure.features
-          .filter((f) => featureMovable(f) && !isFeatureRemoved(listDoc, f))
-          .map((f) => ({ id: f.id, label: f.label || FEATURE_KIND_LABEL[f.kind] })),
-      }),
+      // What THIS event put on the plan — never the venue's own bars, pools and stages: they are the
+      // property's, already drawn, and listing them crowded out the event's own (the user, 2026-11-10).
+      planListRows(listDoc, { resolve }),
     // The catalog: resolve() reads the cache it primes, so a list read before it landed reads again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [listDoc, plan.structure, catalog],
+    [listDoc, catalog],
   );
   const planTotal = useMemo(() => PLANES.reduce((n, { id }) => n + planRows[id].reduce((m, r) => m + r.count, 0), 0), [planRows]);
   /** While a table is dressed, the list picks only what is on it or hangs over it (its whole
@@ -5695,6 +5688,24 @@ export function StudioScreen({
             clearance={clearance}
             showClearance={showClearance}
             onToggleClearance={() => setShowClearance((on) => !on)}
+            // The room in 3D (./scene-preview.tsx): the strip's last control, NAMED — a lone cube in the
+            // top-start corner went unseen (the user, 2026-11-10: "the 3D toggle cannot be seen — also
+            // relocate it"). Pressed, in the segment look, while the card is up.
+            stripExtras={
+              <button
+                type="button"
+                onClick={toggleScene}
+                aria-pressed={scenePane.open}
+                title={scenePane.open ? "סגירת התלת־ממד" : "התלת־ממד של הסקיצה — עוקב אחרי מה שנבחר"}
+                className={
+                  "inline-flex h-8 items-center gap-1.5 rounded-sm px-2.5 text-[13px] font-bold transition-colors " +
+                  (scenePane.open ? "bg-accent-wash text-accent-deep" : "text-accent hover:bg-accent-tint")
+                }
+              >
+                <Box className="h-4 w-4" strokeWidth={2} aria-hidden />
+                תלת־ממד
+              </button>
+            }
             onResizeTable={(id, sizeMm, position) => {
               drag({ type: "resizeTable", id, sizeMm });
               drag({ type: "moveTable", id, position });
@@ -5855,7 +5866,7 @@ export function StudioScreen({
               because its own popovers open upwards and centred on their chip: from a corner, half
               of them would open past the edge of the plane. The dock is /halls' (`ps-[124px]`
               keeps the bar clear of the save pill in the bottom-start corner). */}
-          <div ref={dockRef} className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center ps-[124px]">
+          <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center ps-[124px]">
             <div className="pointer-events-auto flex min-w-0 justify-center">
               {stageFill?.phase === "draw" && stageTool?.kind !== "level" ? (
                 <StageDrawBar
@@ -5878,39 +5889,29 @@ export function StudioScreen({
               )}
             </div>
           </div>
-          {/* The view: which zone to work in, and the room in 3D beside the sketch. Top-start, the
-              canvas strip's twin across the top line. No venue chip (the user's note 2: the venue is
-              the event's, chosen in its details). */}
-          <ViewCluster>
-            {/* Which part of the property to work in. It FRAMES rather than filters: the rest of the
-                plan stays drawn and reachable, held back so the חופה reads as the thing being
-                designed while the hall it opens onto is still visible behind it. A property with
-                one zone has nothing to choose between, so the control isn't drawn at all. */}
-            {zoneOptions.length > 1 && (
-              <>
-                {/* The board's "zone ▾": the chip the view cluster is made for (components/menu.tsx),
-                    the toolbar's height — a bordered form field here stood taller than the strip
-                    across the line. The chip names the zone being worked in. */}
-                <Menu
-                  trigger="chip"
-                  align="start"
-                  icon={ScanEye}
-                  label="התמקדות באזור"
-                  triggerText={focusZoneId ? zoneOptions.find((z) => z.id === focusZoneId)?.name || "אזור ללא שם" : "כל המתחם"}
-                  items={[
-                    { label: "כל המתחם", onSelect: () => setZoneFocus(null) },
-                    ...zoneOptions.map((z) => ({ label: z.name || "אזור ללא שם", onSelect: () => setZoneFocus(z.id) })),
-                  ]}
-                />
-                <div className="mx-0.5 h-5 w-px bg-border" />
-              </>
-            )}
-            {/* The room in 3D beside the sketch — the תלת-ממד tab's picture, live, following what is
-                selected (./scene-preview.tsx). A toggle: the pressed field while the pane is up. */}
-            <IconButton label={scenePane.open ? "סגירת התלת-ממד שלצד הסקיצה" : "תלת-ממד לצד הסקיצה"} onClick={toggleScene} pressed={scenePane.open}>
-              <Box className="h-4 w-4" strokeWidth={2} />
-            </IconButton>
-          </ViewCluster>
+          {/* Which part of the property to work in — top-start, the canvas strip's twin across the top
+              line. It FRAMES rather than filters: the rest of the plan stays drawn and reachable, held
+              back so the חופה reads as the thing being designed while the hall it opens onto is still
+              visible behind it. A property with one zone has nothing to choose between, so the cluster
+              isn't drawn at all. No venue chip (the venue is the event's, chosen in its details); the
+              3D toggle is the strip's. */}
+          {zoneOptions.length > 1 && (
+            <ViewCluster>
+              {/* The board's "zone ▾": the chip the view cluster is made for (components/menu.tsx), the
+                  toolbar's height. The chip names the zone being worked in. */}
+              <Menu
+                trigger="chip"
+                align="start"
+                icon={ScanEye}
+                label="התמקדות באזור"
+                triggerText={focusZoneId ? zoneOptions.find((z) => z.id === focusZoneId)?.name || "אזור ללא שם" : "כל המתחם"}
+                items={[
+                  { label: "כל המתחם", onSelect: () => setZoneFocus(null) },
+                  ...zoneOptions.map((z) => ({ label: z.name || "אזור ללא שם", onSelect: () => setZoneFocus(z.id) })),
+                ]}
+              />
+            </ViewCluster>
+          )}
           {/* Everything that is not a tool and not the selection, in ONE row under the corners'
               line: the standing notices first, then what the armed tool waits for. */}
           <HintRow>
@@ -6078,107 +6079,21 @@ export function StudioScreen({
               <span className="rounded-md bg-ink px-3 py-1.5 text-sm text-canvas shadow-dialog">{hint}</span>
             )}
           </div>
-          {/* The room in 3D on the sketch, off the LIVE document (not the pass's filtered canvasDoc —
-              the room is the whole design), following the selection. Mounted from its first opening
-              and kept; closed = hidden (see scene-preview.tsx). */}
-          {sceneMounted && (
-            <ScenePreview
-              doc={doc}
-              plan={plan}
-              products={catalog}
-              selection={selected}
-              eventId={workspace?.event?.id ?? null}
-              author={mode === "full"}
-              railingAboveMm={railingAboveMm}
-              open={scenePane.open}
-              widthPx={scenePane.widthPx}
-              dock={dockRef}
-              onClose={() => patchScene({ open: false })}
-              onWidth={(widthPx) => patchScene({ widthPx })}
-            />
-          )}
         </div>
         {/* The end panel (components/end-panel.tsx): what is on the plan, plane by plane, and with
             nothing selected the sketch's own groups under it. */}
         <EndPanel screen="studio" collapsible>
           {/* Held still while something is dragged on the canvas (./hold-while-dragging.tsx). */}
           <HoldWhileDragging area={columnRef}>
-            {listOpen ? (
-              <PanelList title="בתוכנית" count={planTotal}>
-                {PLANES.map(({ id, label }) => {
-                  const rows = planRows[id];
-                  // A hidden plane is listed but not picked from: nothing hidden enters a selection
-                  // (pickMany). What stands on a table goes with the tables.
-                  const shown = layerVisible[id] && (id !== "table" || layerVisible.tables);
-                  const Icon = PLANE_ICON[id];
-                  return (
-                    <div key={id}>
-                      <PanelListHeading
-                        label={label}
-                        count={rows.reduce((n, r) => n + r.count, 0)}
-                        active={activeLayer === id}
-                        visible={layerVisible[id]}
-                        onActivate={() => setActiveLayer((cur) => (cur === id ? null : id))}
-                        onToggleVisible={() => setLayerVisible((v) => ({ ...v, [id]: !v[id] }))}
-                      />
-                      {/* Working in one plane lists that plane alone (the board's "פעילה"). */}
-                      {(activeLayer === null || activeLayer === id) && rows.length > 0 && (
-                        <div className={shown ? undefined : "opacity-50"}>
-                          {rows.map((row) => (
-                            <PanelListRow
-                              key={row.key}
-                              glyph={
-                                row.swatch ? (
-                                  <span aria-hidden className="h-3 w-3 rounded-full border border-border" style={{ backgroundColor: row.swatch }} />
-                                ) : (
-                                  <Icon aria-hidden className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
-                                )
-                              }
-                              label={row.label}
-                              meta={rowFigure(row)}
-                              badge={row.venue ? "של המקום" : undefined}
-                              selected={row.refs.every((r) => selectedKeys.has(`${r.kind}:${r.id}`))}
-                              // Every one of them (D11) — a block as the one table it is.
-                              onClick={shown ? () => pickMany(row.refs, false) : undefined}
-                              disabled={behindScrim(row.refs)}
-                            />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-                {planTotal === 0 && <p className="mx-1 mt-2 text-xs leading-relaxed text-muted">התוכנית עדיין ריקה — בוחרים פריט בקטלוג ולוחצים על התוכנית, או גוררים אותו.</p>}
-              </PanelList>
-            ) : (
-              <PanelListFolded
-                icon={Layers}
-                title="בתוכנית"
-                count={planTotal}
-                crumb={fillProps ? (fillProps.state.editing ? "עריכת במה" : "מילוי במות") : listCrumb(planRows, selected)}
-                badge={
-                  checkRows.length > 0 ? (
-                    <span title={`בדיקות: ${checkRows.length}`} className="nums inline-flex shrink-0 items-center gap-0.5 rounded-pill bg-warn-tint px-1.5 text-[11px] font-bold text-warn-ink">
-                      <TriangleAlert aria-hidden className="h-3 w-3" strokeWidth={2} />
-                      {checkRows.length}
-                    </span>
-                  ) : undefined
-                }
-                onOpen={() => setUnfoldedFor(selected)}
-              />
-            )}
-            {/* The fill tool with its area drawn: its groups, in place of the selection's and the
-                sketch's own, under the folded list — the same props as its quick bar. */}
-            {fillProps && <StageFillPanel part="groups" {...fillProps} />}
-            {/* The selection's groups — every field it has, under the folded list (or, with a zone or a
-                layer scope and nothing selected, the scope's). The same props as the quick bar. */}
-            {!fillToolOut && (selected.length > 0 || !!focusZoneId || activeLayer !== null) && <Inspector part="groups" {...inspectorProps} />}
-            {/* Nothing selected: the sketch's own groups — who it seats, what is wrong with it, how its
-                tables are numbered, the saved sketches, and what this event took out of the venue. The
-                selection's groups (they arrive with the quick bar) take this place otherwise. */}
+            {/* Nothing selected: the sketch's own groups FIRST, the list under them (the user,
+                2026-11-10: "put הסקיצה before בתוכנית") — who it seats, what is wrong with it, how
+                its tables are numbered, the saved sketches, and what this event took out of the venue.
+                Something selected: the list folds to its line at the top and the selection's groups
+                (they arrive with the quick bar) follow it. */}
             {selected.length === 0 && !fillProps && (
               <PanelGroups
                 kind="studio:none"
+                first
                 title="הסקיצה"
                 sub={plan.zones.map((z) => z.zone.name).filter(Boolean).join(" · ") || undefined}
                 defaultOpen={["seating", "checks"]}
@@ -6262,8 +6177,100 @@ export function StudioScreen({
                 ]}
               />
             )}
+            {selected.length === 0 && !fillProps && <div className="h-px bg-border" aria-hidden />}
+            {listOpen ? (
+              <PanelList title="בתוכנית" count={planTotal}>
+                {PLANES.map(({ id, label }) => {
+                  const rows = planRows[id];
+                  // A hidden plane is listed but not picked from: nothing hidden enters a selection
+                  // (pickMany). What stands on a table goes with the tables.
+                  const shown = layerVisible[id] && (id !== "table" || layerVisible.tables);
+                  const Icon = PLANE_ICON[id];
+                  return (
+                    <div key={id}>
+                      <PanelListHeading
+                        label={label}
+                        count={rows.reduce((n, r) => n + r.count, 0)}
+                        active={activeLayer === id}
+                        visible={layerVisible[id]}
+                        onActivate={() => setActiveLayer((cur) => (cur === id ? null : id))}
+                        onToggleVisible={() => setLayerVisible((v) => ({ ...v, [id]: !v[id] }))}
+                      />
+                      {/* Working in one plane lists that plane alone (the board's "פעילה"). */}
+                      {(activeLayer === null || activeLayer === id) && rows.length > 0 && (
+                        <div className={shown ? undefined : "opacity-50"}>
+                          {rows.map((row) => (
+                            <PanelListRow
+                              key={row.key}
+                              glyph={
+                                row.swatch ? (
+                                  <span aria-hidden className="h-3 w-3 rounded-full border border-border" style={{ backgroundColor: row.swatch }} />
+                                ) : (
+                                  <Icon aria-hidden className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
+                                )
+                              }
+                              label={row.label}
+                              meta={rowFigure(row)}
+                              selected={row.refs.every((r) => selectedKeys.has(`${r.kind}:${r.id}`))}
+                              // Every one of them (D11) — a block as the one table it is.
+                              onClick={shown ? () => pickMany(row.refs, false) : undefined}
+                              disabled={behindScrim(row.refs)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {planTotal === 0 && <p className="mx-1 mt-2 text-xs leading-relaxed text-muted">התוכנית עדיין ריקה — בוחרים פריט בקטלוג ולוחצים על התוכנית, או גוררים אותו.</p>}
+              </PanelList>
+            ) : (
+              <PanelListFolded
+                icon={Layers}
+                title="בתוכנית"
+                count={planTotal}
+                crumb={fillProps ? (fillProps.state.editing ? "עריכת במה" : "מילוי במות") : listCrumb(planRows, selected)}
+                badge={
+                  checkRows.length > 0 ? (
+                    <span title={`בדיקות: ${checkRows.length}`} className="nums inline-flex shrink-0 items-center gap-0.5 rounded-pill bg-warn-tint px-1.5 text-[11px] font-bold text-warn-ink">
+                      <TriangleAlert aria-hidden className="h-3 w-3" strokeWidth={2} />
+                      {checkRows.length}
+                    </span>
+                  ) : undefined
+                }
+                onOpen={() => setUnfoldedFor(selected)}
+              />
+            )}
+            {/* The fill tool with its area drawn: its groups, in place of the selection's and the
+                sketch's own, under the folded list — the same props as its quick bar. */}
+            {fillProps && <StageFillPanel part="groups" {...fillProps} />}
+            {/* The selection's groups — every field it has, under the folded list (or, with a zone or a
+                layer scope and nothing selected, the scope's). The same props as the quick bar. */}
+            {!fillToolOut && (selected.length > 0 || !!focusZoneId || activeLayer !== null) && <Inspector part="groups" {...inspectorProps} />}
           </HoldWhileDragging>
         </EndPanel>
+      {/* The room in 3D on the sketch, off the LIVE document (not the pass's filtered canvasDoc —
+          the room is the whole design), following the selection. A child of the canvas card, not
+          the column: it opens in the bottom-left corner over the end panel and is dragged anywhere
+          over the canvas and the panel — never over the catalog rail (the user, 2026-11-10). Mounted
+          from its first opening and kept; closed = hidden (see scene-preview.tsx). */}
+        {sceneMounted && (
+          <ScenePreview
+            doc={doc}
+            plan={plan}
+            products={catalog}
+            selection={selected}
+            eventId={workspace?.event?.id ?? null}
+            author={mode === "full"}
+            railingAboveMm={railingAboveMm}
+            open={scenePane.open}
+            widthPx={scenePane.widthPx}
+            pos={scenePane.pos}
+            column={columnRef}
+            onClose={() => patchScene({ open: false })}
+            onPlace={({ widthPx, pos }) => patchScene({ widthPx, pos })}
+          />
+        )}
       </div>
       <ProductDrawer
         product={drawer?.product ?? null}

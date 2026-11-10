@@ -23,8 +23,6 @@ export interface PlanListRow {
   meta?: string;
   /** Everything a click on the row selects. */
   refs: ListRef[];
-  /** A venue feature (a bar, a pool) — the property's, not this event's. */
-  venue?: boolean;
   swatch?: string;
 }
 
@@ -32,7 +30,6 @@ export interface PlanListOptions {
   /** A placement's variant → its product's name and shade, and where it goes (`anchor` "table" = a
    *  table's cloth — its surface); undefined when the catalog lacks it. */
   resolve: (variantId: string) => { product: { id: string; name: string }; swatch?: string; anchor?: string } | undefined;
-  venueFeatures?: { id: string; label: string }[];
 }
 
 /** Whole metres to one decimal at most: 6 → "6", 4.5 → "4.5". */
@@ -127,10 +124,8 @@ export function planListRows(doc: DesignDocument, opts: PlanListOptions): Record
     if (q !== row.count) row.meta = `×${q}`;
   }
 
-  // ── the venue's own features, on the floor ────────────────────────────────────────────────────
-  for (const f of opts.venueFeatures ?? []) {
-    out.floor.push({ key: `feature:${f.id}`, plane: "floor", label: f.label, count: 1, refs: [{ kind: "feature", id: f.id }], venue: true });
-  }
+  // The venue's own features (its bars, pools, stages) are NOT listed: the list is what this event
+  // put on the plan (the user, 2026-11-10: "filter the elements של המקום — not relevant").
   return out;
 }
 
@@ -202,7 +197,7 @@ if (isMain(import.meta.url)) {
   };
   const names: Record<string, string> = { "v-round": "שולחן עגול", "v-rect": "שולחן מלבני", "v-candle": "פמוט", "v-vase": "אגרטל", "v-rug": "שטיח", "v-deck": "פלטה" };
   const resolve: PlanListOptions["resolve"] = (v) => (names[v] ? { product: { id: "p-" + v, name: names[v] }, swatch: "#fff" } : undefined);
-  const rows = planListRows(doc, { resolve, venueFeatures: [{ id: "f1", label: "בר" }] });
+  const rows = planListRows(doc, { resolve });
 
   assert(rows.tables.length === 2, "three lone tables of one variant and one block are two rows");
   assert(rows.tables[0].label === "שולחן עגול" && rows.tables[0].count === 3, "the lone tables are one row named by the product, counted");
@@ -219,8 +214,7 @@ if (isMain(import.meta.url)) {
   const stage = rows.floor.find((r) => r.label === "במה");
   assert(!!stage && stage.meta!.includes("6") && stage.meta!.includes("4"), "a stage is a row of its own with its size in metres");
   assert(stage!.meta === "6 × 4 מ׳", "…6 × 4");
-  const bar = rows.floor.find((r) => r.venue);
-  assert(bar?.label === "בר" && bar.refs[0].kind === "feature" && bar.refs[0].id === "f1", "a venue feature is a floor row marked venue");
+  assert(Object.values(rows).every((plane) => plane.every((r) => r.refs.every((ref) => ref.kind !== "feature"))), "nothing of the venue's own is listed — only what the event put on the plan");
   assert(rows.ceiling.length === 1 && rows.ceiling[0].label === "פריט", "a variant that does not resolve is an 'פריט'");
 
   // A table's CLOTH is its surface and is never selected on its own (the canvas has no way to): its

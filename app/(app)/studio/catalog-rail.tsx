@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, type RefObject } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { Copy, Grid2x2Plus, Heart, MousePointerClick, Pencil, Plus, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import { Copy, Grid2x2Plus, Heart, MousePointerClick, Pencil, Plus, SlidersHorizontal, Sparkles, Wrench, X } from "lucide-react";
 import { Pin } from "lucide-react";
 import { canDuplicate, railBuiltIns, shownGroups } from "@/lib/catalog/built-in";
 import { Menu } from "@/components/menu";
@@ -280,6 +280,21 @@ export function CatalogRail({
       </div>
 
       <div className="scroll-slim flex-1 overflow-y-auto p-2">
+        {/* The TOOLS first — "מילוי במות" and "שורות כיסאות" make things rather than pick a row, and
+            under eleven pinned built-ins the fill tool sat below the fold where nobody found it (the
+            user, 2026-11-10: "where is the stage fill-out feature"). */}
+        {(fillCard || !!rowsChair) && (
+          <>
+            <SectionLabel>
+              <Wrench className="h-3.5 w-3.5 text-accent" strokeWidth={2} />
+              כלים
+            </SectionLabel>
+            <ul className="mb-4 flex flex-col gap-1">
+              {fillCard && <FillCard active={stageFillActive} onClick={onStageFill} />}
+              {rowsChair && <RowsCard chair={rowsChair} mmPerPx={mmPerPx} armed={armedId === rowsToolId(rowsChair.id)} onArm={onArm} />}
+            </ul>
+          </>
+        )}
         {added.length > 0 && (
           <>
             <SectionLabel>
@@ -293,7 +308,7 @@ export function CatalogRail({
             </ul>
           </>
         )}
-        {(pinned.length > 0 || !!rowsChair || fillCard) && (
+        {pinned.length > 0 && (
           <>
             <SectionLabel>
               <Pin className="h-3.5 w-3.5 text-accent" strokeWidth={2} />
@@ -303,8 +318,6 @@ export function CatalogRail({
               {pinned.map((p) => (
                 <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} armed={p.id === armedId} onArm={onArm} onEdit={onEditProduct} onDuplicate={onDuplicateProduct} />
               ))}
-              {rowsChair && <RowsCard chair={rowsChair} mmPerPx={mmPerPx} armed={armedId === rowsToolId(rowsChair.id)} onArm={onArm} />}
-              {fillCard && <FillCard active={stageFillActive} onClick={onStageFill} />}
             </ul>
           </>
         )}

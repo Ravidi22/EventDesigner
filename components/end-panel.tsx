@@ -127,7 +127,9 @@ export function PanelList({ title, count, children }: { title: string; count?: n
 }
 
 /** A layer heading inside the list: its label is "work only in this layer", its eye is shown or
- *  hidden — two questions, two presses, as the plane rail they replace kept them. */
+ *  hidden — two questions, two presses, as the plane rail they replace kept them. The eye is drawn at
+ *  rest in muted ink, never a hover reveal (2026-11-10, the user: in the quiet grey it "cannot be
+ *  seen"); a hidden plane's EyeOff wears the pressed look, so what is switched off reads at a glance. */
 export function PanelListHeading({
   label,
   count,
@@ -165,9 +167,12 @@ export function PanelListHeading({
           aria-pressed={!visible}
           aria-label={visible ? `הסתרת שכבת ${label}` : `הצגת שכבת ${label}`}
           title={visible ? "הסתרה" : "הצגה"}
-          className="rounded-sm p-0.5 text-quiet transition-colors hover:text-accent"
+          className={
+            "flex h-6 w-6 shrink-0 items-center justify-center rounded-sm transition-colors " +
+            (visible ? "text-muted hover:bg-accent-tint hover:text-accent" : "bg-accent-tint text-accent hover:bg-accent-wash")
+          }
         >
-          <EyeIcon className="h-3.5 w-3.5" strokeWidth={1.75} />
+          <EyeIcon className="h-4 w-4" strokeWidth={1.9} />
         </button>
       )}
     </div>
@@ -319,6 +324,7 @@ export function PanelGroups({
   note,
   groups,
   defaultOpen,
+  first = false,
 }: {
   kind: string;
   title: string;
@@ -326,6 +332,8 @@ export function PanelGroups({
   note?: string;
   groups: PanelGroup[];
   defaultOpen?: readonly string[];
+  /** At the top of the panel: no hairline over it (the studio's sketch groups, above the list). */
+  first?: boolean;
 }) {
   const open = useSyncExternalStore(
     groupMemory.subscribe,
@@ -334,7 +342,7 @@ export function PanelGroups({
   );
   return (
     <div>
-      <div className="h-px bg-border" aria-hidden />
+      {!first && <div className="h-px bg-border" aria-hidden />}
       <PanelGroupsHeader title={title} sub={sub} note={note} />
       {orderGroups(groups).map((g) => (
         <div key={g.key} data-group={g.key}>

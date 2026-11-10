@@ -52,11 +52,19 @@ export function saveScratch(content: DesignDocumentContent): boolean {
 // it. Through this module like every other localStorage read in the app.
 
 // There is no layout any more (the split is gone, 2026-11-09): a stored "split" is simply read as
-// the card — `loadScenePreview` takes `open` and the width and ignores the rest.
+// the card — `loadScenePreview` takes `open`, the width and where it was dragged, and ignores the rest.
 export interface ScenePreviewPrefs {
   open: boolean;
   /** The card's width; its picture's height follows (the card's aspect). */
   widthPx: number;
+  /** Where its header was dragged to (lib/studio/scene-card.ts); absent = the bottom-left corner. */
+  pos?: SceneCardPos;
+}
+/** The card's end-bottom corner: px from the canvas card's end edge (left on a Hebrew screen) and its
+ *  foot. Held inside the area as it is drawn, so a spot stored on a wider screen still comes back. */
+export interface SceneCardPos {
+  end: number;
+  bottom: number;
 }
 /** What the card's grip may drag its width between. */
 export const SCENE_PREVIEW_MIN_PX = 260;
@@ -71,9 +79,11 @@ export function loadScenePreview(): ScenePreviewPrefs {
     if (!raw) return DEFAULT_SCENE_PREVIEW;
     const p = JSON.parse(raw) as Partial<ScenePreviewPrefs>;
     const width = typeof p.widthPx === "number" && Number.isFinite(p.widthPx) ? p.widthPx : DEFAULT_SCENE_PREVIEW.widthPx;
+    const pos = p.pos && Number.isFinite(p.pos.end) && Number.isFinite(p.pos.bottom) ? { end: Math.round(p.pos.end), bottom: Math.round(p.pos.bottom) } : undefined;
     return {
       open: p.open === true,
       widthPx: Math.min(SCENE_PREVIEW_MAX_PX, Math.max(SCENE_PREVIEW_MIN_PX, Math.round(width))),
+      ...(pos ? { pos } : {}),
     };
   } catch {
     return DEFAULT_SCENE_PREVIEW;
