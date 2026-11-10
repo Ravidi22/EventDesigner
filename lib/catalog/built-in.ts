@@ -133,6 +133,13 @@ if (isMain(import.meta.url)) {
   assert(studio.includes("rugs") && studio.includes("curtains") && studio.includes("tables"), "…but rugs and curtains stay creatable, beside their built-in");
   assert(creatableCategories(CATEGORIES, true).length === CATEGORIES.length, "a supplier makes rows of every category");
 
+  // A backdrop (קירות רקע, Backdrops S2): a studio makes as many as it stocks — drawn from the
+  // front — while the stage's own backdrop edge row stays the built-in it was.
+  const fresh = offeredCategories(CATEGORIES, { isSupplier: false, product: { id: "", category: "backdrops" } }).map((c) => c.id);
+  assert(fresh.includes("backdrops"), "a studio's new row may be a backdrop");
+  assert(!isBuiltInCategory("backdrops") && CATEGORY_BY_ID.backdrops?.front === true, "…an ordinary category, its first shape a front panel");
+  assert(isBuiltInCategory("stage-backdrops") && !fresh.includes("stage-backdrops"), "…the stage's backdrop edge stays built-in");
+
   // A supplier's categories (the cut stems): never a studio's to file in, see or browse by.
   assert(isSupplierCategory("flowers") && isSupplierCategory("greenery") && isSupplierCategory("dried-flowers"), "the three stem categories are a supplier's");
   assert(!isSupplierCategory("flower-arrangements") && !isSupplierCategory("centerpieces"), "…an arrangement and a centrepiece are the studio's");

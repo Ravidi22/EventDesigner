@@ -21,6 +21,7 @@ import {
   Trash2,
 } from "lucide-react";
 import {
+  FRONT_THICK_MM,
   PRICE_UNIT_LABEL,
   ROUND_FIELD,
   SHAPE_LABEL,
@@ -46,7 +47,7 @@ import { ComboField, type ComboOption } from "@/components/combo-field";
 import { costUnitLabel } from "@/lib/suppliers/procurement";
 import { useSupplierPicker } from "@/lib/suppliers/use-suppliers";
 import { SupplierSelect } from "@/app/(app)/suppliers/supplier-select";
-import { catalogBox, resolveContent, resolveFootprint, roundSizeMm } from "@/lib/studio/footprint";
+import { catalogBox, frontFace, resolveContent, resolveFootprint, roundSizeMm, rowShapeDims } from "@/lib/studio/footprint";
 import { RESIZE_DEFAULT_STEP_MM, type ResizeSpec } from "@/lib/catalog/types";
 import { HANG_FIELD, HANG_MAX_MM } from "@/lib/studio/hang";
 import { CATEGORIES, CATEGORY_BY_ID, CATEGORY_GROUPS, LAYERS, styleTagsOf, type CategoryDef } from "@/lib/catalog/categories";
@@ -114,8 +115,10 @@ export function blankProduct(c: CategoryDef = CATEGORIES[0]): Product {
     name: "",
     category: c.id,
     layer: c.defaultLayer,
-    // A table starts at 75cm (CategoryDef.defaultHeightMm); everything else starts empty and asks.
-    dimensions: { heightMm: c.defaultHeightMm ?? 0 },
+    // A table starts at 75cm (CategoryDef.defaultHeightMm); everything else starts empty and asks. A
+    // front category's row (CategoryDef.front — a backdrop) starts as a panel FRONT_THICK_MM thick: its
+    // depth is its thickness, its height its face's.
+    dimensions: c.front ? { heightMm: c.defaultHeightMm ?? 0, depthMm: FRONT_THICK_MM } : { heightMm: c.defaultHeightMm ?? 0 },
     categoryFields: {},
     styleTags: [],
     variants: [],
@@ -129,7 +132,9 @@ export function blankProduct(c: CategoryDef = CATEGORIES[0]): Product {
     //             written across it is something a designer turns on for the few items that need
     //             it, not what every new product is born wearing. The base library has drawn this
     //             way from the start (lib/catalog/standard/) — a hand-added item now matches it.
-    appearance: { shape: defaultShape(c), content: "none" },
+    //   plane   — a front category's first shape is drawn on the FRONT plane, a face width × height
+    //             (lib/studio/footprint.ts rowShapeDims), not a footprint seen from above.
+    appearance: c.front ? { shape: "rect", content: "none", plane: "front" } : { shape: defaultShape(c), content: "none" },
   };
 }
 
@@ -424,7 +429,8 @@ const startsAtPicker = (p: Product) => !p.id && !p.name.trim() && !p.composition
  *  it is measured on the plan. */
 function seedOf(c: CategoryDef): string {
   if (c.sizing === "stretch") return "נמדד על התוכנית";
-  return `${SHAPE_LABEL[defaultShape(c)]}${c.defaultHeightMm ? ` · גובה ${c.defaultHeightMm / 10}` : ""}`;
+  const height = c.defaultHeightMm ? ` · גובה ${c.defaultHeightMm / 10}` : "";
+  return `${c.front ? "פאנל חזית" : SHAPE_LABEL[defaultShape(c)]}${height}`;
 }
 
 /** The name field's example, in the category's own words. */
@@ -446,6 +452,7 @@ const NAME_EXAMPLE: Record<string, string> = {
   rugs: "שטיח פרסי",
   curtains: "וילון שיפון לבן",
   arches: "קשת פרחים",
+  backdrops: "קיר רקע קשתות לבן",
   gates: "שער עץ מקושת",
   columns: "עמוד יווני",
   fountains: "מזרקת אבן",
@@ -629,6 +636,9 @@ export function ProductDrawer({
   const stretch = category.sizing === "stretch";
   const custom = currentShape === "custom";
   const round = !stretch && usesDiameter(currentShape);
+  // A FRONT base (a backdrop — MapAppearance.plane): its width and height are its FACE, across and up;
+  // its depth is how thick the panel is (lib/studio/footprint.ts rowShapeDims).
+  const front = draft.appearance?.plane === "front";
   // Most categories keep asking for height regardless of `stretch` — a drape's height is its DROP,
   // the one dimension that still tells two rolls of the same curtain apart. needsHeight is the
   // explicit opt-out for the categories where height isn't a dimension of the item at all: see the
@@ -641,7 +651,11 @@ export function ProductDrawer({
   // three points — whose size IS its drawing. Without them the footprint can only fall back to
   // MIN_FOOTPRINT_MM, a 60×60 box that ignores every number in the form.
   const drawnByHand = custom && (draft.appearance?.outline?.length ?? 0) >= 3;
-  const measured = stretch || (custom ? drawnByHand : round ? !!roundSizeMm(currentShape, draft.dimensions) : !!draft.dimensions.widthMm && !!draft.dimensions.depthMm);
+  // A front base's face is its width × its height (asked on its own); its thickness has a default
+  // (FRONT_THICK_MM), so it is never what is missing.
+  const measured =
+    stretch ||
+    (custom ? drawnByHand : round ? !!roundSizeMm(currentShape, draft.dimensions) : !!draft.dimensions.widthMm && (front || !!draft.dimensions.depthMm));
   const missing: Record<RequiredKey, boolean> = {
     name: draft.name.trim() === "",
     shape: custom && !drawnByHand,
@@ -662,15 +676,33 @@ export function ProductDrawer({
     setDraft((d) => ({ ...d, dimensions: { ...d.dimensions, [key]: Math.round(cm * 10) } }));
   const setField = (key: string, v: number) => setDraft((d) => ({ ...d, categoryFields: { ...d.categoryFields, [key]: v } }));
   /** The first shape's width or depth — the numbers the editor's item bar edits too. A hand-drawn
-   *  outline is RESCALED to them (its points, not its two numbers, are what draws it). */
-  const setBox = (p: { widthMm?: number; depthMm?: number }) =>
+   *  outline is RESCALED to them (its points, not its two numbers, are what draws it). A FRONT base's
+   *  outline is its face, so it is rescaled to its width × HEIGHT, and its depth — the panel's
+   *  thickness — never touches it. */
+  const setBox = (p: { widthMm?: number; depthMm?: number; heightMm?: number }) =>
     setDraft((d) => {
       const a = d.appearance;
       if (shapeOf(d) === "custom" && a?.outline && a.outline.length >= 3) {
+        if (a.plane === "front") {
+          if (p.widthMm === undefined && p.heightMm === undefined) return { ...d, dimensions: { ...d.dimensions, ...p } };
+          const r = rescaleOutline(a.outline, a.edgeCurves, p.widthMm ?? d.dimensions.widthMm ?? 0, p.heightMm ?? d.dimensions.heightMm ?? 0);
+          return { ...d, dimensions: { ...d.dimensions, ...p, widthMm: r.widthMm, heightMm: r.depthMm }, appearance: { ...a, outline: r.outline, edgeCurves: r.edgeCurves } };
+        }
         const r = rescaleOutline(a.outline, a.edgeCurves, p.widthMm ?? d.dimensions.widthMm ?? 0, p.depthMm ?? d.dimensions.depthMm ?? 0);
         return { ...d, dimensions: { ...d.dimensions, widthMm: r.widthMm, depthMm: r.depthMm }, appearance: { ...a, outline: r.outline, edgeCurves: r.edgeCurves } };
       }
       return { ...d, dimensions: { ...d.dimensions, ...p } };
+    });
+  /** A ROUND front base: its face's height IS its size (a circle's diameter, a half circle's radius),
+   *  so the diameter and the height move together — as the shape editor stores them (lib/catalog/
+   *  shape-list.ts frontLookOf). `to` is whichever was typed. */
+  const setFrontRound = (to: { diameterMm?: number; heightMm?: number }) =>
+    setDraft((d) => {
+      const { shape, dims } = rowShapeDims(d);
+      const per = frontFace(shape, { ...dims, diameterMm: 1000 }).h / 1000; // face height per mm of diameter
+      if (!(per > 0)) return { ...d, dimensions: { ...d.dimensions, ...to } };
+      const diameterMm = to.diameterMm ?? Math.round((to.heightMm ?? 0) / per);
+      return { ...d, dimensions: { ...d.dimensions, diameterMm, heightMm: to.heightMm ?? Math.round(diameterMm * per) } };
     });
 
   /** Where the first missing answer is given: its field, or — for a shape — the editor. */
@@ -693,9 +725,23 @@ export function ProductDrawer({
       // leave it 75cm tall. A saved product's height is a measurement and is never touched.
       const seededHeight = CATEGORY_BY_ID[d.category]?.defaultHeightMm ?? 0;
       const reseedHeight = !d.id && (d.dimensions.heightMm === 0 || d.dimensions.heightMm === seededHeight);
+      // A NEW row's PLANE follows the category's seed too (CategoryDef.front): picked as a backdrop it
+      // becomes a front panel FRONT_THICK_MM thick (a plan depth is no thickness), and picked away from
+      // one while still its front seed it is a plan shape again (a thickness is no plan depth). A saved
+      // row's plane, and a hand-drawn one, are the designer's drawing and are never touched.
+      const handDrawn = d.appearance?.shape === "custom";
+      const fromFront = !!CATEGORY_BY_ID[d.category]?.front;
+      const enterFront = !d.id && !handDrawn && !!c.front && !fromFront && d.appearance?.plane !== "front";
+      const leaveFront = !d.id && !handDrawn && !c.front && fromFront && d.appearance?.plane === "front";
+      const reseeded = reseedHeight ? { ...d.dimensions, heightMm: c.defaultHeightMm ?? 0 } : d.dimensions;
+      const planeSeed: Partial<MapAppearance> = enterFront
+        ? { plane: "front" }
+        : leaveFront
+          ? { plane: undefined, bendDeg: undefined, faceTurnDeg: undefined }
+          : {};
       return {
         ...d,
-        ...(reseedHeight ? { dimensions: { ...d.dimensions, heightMm: c.defaultHeightMm ?? 0 } } : {}),
+        dimensions: enterFront ? { ...reseeded, depthMm: FRONT_THICK_MM } : leaveFront ? { ...reseeded, depthMm: undefined } : reseeded,
         category: id,
         layer: c.defaultLayer,
         categoryFields: {},
@@ -713,10 +759,7 @@ export function ProductDrawer({
         // designer has drawn one by hand, which a category change must never throw away. Content is
         // carried across as whatever the plan already draws, so changing category cannot silently
         // blank the name off an older product.
-        appearance:
-          d.appearance?.shape === "custom"
-            ? d.appearance
-            : { ...d.appearance, shape: defaultShape(c), content: contentOf(d) },
+        appearance: handDrawn ? d.appearance : { ...d.appearance, shape: defaultShape(c), content: contentOf(d), ...planeSeed },
       };
     });
   const pickCategory = (id: string) => {
@@ -1086,7 +1129,9 @@ export function ProductDrawer({
 
                 {/* The first shape's numbers — the very ones the editor's bar edits. A box asks width,
                     depth and height; a round shape its one measurement and height; a line its length
-                    and thickness; a stretch category its height (a drape's drop) alone. */}
+                    and thickness; a stretch category its height (a drape's drop) alone. A FRONT base
+                    (a backdrop) asks its face's width and height and the panel's thickness — and a
+                    hand-drawn face is rescaled by its width and height, never by its thickness. */}
                 {(() => {
                   const heightField = showHeight && (
                     <NumberField
@@ -1096,10 +1141,30 @@ export function ProductDrawer({
                       hideZero
                       min={0}
                       placeholder="—"
+                      commitOnBlur={front && custom}
                       error={submitted && missing.height}
                       errorMessage="גובה נדרש (לטובת ההדמיה התלת־ממדית)."
                       value={cm(draft.dimensions.heightMm)}
-                      onChange={(v) => setDim("heightMm", v)}
+                      onChange={(v) =>
+                        front && custom
+                          ? setBox({ heightMm: Math.round(v * 10) })
+                          : front && round
+                            ? setFrontRound({ heightMm: Math.round(v * 10) })
+                            : setDim("heightMm", v)
+                      }
+                    />
+                  );
+                  // A panel's thickness: millimetres matter (a 2cm board, a 2.5cm one), so one decimal.
+                  const thicknessField = front && (
+                    <NumberField
+                      id="p-depth"
+                      label="עובי (ס״מ)"
+                      hideZero
+                      min={0}
+                      placeholder="—"
+                      decimals={1}
+                      value={(draft.dimensions.depthMm ?? 0) / 10}
+                      onChange={(v) => setDim("depthMm", v)}
                     />
                   );
                   if (stretch) return heightField ? <div className="grid grid-cols-3 gap-2.5">{heightField}</div> : null;
@@ -1122,7 +1187,9 @@ export function ProductDrawer({
                           placeholder="—"
                           error={submitted && missing.dims}
                           value={(roundSizeMm(currentShape, draft.dimensions) ?? 0) / roundField.factor / 10}
-                          onChange={(v) => setDim("diameterMm", v * roundField.factor)}
+                          onChange={(v) =>
+                            front ? setFrontRound({ diameterMm: Math.round(v * roundField.factor * 10) }) : setDim("diameterMm", v * roundField.factor)
+                          }
                         />
                       ) : (
                         <>
@@ -1140,21 +1207,24 @@ export function ProductDrawer({
                             value={cm(draft.dimensions.widthMm)}
                             onChange={(v) => setBox({ widthMm: Math.round(v * 10) })}
                           />
-                          <NumberField
-                            id="p-depth"
-                            label={line ? "עובי (ס״מ)" : "עומק (ס״מ)"}
-                            required
-                            hideZero
-                            min={0}
-                            placeholder="—"
-                            decimals={line ? 1 : undefined}
-                            commitOnBlur={custom}
-                            error={submitted && missing.dims && !draft.dimensions.depthMm}
-                            value={line ? (draft.dimensions.depthMm ?? 0) / 10 : cm(draft.dimensions.depthMm)}
-                            onChange={(v) => setBox({ depthMm: Math.round(v * 10) })}
-                          />
+                          {thicknessField || (
+                            <NumberField
+                              id="p-depth"
+                              label={line ? "עובי (ס״מ)" : "עומק (ס״מ)"}
+                              required
+                              hideZero
+                              min={0}
+                              placeholder="—"
+                              decimals={line ? 1 : undefined}
+                              commitOnBlur={custom}
+                              error={submitted && missing.dims && !draft.dimensions.depthMm}
+                              value={line ? (draft.dimensions.depthMm ?? 0) / 10 : cm(draft.dimensions.depthMm)}
+                              onChange={(v) => setBox({ depthMm: Math.round(v * 10) })}
+                            />
+                          )}
                         </>
                       )}
+                      {round && thicknessField}
                       {heightField}
                     </div>
                   );
