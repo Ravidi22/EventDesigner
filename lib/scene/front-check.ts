@@ -5,6 +5,7 @@
 import type { Product, ShapePart } from "@/lib/catalog/types";
 import { sizedFootprint } from "@/lib/studio/footprint";
 import { panelPoint } from "@/lib/element/front";
+import { symbolOf } from "@/lib/catalog/symbols";
 import { isMain } from "../self-check";
 import { elementBody, elementOf, ownBodyParts } from "./element-body";
 import type { MaterialRef, Part } from "./types";
@@ -55,6 +56,17 @@ if (isMain(import.meta.url)) {
   const split = ownBodyParts(bar, sizedFootprint(bar), body)!;
   assert(split !== null && split.parts.length === 1 && split.parts[0].shape === "panel" && split.parts[0].at.z === 1100, "a bar's front panel is the model's, at 1.1 m");
   assert(split.rest.kind === "multi" && split.rest.parts.length === 1, "…the counter the recipe's");
+
+  // Arches, gates and chuppahs drawn from the front stand AS DRAWN: their category's picture gives
+  // way, on the plan and in the room (FRONT_REPLACES_PICTURE).
+  const chuppahFront = row({ category: "chuppahs", dimensions: { widthMm: 3000, depthMm: 40, heightMm: 2600 }, appearance: { shape: "rect", content: "none", plane: "front" } });
+  assert(symbolOf(chuppahFront, sizedFootprint(chuppahFront)) === null, "a chuppah drawn from the front is not the chuppah picture");
+  const archFront = row({ category: "arches", dimensions: { diameterMm: 2400, depthMm: 40, heightMm: 1200 }, appearance: { shape: "half-circle", content: "none", plane: "front" } });
+  assert(symbolOf(archFront, sizedFootprint(archFront)) === null && panels(archFront).length === 1, "an arch drawn from the front is one panel, no picture");
+  const chuppahPlan = row({ category: "chuppahs", dimensions: { widthMm: 3000, depthMm: 3000, heightMm: 2600 }, appearance: { shape: "rect", content: "none" } });
+  assert(symbolOf(chuppahPlan, sizedFootprint(chuppahPlan)) === "chuppah", "…a chuppah drawn on the plan keeps its picture");
+  const barPanel = row({ category: "bars", dimensions: { widthMm: 3000, depthMm: 600, heightMm: 1100 }, appearance: { shape: "rect", content: "none", parts: [layer("p", -500, 3000, 900, 1100)] } });
+  assert(symbolOf(barPanel, sizedFootprint(barPanel)) === "bar", "a bar with a front panel keeps its bar picture (the panel is added)");
 
   // No price reaches the room.
   const text = JSON.stringify([built, lp, split]);
