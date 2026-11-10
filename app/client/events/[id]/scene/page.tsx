@@ -46,7 +46,7 @@ export default async function ClientScenePage({ params }: { params: Promise<{ id
             </a>
           )}
         </span>
-        <NotificationBell />
+        <NotificationBell side="client" />
       </header>
       <main className="min-h-0 flex-1 overflow-hidden rounded-md bg-surface shadow-floating">
         <ClientSceneView scene={scene} />
