@@ -92,7 +92,7 @@ import { ShapeGrid, ShapeIcon } from "@/components/shape-grid";
 import { ElevationView } from "./elevation-view";
 import { ElevationCanvas } from "./elevation-canvas";
 import { ElevationQuickBar } from "./elevation-bar";
-import { drawnFront, elevationBoxes, elevationNudge, faceSized, placedFront, type ElevationView as SideView } from "@/lib/element/elevation";
+import { bandResize, drawnFront, elevationBoxes, elevationNudge, faceSized, placedFront, type ElevationView as SideView } from "@/lib/element/elevation";
 import { bendKeepingMiddle, petalOutline, toFront, toPlan, waveOutline } from "@/lib/element/front";
 import { RevolveFields, type RevolveTiles } from "./revolve-editor";
 import { REVOLVE_LABEL, revolveFormOf } from "@/lib/element/revolve";
@@ -2947,11 +2947,9 @@ export function AppearanceModal({
                                 const before = features.find((f) => f.id === id);
                                 if (!part || !before) return;
                                 if (part.plane === "front") {
-                                  // On the plan a front shape's band is its face's width (flat) and its thickness.
-                                  const patch: Partial<ShapePart> = { x: Math.round(r.x), y: Math.round(r.y) };
-                                  if (Math.abs(part.bendDeg || 0) < 0.5 && Math.round(r.widthMm) !== Math.round(before.widthMm)) Object.assign(patch, faceSized(part, { widthMm: Math.max(100, Math.round(r.widthMm)) }));
-                                  if (Math.round(r.depthMm) !== Math.round(before.depthMm)) patch.thicknessMm = Math.max(5, Math.round(r.depthMm));
-                                  dragShapes((l) => l.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+                                  // On the plan a front shape's band: a flat one's width and thickness; a bent one's grips change nothing.
+                                  const patch = bandResize(part, before, r);
+                                  if (Object.keys(patch).length) dragShapes((l) => l.map((s) => (s.id === id ? { ...s, ...patch } : s)));
                                   return;
                                 }
                                 if (part.shape === "line" && Math.round(r.depthMm) !== Math.round(before.depthMm)) return;

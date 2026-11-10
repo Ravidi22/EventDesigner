@@ -8,6 +8,7 @@ import { panelPoint } from "@/lib/element/front";
 import { symbolOf } from "@/lib/catalog/symbols";
 import { isMain } from "../self-check";
 import { elementBody, elementOf, ownBodyParts } from "./element-body";
+import { itemScene } from "./item-scene";
 import type { MaterialRef, Part } from "./types";
 
 type Panel = Extract<Part, { shape: "panel" }>;
@@ -67,6 +68,19 @@ if (isMain(import.meta.url)) {
   assert(symbolOf(chuppahPlan, sizedFootprint(chuppahPlan)) === "chuppah", "…a chuppah drawn on the plan keeps its picture");
   const barPanel = row({ category: "bars", dimensions: { widthMm: 3000, depthMm: 600, heightMm: 1100 }, appearance: { shape: "rect", content: "none", parts: [layer("p", -500, 3000, 900, 1100)] } });
   assert(symbolOf(barPanel, sizedFootprint(barPanel)) === "bar", "a bar with a front panel keeps its bar picture (the panel is added)");
+
+  // A bar's recipe keeps its counters, and a front panel added to it stands as a panel (review I2).
+  const barRow = row({ category: "bars", dimensions: { widthMm: 3000, depthMm: 600, heightMm: 1100 }, appearance: { shape: "rect", content: "none", parts: [layer("p", -500, 3000, 900, 1100)] } });
+  assert(JSON.stringify(itemScene(barRow).scene).includes('"shape":"panel"'), "a bar's front panel stands in the room as a panel");
+
+  // A chuppah, an arch, a gate whose BASE is drawn on the plan under a front drawing (review I4):
+  // the front drawing replaces the picture, so the plan base is the item's outline only — its reach,
+  // like a pergola's roof line — never a solid block the size of the chuppah.
+  const chuppahMixed = row({ category: "chuppahs", dimensions: { widthMm: 3000, depthMm: 3000, heightMm: 2600 }, appearance: { shape: "rect", content: "none", parts: [layer("arch", 1500, 3000, 2600, 0)] } });
+  const cm = elementBody(chuppahMixed, sizedFootprint(chuppahMixed), body)!;
+  assert(cm !== null && cm.parts.length === 1 && cm.parts[0].shape === "panel", `a chuppah's plan base under a front drawing builds nothing (${cm?.parts.map((p) => p.shape)})`);
+  const barKeeps = elementBody(barRow, sizedFootprint(barRow), body)!;
+  assert(barKeeps.parts.some((p) => p.shape === "extrude"), "…a bar's base is still its counter");
 
   // No price reaches the room.
   const text = JSON.stringify([built, lp, split]);

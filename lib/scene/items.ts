@@ -34,6 +34,7 @@ import { isMain } from "../self-check";
 import { type InstanceRequest, type ItemBuild } from "./collect";
 import { type ItemContext, fallbackBody } from "./item-context";
 import { hasOwnBody } from "@/lib/element/adapter";
+import { hasFront } from "@/lib/element/front";
 import { ownBodyParts } from "./element-body";
 import { polygonAreaMm2 } from "@/lib/studio/geometry";
 import { floorKindBody } from "./floor-kinds";
@@ -250,6 +251,14 @@ const ownMaterial = (ctx: ItemContext): MaterialRef => ({ colour: ctx.tone, kind
  *  is the picture's own outline and nothing is added for it. The bar keeps its recipe, which honours a back piece's own height itself
  *  (floor-kinds shapedBar). */
 export function itemBody(kind: SymbolKind | null, ctx: ItemContext): ItemBuild {
+  // A bar keeps its recipe (it honours its back pieces' own heights); a FRONT panel added to it
+  // (backdrops S2) is the element model's, beside it — bar-draw leaves the panel out of the backs.
+  if (kind === "bar" && ctx.product && hasFront(ctx.product)) {
+    const picture = pictureBody(kind, ctx);
+    const own = ownBodyParts(ctx.product, ctx.footprint, ownMaterial(ctx), { only: (p) => p.part.op.kind === "panel" });
+    if (own) picture.parts.push(...own.parts);
+    return picture;
+  }
   if (kind !== "bar" && ctx.product && hasOwnBody(ctx.product)) {
     if (kind === null || BODY_REPLACES_PICTURE.has(kind)) return fallbackBody(ctx);
     const profileIsPicture = PROFILE_IS_PICTURE.has(kind);

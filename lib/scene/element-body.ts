@@ -124,7 +124,12 @@ export function elementOf(product: Product | undefined, footprint: Footprint): {
  *  (ElementPart.own — a shelf a metre up, a raised tier) built by the model, and the footprint of
  *  the rest handed back for the recipe to draw as it always did (a table's top, its legs, its
  *  cloth). The rest keeps its place in the element's frame. Null when nothing is the model's. */
-export function ownBodyParts(product: Product | undefined, footprint: Footprint, body: MaterialRef, opts: { baseProfileIsPicture?: boolean } = {}): { parts: Part[]; rest: Footprint } | null {
+export function ownBodyParts(
+  product: Product | undefined,
+  footprint: Footprint,
+  body: MaterialRef,
+  opts: { baseProfileIsPicture?: boolean; only?: (p: ResolvedPart) => boolean } = {},
+): { parts: Part[]; rest: Footprint } | null {
   const el = elementOf(product, footprint);
   if (!el) return null;
   // The base's own body of revolution is the model's too (a bowl on a table) — the user, 2026-11-07:
@@ -133,7 +138,9 @@ export function ownBodyParts(product: Product | undefined, footprint: Footprint,
   // centre. Unless the PICTURE reads that profile itself (`baseProfileIsPicture` — a chandelier's
   // silhouette, lib/catalog/chandelier.ts): built here as well, it was a solid the size of the whole
   // piece with the picture inside it.
-  const isOwn = (p: ResolvedPart) => !!p.part.own || (!opts.baseProfileIsPicture && p.index === 0 && p.part.op.kind === "revolve");
+  // `only` narrows what the model builds (a bar's recipe honours its own back pieces' heights, so
+  // only its front panels are the model's).
+  const isOwn = (p: ResolvedPart) => (opts.only ? opts.only(p) : !!p.part.own || (!opts.baseProfileIsPicture && p.index === 0 && p.part.op.kind === "revolve"));
   if (!el.geometry.parts.some(isOwn)) return null;
   const own = { ...el.geometry, parts: el.geometry.parts.filter(isOwn) };
   const rest = el.geometry.parts.filter((p) => p.index === 0 || !p.part.own).flatMap((p) => p.pieces);

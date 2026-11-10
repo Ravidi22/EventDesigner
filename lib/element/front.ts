@@ -13,7 +13,7 @@
 //
 // Pure. Run: npm run check:front
 import { FRONT_BEND_MAX_DEG, FRONT_THICK_MM, usesDiameter, type Product, type ShapePart } from "@/lib/catalog/types";
-import { frontBand, frontBandOffset, frontFace, footprintBounds, placedPartOutline, placedPartOutlines, resolveFootprint, rowShapeDims, sampledBounds } from "@/lib/studio/footprint";
+import { frontBand, frontBandOffset, frontFace, footprintBounds, placedPartOutline, placedPartOutlines, resizeSpecOf, resolveFootprint, rowShapeDims, sampledBounds, sizedFootprint } from "@/lib/studio/footprint";
 import type { EdgeCurve, Point } from "@/lib/studio/hall";
 import { isMain } from "../self-check";
 
@@ -253,6 +253,12 @@ if (isMain(import.meta.url)) {
     // A plain row is read exactly as before.
     const plainRow = { ...row, appearance: { shape: "rect", content: "none" } } as Product;
     assert(JSON.stringify(resolveFootprint(plainRow)) === JSON.stringify({ kind: "rect", widthMm: 4000, depthMm: 30 }), "a plan row is untouched");
+    // Not stretched on the sketch yet (review I1): the room builds the panel at its catalog size, and
+    // the pins that would say how a backdrop stretches are S3's.
+    const stretchy = { ...row, resize: { stepMm: 100, width: { minMm: 1000, maxMm: 9000 }, depth: { minMm: 10, maxMm: 100 } } } as Product;
+    assert(resizeSpecOf(stretchy) === undefined, "a row drawn from the front is not stretched on the sketch");
+    assert(JSON.stringify(sizedFootprint(stretchy, { widthMm: 6000, depthMm: 30 })) === JSON.stringify(resolveFootprint(stretchy)), "…its footprint stays the catalog's");
+    assert(resizeSpecOf({ ...plainRow, resize: stretchy.resize } as Product) !== undefined, "…a plan row still stretches");
     assert(hasFront(row) && !hasFront(plainRow) && hasFront({ ...plainRow, appearance: { shape: "rect", content: "none", parts: [panel] } } as Product), "hasFront: the base or a part");
     // ── The room: a panel's points, its cuts, a slab ────────────────────────────────────────────
     const W = 3000;

@@ -28,7 +28,7 @@
 // Derived from the footprint alone, so a bar stretched on the plan is drawn at its new size, and
 // cached per footprint like the spine and the label point. Pure; self-checked: npm run check:bar-draw.
 import type { Point } from "@/lib/design-document/types";
-import { customShapeBounds, footprintOutlines, pieceOf, resolveFootprint, type BuiltOutline, type Footprint } from "@/lib/studio/footprint";
+import { composeShapes, customShapeBounds, footprintOutlines, pieceOf, resolveFootprint, type BuiltOutline, type Footprint } from "@/lib/studio/footprint";
 import { flatRing, signedDistance } from "@/lib/studio/label-anchor";
 import { footprintSpine, pointAlong, spineLength } from "@/lib/studio/spine";
 import { isMain } from "../self-check";
@@ -88,12 +88,15 @@ function build(f: Footprint): BarDrawing {
   const rings = pieces.map((p) => clean(flatRing(p)));
   // The bar's own shape is piece 0 — or, drawn hollow and opened in two places, every piece that
   // says it is shape 0 (BuiltOutline.of). The rest are the shapes added to it.
-  const own = pieces.flatMap((p, i) => (pieceOf(p, i) === 0 ? [i] : []));
+  const own = pieces.flatMap((p, i) => (pieceOf(p, i) === 0 && !p.face ? [i] : []));
   if (!own.length) return EMPTY;
+  // A FRONT panel added to the bar (backdrops S2 — its band carries its `face`) is drawn as itself by
+  // the outline: never a back bar with bottles, and not part of the bar's outside.
+  const panel = (p: BuiltOutline) => !!p.face;
 
   // Which edges are the outside: the hull of the WHOLE bar, parts included — the end of a
   // horseshoe's leg tucked behind the back bar added across its opening is not where guests stand.
-  const all = rings.flat();
+  const all = rings.filter((_, i) => !panel(pieces[i])).flat();
   const hull = convexHull(all);
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of all) {
@@ -120,9 +123,9 @@ function build(f: Footprint): BarDrawing {
   }
 
   // The shapes added to the bar are its back counters: a row of bottles down the middle of each.
-  const backs = pieces.filter((p, i) => pieceOf(p, i) !== 0);
+  const backs = pieces.filter((p, i) => pieceOf(p, i) !== 0 && !panel(p));
   pieces.forEach((piece, i) => {
-    if (pieceOf(piece, i) === 0) return;
+    if (pieceOf(piece, i) === 0 || panel(piece)) return;
     const ring = rings[i];
     if (ring.length < 3) return;
     const d = (2 * Math.abs(signedArea(ring))) / ringLength(ring);
@@ -481,5 +484,14 @@ if (isMain(import.meta.url)) {
   const twoRuns = barDrawing(bar({ widthMm: 3000, depthMm: 2400 }, { shape: "rect", hollow: { bandMm: 600, openSides: [1, 3] } }));
   assert(twoRuns.backs.length === 0 && twoRuns.front.length >= 2 && twoRuns.shelf.length === 2, `a band opened in two is two counters, not a counter and a back bar (${twoRuns.front.length}/${twoRuns.shelf.length}/${twoRuns.backs.length})`);
 
+  // A FRONT panel added to a bar (backdrops S2, review I2): its plan band is drawn as itself (the
+  // outline, its face marked), never a back bar with bottles — and it is not the bar's outside.
+  const withPanel = composeShapes("rect", { widthMm: 3000, depthMm: 600 }, [{ id: "p", plane: "front", shape: "rect", widthMm: 3000, depthMm: 900, thicknessMm: 40, x: 0, y: -500, rotation: 0, zMm: 1100 }]);
+  const wp = barDrawing(withPanel);
+  const band = footprintOutlines(withPanel)[1];
+  const bb = customShapeBounds(band.outline);
+  assert(wp.backs.length === 0, "a front panel added to a bar is not a back bar");
+  assert(!wp.bottles.some((b) => b.y >= bb.minY - 1 && b.y <= bb.maxY + 1), "…and no bottles stand along it");
+  assert(wp.front.length > 0 && wp.shelf.length === 0, "…and the counter is still the guests' all round");
   console.log("bar-draw: all checks passed");
 }

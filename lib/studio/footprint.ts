@@ -1950,6 +1950,11 @@ const shapeOfProduct = (product: Product): MapShape =>
  *  on this side of the catalog goes through here, so a category default is honoured by the handles,
  *  the size panel and the drawing alike. */
 export function resizeSpecOf(product: Product): ResizeSpec | undefined {
+  // A row drawn on the FRONT plane is not stretched on the sketch yet (backdrops S2): the room builds
+  // its panels at their catalog size, and the pins that would say how a backdrop stretches — a frame
+  // keeping its pipe, petals spreading — are S3's. Its size is the catalog's until then.
+  const a = product.appearance;
+  if (a?.plane === "front" || a?.parts?.some((p) => p.plane === "front")) return undefined;
   return product.resize ?? CATEGORY_BY_ID[product.category]?.defaultResize;
 }
 

@@ -213,6 +213,18 @@ export function faceSized(shape: ShapePart, to: { widthMm?: number; heightMm?: n
   return faceResize(shape, face.w, face.h, to.widthMm, to.heightMm);
 }
 
+/** The plan's resize grips on a front shape's BAND: a flat one's width is its face's width (unless
+ *  the face is turned within itself, when the band's width is no one number of the face) and its
+ *  depth its thickness; a BENT band's box is no number of the shape at all, so its grips change
+ *  nothing — its width, bend and thickness are typed in its panel. */
+export function bandResize(s: ShapePart, before: { widthMm: number; depthMm: number }, next: { x: number; y: number; widthMm: number; depthMm: number }): Partial<ShapePart> {
+  if (Math.abs(s.bendDeg || 0) >= 0.5) return {};
+  const patch: Partial<ShapePart> = { x: Math.round(next.x), y: Math.round(next.y) };
+  if (facing(s.faceTurnDeg) && Math.round(next.widthMm) !== Math.round(before.widthMm)) Object.assign(patch, faceSized(s, { widthMm: Math.max(100, Math.round(next.widthMm)) }));
+  if (Math.round(next.depthMm) !== Math.round(before.depthMm)) patch.thicknessMm = Math.max(5, Math.round(next.depthMm));
+  return patch;
+}
+
 /** A front shape's face made `w` across and `h` high (either absent = as it is): a hand-drawn face
  *  rescaled, a round one resized whole by whichever changed, any other its width and its height on
  *  the face (`depthMm`). */
@@ -528,6 +540,13 @@ if (isMain(import.meta.url)) {
   const drawn = drawnFront([{ x: 0, y: -100 }, { x: 1000, y: -100 }, { x: 500, y: -1800 }], undefined, 0)!;
   assert(drawn.plane === "front" && drawn.shape === "custom" && drawn.zMm === 100 && drawn.depthMm === 1700 && drawn.x === 500 && drawn.y === 0, "a free drawing in front is a front custom shape at its height");
   assert(drawnFront([{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 0, y: 5 }], undefined, 0) === null, "…none under 10 mm");
+  // The plan's grips on a front band (review I3): a flat one's width is its face's, its depth its
+  // thickness; a bent or face-turned one's box is no one number — its grips change nothing.
+  const flatBand = bandResize(panel, { widthMm: 3000, depthMm: 30 }, { x: 0, y: -300, widthMm: 3600, depthMm: 30 });
+  assert(flatBand.widthMm === 3600 && flatBand.thicknessMm === undefined, "a flat band's width grip is its face's width");
+  assert(bandResize(panel, { widthMm: 3000, depthMm: 30 }, { x: 0, y: -290, widthMm: 3000, depthMm: 50 }).thicknessMm === 50, "…its depth grip its thickness");
+  assert(Object.keys(bandResize({ ...panel, bendDeg: 90 }, { widthMm: 1910, depthMm: 560 }, { x: 200, y: -200, widthMm: 2400, depthMm: 760 })).length === 0, "a bent band's grips change nothing");
+  assert(bandResize({ ...panel, faceTurnDeg: 30 }, { widthMm: 3400, depthMm: 30 }, { x: 0, y: -300, widthMm: 3800, depthMm: 30 }).widthMm === undefined, "…nor a face-turned band's width grip");
   assert(faceSized(panel, { heightMm: 2600 }).depthMm === 2600 && faceSized(arch, { heightMm: 1500 }).diameterMm === 3000, "faceSized: a face's height by its own measure");
   assert(faceSized(petalPart, { heightMm: 1000 }).outline?.length === 3 && faceSized(petalPart, { heightMm: 1000 }).depthMm === 1000, "…a hand-drawn one rescaled");
   console.log("elevation self-check passed");

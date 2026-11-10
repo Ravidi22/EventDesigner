@@ -687,7 +687,8 @@ function shapedBar(ctx: ItemContext, h: number): ItemBuild {
   // of its own (ShapePart.zMm / heightMm, the element model): then it stands at its z, as tall as it
   // says — a shelf a metre up the back wall, a raised display — and its bottles stand on its top.
   // d.backs is the pieces that are not the base's, in order, so the j-th back is the j-th such piece.
-  const backShapes = pieces.map((p, i) => pieceOf(p, i)).filter((k) => k !== 0);
+  // …skipping a front panel's band (its `face`), which bar-draw leaves out of the backs.
+  const backShapes = pieces.flatMap((p, i) => (pieceOf(p, i) !== 0 && !p.face ? [pieceOf(p, i)] : []));
   const backTops = d.backs.map((o, j) => {
     const spec = ctx.product?.appearance?.parts?.[backShapes[j] - 1];
     const own = !!spec && (spec.zMm !== undefined || spec.heightMm !== undefined);

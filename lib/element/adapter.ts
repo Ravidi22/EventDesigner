@@ -12,6 +12,7 @@
 import { FRONT_THICK_MM, type MapShape, type PartBody, type Product, type RevolvePoint, type ShapePart } from "@/lib/catalog/types";
 import { resizeSpecOf, catalogBox, frontFace, rowShapeDims } from "@/lib/studio/footprint";
 import { hasSurface, type Surface } from "@/lib/catalog/textures";
+import { frontReplacesPicture } from "@/lib/catalog/symbols";
 import { sizeParams, type ElementDefinition, type ElementPart, type ElementSize, type PartOp, type Profile } from "./types";
 
 const EXTRUDE = { kind: "extrude" } as const;
@@ -111,7 +112,8 @@ export function definitionOf(product: Product): ElementDefinition {
     zMm: 0,
     heightMm,
     own: front ? true : undefined,
-    op: front ? panelOf(dims) : opOf(shape, a?.revolve, a?.hollow, a?.body),
+    // An arch, a gate, a chuppah drawn from the front: a plan base is its outline only (symbols.ts).
+    op: front ? panelOf(dims) : frontReplacesPicture(product) ? NONE : opOf(shape, a?.revolve, a?.hollow, a?.body),
     surface: a ? surfaceOf(a) : undefined,
     colour: a?.baseStyle?.fill,
   });

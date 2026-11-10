@@ -119,12 +119,21 @@ export function categoryHasSymbol(category: string): boolean {
  *  drawing, and a front shape is added to it in the room. */
 export const FRONT_REPLACES_PICTURE: ReadonlySet<SymbolKind> = new Set<SymbolKind>(["arch", "gate", "chuppah"]);
 
+/** Whether this row's front drawing stands in for its category's picture (FRONT_REPLACES_PICTURE): an
+ *  arch, a gate or a chuppah with any shape drawn on the front plane. Then a base drawn on the PLAN is
+ *  the item's outline only (lib/element/adapter.ts) — what carried the picture is now the reach of
+ *  the drawing, never a solid the size of the chuppah. */
+export function frontReplacesPicture(product: Product): boolean {
+  const kind = SYMBOL_BY_CATEGORY[product.category];
+  return !!kind && FRONT_REPLACES_PICTURE.has(kind) && hasFront(product);
+}
+
 export function symbolOf(product: Product | undefined, footprint: Footprint): SymbolKind | null {
   if (!product || product.appearance?.symbol === false) return null;
   // A runner is filed with the cloths but is drawn as itself: a strip of fabric on the table.
   const kind = isRunner(product) ? "runner" : SYMBOL_BY_CATEGORY[product.category];
   if (!kind) return null;
-  if (FRONT_REPLACES_PICTURE.has(kind) && hasFront(product)) return null;
+  if (frontReplacesPicture(product)) return null;
   // A climb is a straight run; a round "ramp" is a shape the steps cannot be drawn into. A banquette
   // is a band with two long sides, and is laid along whatever band it was drawn as (lib/design-
   // document/bench.ts benchLayoutFor) — only a circle has no long side to sit along.
