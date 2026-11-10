@@ -381,6 +381,8 @@ export function StudioScreen({
     if (scenePrefs) saveScenePreview(scenePrefs);
   }, [scenePrefs]);
   const scenePane = scenePrefs ?? DEFAULT_SCENE_PREVIEW;
+  // The quick bar's dock — the 3D card stands above whatever it holds.
+  const dockRef = useRef<HTMLDivElement>(null);
   const patchScene = useCallback((patch: Partial<ScenePreviewPrefs>) => setScenePrefs((cur) => ({ ...(cur ?? DEFAULT_SCENE_PREVIEW), ...patch })), []);
   const toggleScene = useCallback(() => {
     setSceneMounted(true);
@@ -5573,8 +5575,9 @@ export function StudioScreen({
           onStageFill={startStageFill}
           stageFillActive={stageFill !== null}
         />
-        {/* `relative`: the 3D card is positioned against this column (under the view cluster), so
-            it sits in the canvas's top-start corner whatever the rail and the end panel are doing. */}
+        {/* `relative`: the 3D card is positioned against this column (its bottom-start corner, above
+            the quick bar), so it sits on the canvas whatever the rail and the end panel are doing —
+            and its width is held to this column's. */}
         <div className="relative min-w-0 flex-1">
           <CanvasStage
             doc={canvasDoc}
@@ -5814,7 +5817,7 @@ export function StudioScreen({
               because its own popovers open upwards and centred on their chip: from a corner, half
               of them would open past the edge of the plane. The dock is /halls' (`ps-[124px]`
               keeps the bar clear of the save pill in the bottom-start corner). */}
-          <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center ps-[124px]">
+          <div ref={dockRef} className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center ps-[124px]">
             <div className="pointer-events-auto flex min-w-0 justify-center">
               {stageFill?.phase === "draw" && stageTool?.kind !== "level" ? (
                 <StageDrawBar
@@ -6026,10 +6029,11 @@ export function StudioScreen({
           {/* Whether the drawing is written down — the header's old indicator, in the corner. */}
           <SavePill state={saveState} onRetry={retrySave} />
           {/* Stable live region so the drop hint / smart-apply confirmation is announced, not just shown. */}
-          {/* Above the inspector bar, not under it: both are centred along the bottom edge (z-20 —
-              the dock under it is z-10). */}
+          {/* Above the inspector bar, not under it: both are centred along the bottom edge (the dock
+              under it is z-10) — and above the 3D card (z-30), which stands in the bottom-start
+              corner: a refusal is never read through a picture of the room. */}
           <div
-            className="pointer-events-none absolute inset-x-0 bottom-20 z-20 flex justify-center"
+            className="pointer-events-none absolute inset-x-0 bottom-20 z-40 flex justify-center"
             aria-live="polite"
           >
             {hint && (
@@ -6050,6 +6054,7 @@ export function StudioScreen({
               railingAboveMm={railingAboveMm}
               open={scenePane.open}
               widthPx={scenePane.widthPx}
+              dock={dockRef}
               onClose={() => patchScene({ open: false })}
               onWidth={(widthPx) => patchScene({ widthPx })}
             />

@@ -32,7 +32,7 @@ import type { Point } from "@/lib/studio/hall";
 import type { EventPlan } from "@/lib/events/plan";
 import { zoneBounds } from "@/lib/venues/zone";
 import { isDark, resolveStyle } from "@/lib/element-style";
-import { isAdditiveClick } from "@/lib/keyboard";
+import { isAdditiveClick, isTypingTarget } from "@/lib/keyboard";
 import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
 import { FootprintShape, blockLabelRoom, dressBlockOf, dressingSpots, pointOnTable, type DressBlock, sameFootprint, tableBlock, tableBlockedSides, tableBox, tableFootprint, tableUnder, placementFootprint, productStyle, type DressingSpot } from "@/components/footprint-shape";
 import { startPointerGesture } from "@/lib/studio/gesture";
@@ -1058,6 +1058,12 @@ export function CanvasStage({
   useEffect(() => {
     if (!drawArea) return;
     const onKey = (e: KeyboardEvent) => {
+      // A field has the keys (the end panel's groups stay up while the tool draws — the sketch's
+      // name, numbering's start, a level's height) and so does a dialog over the plan: digits are
+      // typed, Backspace takes a character, Enter is the field's. Escape goes on to the studio's
+      // handler, which only blurs the field (lib/keyboard.ts escapeLeavesField); the next one is the
+      // tool's.
+      if (isTypingTarget() || (e.target instanceof Element && !!e.target.closest("dialog"))) return;
       if (/^[0-9.]$/.test(e.key) && areaPts.length > 0) {
         setAreaTyped((t) => (t.length < 6 ? t + e.key : t));
       } else if (e.key === "Enter" && areaShape !== "corners") {

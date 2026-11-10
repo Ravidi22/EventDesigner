@@ -1,9 +1,18 @@
 "use client";
 // The 3D card on the sketch — the תלת-ממד tab's picture, built from the drawing AS IT IS BEING
 // EDITED (the studio's in-memory document, before any autosave), floating as a card in the canvas
-// column's top-start corner under the view cluster (2026-11-09, the studio shell: no split layout),
-// so the room rises while it is laid instead of after a trip to the tab (Ravid, 2026-10-30: "see the
-// prototype during my creation").
+// column (2026-11-09, the studio shell: no split layout), so the room rises while it is laid instead
+// of after a trip to the tab (Ravid, 2026-10-30: "see the prototype during my creation").
+//
+// WHERE IT SITS (the final review of the shell, 2026-11-10): the BOTTOM-start corner, above the save
+// pill and lifted over the quick bar's dock. The board drew it top-start under the view cluster, but
+// the hint row (`HintRow`, top-[68px], centred) runs through that corner — the dressing bar, the armed
+// pill, the venue notices — and at 1440 the canvas is ~580px, so a 300px card covered half of it.
+// Padding the hint row instead would leave the dressing bar ~230px. At the foot, the quick bar is
+// the one thing in the way, and its height is MEASURED (the dock, `dock`), never guessed: a table's
+// bar wraps to three rows on a narrow canvas and its title and ✕ sit at the start end, under the
+// card. The drawn width is held inside the column — a stored 760 on a 580px canvas spilled over the
+// end panel — and the height follows the width.
 //
 // WHAT IT IS NOT: a second viewer or a second builder. It is lib/scene/build.ts's `buildScene` over
 // the same `LazySceneViewer` the tab mounts, in the designer's free camera, and it saves nothing —
@@ -26,7 +35,7 @@
 //     selection flies; the same thing moved past FOLLOW_MM re-flies; a camera the designer has
 //     orbited away by hand is left alone until the selection changes. Nothing selected: the camera
 //     stays, and orbit, wheel, double-click and WASD all work as on the tab.
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { Box } from "lucide-react";
 import type { Product } from "@/lib/catalog/types";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
@@ -51,6 +60,26 @@ export const SETTLE_MS = 500;
 export const FOLLOW_MM = 300;
 /** The picture's proportions inside the card — a landscape still, like the viewpoints the tab frames. */
 export const ASPECT = 10 / 16;
+/** The card's foot with no quick bar under it: clear of the save pill (bottom-4, h-7) by 20px. */
+const FLOOR_PX = 64;
+/** The gap between the card and the quick bar it is lifted over. */
+const OVER_BAR_PX = 12;
+/** The top of the column the card never grows into: the corners' line (the view cluster, the canvas
+ *  strip) and the start of the hint row under it. */
+const TOP_CLEAR_PX = 84;
+/** The card's header (py-1.5 + the 32px ✕ + its hairline). */
+const HEADER_PX = 46;
+/** The column's start and end gutters the card keeps (start-4, and as much at the end). */
+const SIDE_PX = 32;
+
+/** The card's drawn width: the stored one held inside the column — never wider than the column less
+ *  its gutters, never taller than the room between the corners' line and its foot — and never under
+ *  the minimum (a column that narrow lets the card overhang rather than shrink it to nothing). */
+export function cardWidth(widthPx: number, room: { w: number; h: number; lift: number } | null): number {
+  if (!room) return widthPx;
+  const byHeight = (room.h - room.lift - TOP_CLEAR_PX - HEADER_PX) / ASPECT;
+  return Math.round(Math.max(SCENE_PREVIEW_MIN_PX, Math.min(widthPx, SCENE_PREVIEW_MAX_PX, room.w - SIDE_PX, byHeight)));
+}
 
 export interface ScenePreviewProps {
   /** The studio's document, live — every edit, every drag frame. The pane decides when to build. */
@@ -67,7 +96,10 @@ export interface ScenePreviewProps {
   /** The studio's stage railing rule, as the studio already holds it. */
   railingAboveMm: number | null;
   open: boolean;
+  /** The stored width; the card draws `cardWidth` of it. */
   widthPx: number;
+  /** The quick bar's dock at the canvas's foot — the card stands above whatever it holds. */
+  dock?: RefObject<HTMLElement | null>;
   onClose: () => void;
   onWidth: (px: number) => void;
 }
@@ -87,7 +119,7 @@ const PaneViewer = memo(function PaneViewer(props: SceneViewerProps) {
   return <LazySceneViewer {...props} />;
 });
 
-export function ScenePreview({ doc, plan, products, selection, eventId, author, railingAboveMm, open, widthPx, onClose, onWidth }: ScenePreviewProps) {
+export function ScenePreview({ doc, plan, products, selection, eventId, author, railingAboveMm, open, widthPx, dock, onClose, onWidth }: ScenePreviewProps) {
   // --- rule 1: the settled document ---------------------------------------------------------------
   const latest = useRef<Settled>({ doc, plan, products });
   const [settled, setSettled] = useState<Settled | null>(null);
@@ -183,47 +215,86 @@ export function ScenePreview({ doc, plan, products, selection, eventId, author, 
     flown.current = { id: focus.id, look: focus.look };
   }, [focus, leftId]);
 
-  // --- the grip: the card's size ------------------------------------------------------------------
+  // --- where the card stands: the column it is held inside, the quick bar it stands over ----------
+  // Measured by ResizeObserver — the column when the window or the end panel changes it, the dock
+  // when the bar under it changes (another kind selected, a row wrapping) — so a state write happens
+  // only when one of them actually changes size, never per pointer move.
   const box = useRef<HTMLDivElement>(null);
+  const [room, setRoom] = useState<{ w: number; h: number; lift: number } | null>(null);
+  useLayoutEffect(() => {
+    const column = box.current?.parentElement;
+    if (!column) return;
+    const measure = () => {
+      const c = column.getBoundingClientRect();
+      const d = dock?.current?.getBoundingClientRect();
+      const lift = d && d.height > 0 ? Math.max(FLOOR_PX, Math.round(c.bottom - d.top + OVER_BAR_PX)) : FLOOR_PX;
+      const next = { w: Math.round(c.width), h: Math.round(c.height), lift };
+      setRoom((cur) => (cur && cur.w === next.w && cur.h === next.h && cur.lift === next.lift ? cur : next));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(column);
+    if (dock?.current) ro.observe(dock.current);
+    return () => ro.disconnect();
+  }, [dock]);
+  const drawnPx = cardWidth(widthPx, room);
+
+  // --- the grip: the card's size ------------------------------------------------------------------
   const resize = useCallback(
     (e: ReactPointerEvent<HTMLElement>) => {
       if (e.button !== 0) return;
       e.preventDefault();
-      const start = widthPx;
+      // From the width as DRAWN: a stored 760 held to 546 grows from 546, not after 214px of nothing.
+      const start = drawnPx;
       const x0 = e.clientX;
+      const y0 = e.clientY;
       const rtl = (box.current && getComputedStyle(box.current).direction === "rtl") || document.dir === "rtl";
-      const room = box.current?.parentElement?.clientWidth ?? SCENE_PREVIEW_MAX_PX;
-      const cap = Math.min(SCENE_PREVIEW_MAX_PX, Math.max(SCENE_PREVIEW_MIN_PX, Math.round(room * 0.6)));
       startPointerGesture(e, {
         onMove: (m) => {
-          // The card hangs from the canvas's start corner and its grip is on the END edge; pulled
-          // toward the end (left in RTL) it grows.
+          // The card stands on the column's bottom-start corner and its grip is the TOP-END corner;
+          // pulled toward the end (left in RTL) or up it grows — by whichever the hand moved more,
+          // in the card's own proportions. Held to the column by `cardWidth` as it is drawn.
           const dx = (m.clientX - x0) * (rtl ? -1 : 1);
-          onWidth(Math.min(cap, Math.max(SCENE_PREVIEW_MIN_PX, Math.round(start + dx))));
+          const dy = (y0 - m.clientY) / ASPECT;
+          const grow = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
+          onWidth(cardWidth(Math.min(SCENE_PREVIEW_MAX_PX, Math.max(SCENE_PREVIEW_MIN_PX, Math.round(start + grow))), room));
         },
       });
     },
-    [widthPx, onWidth],
+    [drawnPx, room, onWidth],
   );
 
   return (
     <div
       ref={box}
       className={
-        "absolute start-4 top-16 z-30 flex flex-col overflow-hidden rounded-md border border-border bg-surface shadow-floating " +
+        "absolute start-4 z-30 flex flex-col overflow-hidden rounded-md border border-border bg-surface shadow-floating transition-[bottom] duration-200 ease-fluid " +
         (open ? "" : "invisible pointer-events-none")
       }
-      style={{ width: widthPx }}
+      style={{ width: drawnPx, bottom: room?.lift ?? FLOOR_PX }}
       aria-hidden={!open}
       data-scene-preview={open ? "card" : "hidden"}
     >
-      {/* The card's header: what it is, and the way out (every popup's ✕). */}
-      <div className="flex items-center gap-2 border-b border-border-soft py-1.5 ps-3 pe-1.5">
+      {/* The card's header: what it is, and the way out (every popup's ✕) — kept clear of the grip
+          in the top-end corner. */}
+      <div className="flex items-center gap-2 border-b border-border-soft py-1.5 ps-3 pe-5">
         <Box className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.6} aria-hidden />
         <span className="min-w-0 flex-1 truncate text-sm font-bold text-ink">תלת־ממד</span>
         <CloseButton label="סגירת התלת-ממד" onClick={onClose} tabIndex={open ? 0 : -1} />
       </div>
-      <div className="relative" style={{ height: Math.round(widthPx * ASPECT) }}>
+      <button
+        type="button"
+        aria-label="שינוי גודל התלת-ממד"
+        title="גרירה משנה את הגודל"
+        onPointerDown={resize}
+        tabIndex={-1}
+        className="absolute end-0 top-0 z-10 h-4 w-4 cursor-nesw-resize touch-none text-muted/70 hover:text-accent rtl:cursor-nwse-resize"
+      >
+        <svg viewBox="0 0 20 20" className="h-4 w-4 -scale-y-100 rtl:-scale-100" aria-hidden>
+          <path d="M17 11 L11 17 M17 5 L5 17" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+        </svg>
+      </button>
+      <div className="relative" style={{ height: Math.round(drawnPx * ASPECT) }}>
         {scene ? (
           <PaneViewer
             scene={scene}
@@ -247,18 +318,6 @@ export function ScenePreview({ doc, plan, products, selection, eventId, author, 
             {empty ? "אין עדיין מה להציג — הניחו שולחן או פריט על התוכנית" : "בונה את החלל…"}
           </div>
         )}
-        <button
-          type="button"
-          aria-label="שינוי גודל התלת-ממד"
-          title="גרירה משנה את הגודל"
-          onPointerDown={resize}
-          tabIndex={-1}
-          className="absolute bottom-0 end-0 h-5 w-5 cursor-nwse-resize touch-none text-muted/70 hover:text-accent rtl:cursor-nesw-resize"
-        >
-          <svg viewBox="0 0 20 20" className="h-5 w-5 rtl:-scale-x-100" aria-hidden>
-            <path d="M17 11 L11 17 M17 5 L5 17" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" />
-          </svg>
-        </button>
       </div>
     </div>
   );

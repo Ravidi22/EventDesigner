@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Point } from "@/lib/studio/hall";
 import type { CanvasLayerContext } from "@/components/plan-canvas";
 import { constrainNext, firstSideAngles, laterSideAngles } from "@/lib/studio/stage-draw";
+import { isTypingTarget } from "@/lib/keyboard";
 
 /** A rod shorter than this is a slip of the mouse, not a rod. */
 const MIN_ROD_MM = 300;
@@ -147,6 +148,10 @@ export function RodDrawPane({
   // listener would otherwise read Backspace as "delete the selection" and Escape as "deselect".
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // A field has the keys (the drape's ״מסילה״ fields stay up in the end panel while it is drawn)
+      // and so does a dialog over the plan. Escape goes on to the host's handler, which only blurs
+      // the field (lib/keyboard.ts escapeLeavesField); the next one is the tool's.
+      if (isTypingTarget() || (e.target instanceof Element && !!e.target.closest("dialog"))) return;
       // (A snapped tool — a sail's ties — takes no typed lengths: a tie is where it is tied.)
       if (/^[0-9.]$/.test(e.key) && pts.length > 0 && !snap) setTyped((t) => (t.length < 6 ? t + e.key : t));
       else if (e.key === "Enter") {
