@@ -31,6 +31,10 @@ import { hitsInBox, mergeSelection } from "@/lib/venues/selection";
 import { LazyOrthoUnderlay } from "@/components/scene/lazy";
 import { useSettledScene, type SceneSubject } from "./scene-pane";
 
+/** While a tile is armed no shape takes the pointer — the click places, whatever it lands on (a wave
+ *  laid in front of the wall it covers; /halls' rule). */
+const NEVER = () => false;
+
 /** How far the floor line runs either way — past any item and any view of one. */
 const FLOOR_REACH_MM = 50_000;
 const cm = (mm: number) => Math.round(mm) / 10;
@@ -232,6 +236,7 @@ export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selecte
             mm={ctx.mm}
             clientToMm={ctx.clientToMm}
             minSizeMm={ELEVATION_MIN_H_MM}
+            interactive={onPlace ? NEVER : undefined}
             selectedIds={[...selected]}
             onSelect={(id, additive) => onSelect(additive ? (selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]) : selected.includes(id) ? [...selected] : [id])}
             onMove={(id, p) => {

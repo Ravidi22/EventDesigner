@@ -522,6 +522,7 @@ const SHAPE_SHORT: Partial<Record<MapShape, string>> = {
 type RailShape = Exclude<MapShape, "custom">;
 const RAIL_SHAPES = PICKER_SHAPES.filter((s): s is RailShape => s !== "custom");
 const isRailShape = (id: string): id is RailShape => (RAIL_SHAPES as readonly string[]).includes(id);
+const NEVER_PICK = () => false;
 
 /** The FRONT-only tools (backdrops S2, lib/element/front.ts): a wave and a petal, placed in the חזית
  *  view as hand-drawn faces the designer then reshapes point by point. */
@@ -2900,6 +2901,8 @@ export function AppearanceModal({
                         structure={{ ...emptyStructure(), features }}
                         mm={ctx.mm}
                         clientToMm={ctx.clientToMm}
+                        // An armed tile places where it is clicked, on top of a shape too (/halls' rule).
+                        interactive={armedShape ? NEVER_PICK : undefined}
                         selectedIds={drawingPart ? [] : selected}
                         onSelect={
                           drawingPart
