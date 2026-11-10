@@ -60,6 +60,7 @@ import {
   RotateCcw,
   Scissors,
   Shirt,
+  Frame,
   type LucideIcon,
 } from "lucide-react";
 import type { MirrorAxis } from "@/lib/design-document/mirror";
@@ -174,7 +175,8 @@ import { MissingPieces, missingSummary } from "./missing-pieces";
 // (`part`). The chips' fields moved into the groups as they were; a chip that was a picker (a type
 // swap, a cloth) is a group's pick row opening the same list beside the panel. Kinds are converted
 // one at a time — the table and the block first, then the stage, a group of stages and a stage's edge
-// item; any kind not yet converted keeps its old bar for "bar" and shows no groups.
+// item, then a design item and a ceiling item; any kind not yet converted keeps its old bar for "bar"
+// and shows no groups.
 export type EdgeKindId = "stairs" | "bench" | "barrier" | "backdrop" | "ramp";
 export const EDGE_KIND_LABEL: Record<EdgeKindId, string> = {
   stairs: "מדרגות",
@@ -1742,9 +1744,11 @@ export function Inspector({
       );
     }
 
-    // Any other placement — not yet asked in two places: its bar as it was, and no groups.
-    if (!bar) return null;
-
+    // Any other placement. A DESIGN ITEM — on a table, hung over one, or standing on the floor — and a
+    // CEILING ITEM not on a rail are asked in two places (below the flags). The special kinds — a
+    // banquette, a chair (rows of them or one that could be), a flight or a ramp, a carpet laid over a
+    // surface, a stretched rug, and anything hung on a rail (a drape, an LED strip, a sail, a ceiling
+    // cloth) — keep their old bar for "bar" and show no groups yet.
     const r = resolve(p.variantId);
     const table = p.tableId ? doc.tables.find((t) => t.id === p.tableId) : undefined;
     // A ceiling item hung OVER a table (Placement.over): named here, centred, arranged in that
@@ -1793,6 +1797,195 @@ export function Inspector({
     // is a block — its count is its rows, and the quantity stepper would only argue with them.
     const block = chairBlockOf(p);
     const rowsAllowed = !!onChairRows && r?.product.category === "chairs" && !table && !drape && !p.perch && !p.stage;
+    const special =
+      !!bench || !!block || rowsAllowed || !!climb || !!p.cover || stretch || !!p.stage || r?.anchor === "wall" || isLedStrip(r?.product);
+    // The item's "…" — the old bar's and the quick bar's ⋯ (after the clipboard): flip, the floor
+    // stack, selection, the over-table verbs, its catalog row, a stage piece made a stage, the lock.
+    const itemSections: MenuItem[][] = [
+      !table && !drape && !p.cover ? mirrorItems(onMirror) : [],
+      stackItems(canRestack, onRestack),
+      selectItems,
+      overTable
+        ? [
+            ...(onCentreOver ? [{ label: "למרכז השולחן", icon: Crosshair, onSelect: () => onCentreOver(p.id) }] : []),
+            ...(onHangOverDressing && hungOverDressing > 0
+              ? [{ label: `אחד מעל כל פריט שעל השולחן (${hungOverDressing})`, icon: ArrowUpFromLine, onSelect: () => onHangOverDressing(p.id) }]
+              : []),
+          ]
+        : [],
+      [
+        ...(onEditProduct && r ? [{ label: "עריכת הפריט בקטלוג", icon: Pencil, onSelect: () => onEditProduct(p.variantId) }] : []),
+        // What stands on a table (or hangs over one) saved as a TABLE SET — the one case where a single
+        // item makes a catalog item worth having (lib/catalog/composition.ts).
+        ...(onSaveComposite && (table || overTable) ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
+      ],
+      onMakeStage ? [{ label: "הפיכה לבמה — מדרגות, גובה ומפלסים", icon: Grid2x2, onSelect: onMakeStage }] : [],
+      lockItems(lock),
+    ];
+
+    // A DESIGN ITEM or a CEILING ITEM. The quick bar asks the one number placing it turns on — how big
+    // it is drawn on this plan (or, counted by the unit or sized by its row, how many), how high it
+    // hangs for a ceiling item — and its angle, offers הלבשה on the table it stands on or hangs over,
+    // and keeps the rare verbs in the ⋯. Every other field is a group: what is wrong first, what it is
+    // (swapped from a picker, and how many), its shade, its vessel, its contour, its size, and — on or
+    // over a table — the same item onto other tables.
+    if (!special) {
+      const ceiling = p.layer === "ceiling";
+      const name = r?.product.name ?? "פריט";
+      const facts = [LAYER_LABEL[p.layer], table ? tableLabel(doc, table) : null, overTable ? `מעל ${tableLabel(doc, overTable)}` : null]
+        .filter(Boolean)
+        .join(" · ");
+      // Drawn bigger or smaller on THIS plan — unless its row has a size of its own to type (מידות).
+      const scaled = !sizePanel;
+      const pct = Math.round((p.scale || 1) * 100);
+      // The table it stands on, or hangs over: its focus mode is where it is moved and arranged.
+      const dressOn = table ?? overTable;
+      const hang =
+        ceiling && onHang
+          ? {
+              own: p.hangHeightMm,
+              fallback: hangHeightOf({}, r?.product),
+              underRoof: roofOf ? ceilingUndersideMm(roofOf(p.position), r?.product.dimensions.heightMm ?? 0) : undefined,
+              set: (mm: number | null) => onHang(p.id, mm),
+            }
+          : null;
+      const hung = hang ? hangView(hang.own, hang.fallback, hang.underRoof) : null;
+      const contour = r && takesBorder(r.product) ? borderOf(p, r.product) : undefined;
+      const rowVessel = r ? productVessel(r.product) : undefined;
+
+      if (bar)
+        return (
+          <Bar icon={Sparkles} title={name} facts={facts} onClose={onClose}>
+            {hang && hung ? (
+              <>
+                <QuickLead icon={ArrowDownToLine} label="גובה תלייה (ס״מ)" />
+                <QuickNumber
+                  label="גובה תלייה (ס״מ)"
+                  min={0}
+                  max={HANG_MAX_MM / 10}
+                  value={hang.own ? cm(hang.own) : 0}
+                  hideZero
+                  placeholder={hung.placeholder}
+                  onChange={(v) => hang.set(v > 0 ? v * 10 : null)}
+                />
+                <QuickUnit>ס״מ</QuickUnit>
+              </>
+            ) : scaled && p.quantity <= 1 ? (
+              <>
+                <QuickLead icon={Scaling} label="גודל על התוכנית (%)" />
+                <QuickNumber label="גודל על התוכנית (%)" narrow min={30} max={300} value={pct} onChange={(v) => onScale(p.id, v / 100)} />
+                <QuickUnit>%</QuickUnit>
+              </>
+            ) : (
+              // Counted by the unit (or sized by its row, with nothing to scale): how many, in place.
+              <QuantityStepper quantity={p.quantity} onStep={(d) => onQuantity(p.id, d)} />
+            )}
+            <QuickSep />
+            <QuickTurn value={facing} onChange={onFace} />
+            {dressOn && onDressTable && (
+              <>
+                <QuickSep />
+                <ModeVerb icon={PaintRoller} label="הלבשה" onClick={() => onDressTable(dressOn.id)} />
+              </>
+            )}
+            <QuickTail
+              onCopy={onDuplicate}
+              copyLabel="שכפול הפריט"
+              onDelete={onDelete}
+              deleteLabel="מחיקת הפריט"
+              more={moreOf(itemSections)}
+              moreLabel="עוד פעולות לפריט"
+            />
+          </Bar>
+        );
+
+      return groupsOf(
+        ceiling ? "ceiling" : "item",
+        name,
+        facts,
+        [
+          breaches.length > 0 && G("clearance", ShieldAlert, "מרחק ביטחון", breaches.length === 1 ? "חריגה אחת" : `${breaches.length} חריגות`, <BreachList breaches={breaches} />, true),
+          // How high it hangs — the bar's number, with the row's height back and what the room does
+          // when neither says.
+          !!hang && !!hung && G("hang", ArrowDownToLine, "תלייה", hung.shown ? ltr(hung.words) : hung.words, <HangFields own={hang.own} fallback={hang.fallback} underRoof={hang.underRoof} onHang={hang.set} />),
+          G(
+            "item",
+            Sparkles,
+            "פריט",
+            p.quantity > 1 ? `${name} · ${iso(`×${p.quantity}`)}` : name,
+            <ItemFields product={r?.product} swap={swap} onSwap={onSwap} quantity={p.quantity} onQuantity={(d) => onQuantity(p.id, d)} />,
+          ),
+          shades.length > 0 &&
+            G(
+              "shade",
+              Palette,
+              "גוון",
+              <>
+                {shade?.swatch && <Swatch color={shade.swatch} size={12} />}
+                <span className="truncate">{shade?.name ?? "ברירת מחדל"}</span>
+              </>,
+              <ShadeFields shades={shades} value={p.variantId} onChange={(v) => onVariant(p.id, v)} />,
+            ),
+          // The vase or jug an arrangement stands in — packed and counted with it.
+          !!onVessel &&
+            !!r &&
+            takesVessel(r.product) &&
+            G("vessel", Amphora, "כלי", vesselView(p.vessel, rowVessel).name, <VesselPickRow own={p.vessel} rowVessel={rowVessel} onVessel={(v) => onVessel([p.id], v)} />),
+          // A runner's contour on THIS plan — its row's until it is given its own.
+          !!onBorder &&
+            !!r &&
+            takesBorder(r.product) &&
+            G(
+              "border",
+              Frame,
+              "קונטור",
+              <>
+                {contour && <Swatch color={contour.colour} size={12} />}
+                {borderWords(contour)}
+              </>,
+              <BorderPanel own={p.border} row={cleanBorder(r.product.appearance?.border)} category={r.product.category} onBorder={(b) => onBorder([p.id], b)} idPrefix={`border-${p.id}`} />,
+            ),
+          scaled && G("scale", Scaling, "גודל על התוכנית", ltr(`${pct}%`), <ScaleFields scale={p.scale || 1} onScale={(v) => onScale(p.id, v)} />),
+          !!sizePanel &&
+            G(
+              "size",
+              Ruler,
+              "מידות",
+              ltr(sizePanel.axes.uniform ? `⌀${cm(sizePanel.size.widthMm)}` : `${cm(sizePanel.size.widthMm)}×${cm(sizePanel.size.depthMm)}`),
+              <SizeFields panel={sizePanel} onSize={onSize} />,
+            ),
+          // On a table: the same item onto other tables, in a pattern.
+          !!table && G("pattern", LayoutGrid, "דפוס", "החלה על שולחנות", renderPattern(table.id, p.id)),
+          // Hung over a table: over other tables in a pattern, strung along its row, one over each item
+          // on its table. Centring it is a one-press verb, in the ⋯.
+          !!overTable &&
+            G(
+              "over",
+              LayoutGrid,
+              "מעל שולחנות",
+              tableLabel(doc, overTable),
+              <>
+                {renderPattern(overTable.id, p.id)}
+                {onSpreadRow && (
+                  <div className="mt-3 border-t border-border-soft pt-3">
+                    <span className={fieldLabelClassName}>פיזור לאורך השורה</span>
+                    <RowSpreadFields doc={doc} sourceId={overTable.id} name={name} heightMm={hangHeightOf(p, r?.product)} onSpread={(opts) => onSpreadRow(p.id, opts)} />
+                  </div>
+                )}
+                {onHangOverDressing && hungOverDressing > 0 && (
+                  <Button size="sm" variant="outline" className="mt-3 w-full" onClick={() => onHangOverDressing(p.id)}>
+                    <ArrowUpFromLine className="h-3.5 w-3.5" strokeWidth={2} />
+                    {`אחד מעל כל פריט שעל השולחן (${hungOverDressing})`}
+                  </Button>
+                )}
+              </>,
+            ),
+        ],
+        ceiling ? ["hang", "item"] : ["item", "shade"],
+      );
+    }
+
+    if (!bar) return null;
     return (
       <Bar
         icon={bench ? RectangleHorizontal : block ? Rows3 : Sparkles}
@@ -1901,22 +2094,13 @@ export function Inspector({
         )}
         {/* Inline, not behind a subject: how many of a thing there are is the one field on this bar
             that gets edited over and over while placing. (A block's count is its rows.) */}
-        {!block && (
-          <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="כמות">
-            <BarButton icon={Minus} label="פריט אחד פחות" onClick={() => onQuantity(p.id, -1)} disabled={p.quantity <= 1} />
-            <span className="nums w-5 text-center text-sm font-semibold text-ink">{p.quantity}</span>
-            <BarButton icon={Plus} label="פריט אחד נוסף" onClick={() => onQuantity(p.id, 1)} />
-          </div>
-        )}
+        {!block && <QuantityStepper quantity={p.quantity} onStep={(d) => onQuantity(p.id, d)} />}
 
         {swap && <SwapPopover swap={swap} onSwap={onSwap} label="החלפה בפריט אחר" />}
 
         {shades.length > 0 && (
           <Popover label="גוון" leading={<Swatch color={shade?.swatch} size={14} />} value={shade?.name ?? "ברירת מחדל"}>
-            {/* Colour never carries the meaning alone: the chosen shade's NAME is spelled out under
-                the swatches, because two of a designer's creams look identical at 18px. */}
-            <SwatchPicker options={shades} value={p.variantId} onChange={(v) => onVariant(p.id, v)} label="גוון הפריט" />
-            <p className="mt-2 text-xs text-muted">{shade?.name ?? "ברירת מחדל"}</p>
+            <ShadeFields shades={shades} value={p.variantId} onChange={(v) => onVariant(p.id, v)} />
           </Popover>
         )}
 
@@ -1930,10 +2114,7 @@ export function Inspector({
           <Popover
             label="קונטור"
             leading={<Swatch color={borderOf(p, r.product)?.colour} size={14} />}
-            value={(() => {
-              const b = borderOf(p, r.product);
-              return b ? ltr(`${Math.round(b.widthMm) / 10}`) : "ללא";
-            })()}
+            value={borderWords(borderOf(p, r.product))}
           >
             <BorderPanel own={p.border} row={cleanBorder(r.product.appearance?.border)} category={r.product.category} onBorder={(b) => onBorder([p.id], b)} idPrefix={`border-${p.id}`} />
           </Popover>
@@ -2155,30 +2336,7 @@ export function Inspector({
 
         {/* A carpet laid over a surface or a stage faces as that does (lib/studio/cover.ts). */}
         {!p.cover && <Rotation value={facing} onChange={onFace} />}
-        <MoreMenu
-          label="עוד פעולות לפריט"
-          sections={[
-            !table && !drape && !p.cover ? mirrorItems(onMirror) : [],
-            stackItems(canRestack, onRestack),
-            selectItems,
-            overTable
-              ? [
-                  ...(onCentreOver ? [{ label: "למרכז השולחן", icon: Crosshair, onSelect: () => onCentreOver(p.id) }] : []),
-                  ...(onHangOverDressing && hungOverDressing > 0
-                    ? [{ label: `אחד מעל כל פריט שעל השולחן (${hungOverDressing})`, icon: ArrowUpFromLine, onSelect: () => onHangOverDressing(p.id) }]
-                    : []),
-                ]
-              : [],
-            [
-              ...(onEditProduct && r ? [{ label: "עריכת הפריט בקטלוג", icon: Pencil, onSelect: () => onEditProduct(p.variantId) }] : []),
-              // What stands on a table (or hangs over one) saved as a TABLE SET — the one case where
-              // a single item makes a catalog item worth having (lib/catalog/composition.ts).
-              ...(onSaveComposite && (table || overTable) ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : []),
-            ],
-            onMakeStage ? [{ label: "הפיכה לבמה — מדרגות, גובה ומפלסים", icon: Grid2x2, onSelect: onMakeStage }] : [],
-            lockItems(lock),
-          ]}
-        />
+        <MoreMenu label="עוד פעולות לפריט" sections={itemSections} />
         <Actions
           onDuplicate={onDuplicate}
           duplicateLabel="שכפול הפריט"
@@ -3523,19 +3681,24 @@ function occupancyInk(seated: number, seats: number): string {
 /** "פיזור לאורך השורה" — N of a hung item strung from the first table of its row (or column) to
  *  the last, through every table's middle on the way (lib/studio/table-patterns.ts tableLine).
  *  The count starts at one per table. */
-function RowSpreadPopover({
-  doc,
-  sourceId,
-  name,
-  heightMm,
-  onSpread,
-}: {
+type RowSpreadProps = {
   doc: DesignDocumentContent;
   sourceId: string;
   name: string;
   heightMm?: number;
   onSpread: (opts: { axis: "row" | "column"; count: number; wave?: HeightWave | null }) => void;
-}) {
+};
+
+function RowSpreadPopover(props: RowSpreadProps) {
+  return (
+    <Popover label="פיזור לאורך השורה" icon={AlignHorizontalDistributeCenter} value="לאורך השורה" panelClassName="w-72">
+      <RowSpreadFields {...props} />
+    </Popover>
+  );
+}
+
+/** The row spread's fields — the chip's panel, and a hung item's ״מעל שולחנות״ group. */
+function RowSpreadFields({ doc, sourceId, name, heightMm, onSpread }: RowSpreadProps) {
   const [axis, setAxis] = useState<"row" | "column">("row");
   const [typed, setTyped] = useState<number | null>(null);
   const [waveOn, setWaveOn] = useState(false);
@@ -3549,7 +3712,7 @@ function RowSpreadPopover({
   const aCm = a ?? base;
   const bCm = b ?? Math.max(30, base - 40);
   return (
-    <Popover label="פיזור לאורך השורה" icon={AlignHorizontalDistributeCenter} value="לאורך השורה" panelClassName="w-72">
+    <>
       <Segmented
         label="לאורך"
         value={axis}
@@ -3574,7 +3737,7 @@ function RowSpreadPopover({
       <Button size="sm" className="mt-2 w-full" disabled={line.length < 2} onClick={() => onSpread({ axis, count: n, wave: waveOf(waveOn, aCm, bCm) })}>
         {`פיזור ${n} לאורך ${axis === "row" ? "השורה" : "הטור"}`}
       </Button>
-    </Popover>
+    </>
   );
 }
 
@@ -3649,13 +3812,35 @@ function DrapeRailPopover({
   );
 }
 
-function HangPopover({ own, fallback, underRoof, onHang }: { own?: number; fallback?: number; underRoof?: number; onHang: (mm: number | null) => void }) {
+/** How high a ceiling item hangs, as its bar, its chip and its ״תלייה״ group read it: this plan's own
+ *  height, else its row's (`fallback`), else — neither says — where the room hangs it, a guest's
+ *  clearance under what is overhead (a ceiling, a pergola — lib/venues/roofs.ts), or 3 m under open
+ *  sky (`roofed`: shown, never stored). `placeholder` is what an empty field shows, in cm. */
+function hangView(own: number | undefined, fallback: number | undefined, underRoof: number | undefined) {
   const shown = own ?? fallback;
-  // Neither this plan nor the row says: the room hangs it a guest's clearance under what is overhead
-  // (a ceiling, a pergola — lib/venues/roofs.ts), or at 3 m under open sky. Shown, never stored.
   const roofed = own === undefined && !fallback && underRoof ? underRoof : undefined;
+  return {
+    shown,
+    roofed,
+    words: shown ? `${(shown / 1000).toFixed(2)} מ׳` : "לא צוין",
+    placeholder: fallback ? String(Math.round(fallback / 10)) : roofed ? String(Math.round(roofed / 10)) : "—",
+  };
+}
+
+function HangPopover({ own, fallback, underRoof, onHang }: { own?: number; fallback?: number; underRoof?: number; onHang: (mm: number | null) => void }) {
+  const view = hangView(own, fallback, underRoof);
   return (
-    <Popover label="גובה תלייה" icon={ArrowDownToLine} value={shown ? ltr(`${(shown / 1000).toFixed(2)} מ׳`) : "לא צוין"}>
+    <Popover label="גובה תלייה" icon={ArrowDownToLine} value={view.shown ? ltr(view.words) : view.words}>
+      <HangFields own={own} fallback={fallback} underRoof={underRoof} onHang={onHang} />
+    </Popover>
+  );
+}
+
+/** The hang height's fields — the chip's panel, and a ceiling item's ״תלייה״ group. */
+function HangFields({ own, fallback, underRoof, onHang }: { own?: number; fallback?: number; underRoof?: number; onHang: (mm: number | null) => void }) {
+  const { roofed, placeholder } = hangView(own, fallback, underRoof);
+  return (
+    <>
       <PanelRow label="מהרצפה (ס״מ)" htmlFor="placement-hang">
         <NumberField
           id="placement-hang"
@@ -3663,7 +3848,7 @@ function HangPopover({ own, fallback, underRoof, onHang }: { own?: number; fallb
           min={0}
           max={HANG_MAX_MM / 10}
           hideZero
-          placeholder={fallback ? String(Math.round(fallback / 10)) : roofed ? String(Math.round(roofed / 10)) : "—"}
+          placeholder={placeholder}
           value={own ? Math.round(own / 10) : 0}
           onChange={(v) => onHang(v > 0 ? v * 10 : null)}
           className="w-20"
@@ -3675,7 +3860,7 @@ function HangPopover({ own, fallback, underRoof, onHang }: { own?: number; fallb
         </Button>
       )}
       <Note>{own === undefined && fallback ? "הגובה מהקטלוג. " : ""}{roofed ? `בלי גובה — בתלת־ממד נתלה בגובה ${(roofed / 1000).toFixed(2)} מ׳, מתחת למה שמעליו. ` : ""}מודפס ליד הפריט בתוכנית התקרה — לא משפיע על המחיר או על רשימת הציוד.</Note>
-    </Popover>
+    </>
   );
 }
 
@@ -3753,28 +3938,83 @@ function ClimbPopover({
   );
 }
 
-/** How big one item is drawn on this plan, as a percentage of its catalog size. A drawing size only:
- *  the quote, the packing list and the order still count it as the row it is. */
-/** "כלי" — which vase or jug an arrangement stands in: the catalog's vessels (`vases`), each shade
- *  its own option, plus "as its catalog row" and "none on this plan". */
-function VesselPopover({ own, rowVessel, onVessel }: { own: string | null | undefined; rowVessel?: string; onVessel: (v: string | null | undefined) => void }) {
-  const ROW = "__row";
-  const NONE = "__none";
+const VESSEL_ROW = "__row";
+const VESSEL_NONE = "__none";
+
+/** The vessel an arrangement stands in, as its chip, its pick row and its picker read it: the
+ *  catalog's vessels, the one in use (this plan's, else its row's) and its name. */
+function vesselView(own: string | null | undefined, rowVessel?: string) {
   const choices = vesselChoices(loadProducts());
   const nameOf = (id?: string) => (id ? (choices.find((o) => o.value === id)?.label ?? resolve(id)?.label) : undefined);
   const current = own === null ? undefined : (own ?? rowVessel);
-  const value = own === null ? NONE : own === undefined ? ROW : own;
+  return {
+    choices,
+    nameOf,
+    current,
+    value: own === null ? VESSEL_NONE : own === undefined ? VESSEL_ROW : own,
+    name: nameOf(current) ?? "ללא כלי",
+  };
+}
+
+/** "כלי" — which vase or jug an arrangement stands in: the catalog's vessels (`vases`), each shade
+ *  its own option, plus "as its catalog row" and "none on this plan". */
+function VesselPopover({ own, rowVessel, onVessel }: { own: string | null | undefined; rowVessel?: string; onVessel: (v: string | null | undefined) => void }) {
   return (
-    <Popover label="כלי" icon={Amphora} value={nameOf(current) ?? "ללא כלי"} panelClassName="w-80">
+    <Popover label="כלי" icon={Amphora} value={vesselView(own, rowVessel).name} panelClassName="w-80">
+      <VesselFields own={own} rowVessel={rowVessel} onVessel={onVessel} />
+    </Popover>
+  );
+}
+
+/** "כלי" as a group's pick row: the vessel in use, and "החלפה" opens the same typed list as a picker
+ *  beside the panel — a pick applies and the picker goes. */
+function VesselPickRow({ own, rowVessel, onVessel }: { own: string | null | undefined; rowVessel?: string; onVessel: (v: string | null | undefined) => void }) {
+  const view = vesselView(own, rowVessel);
+  const chosen = view.current ? view.choices.find((c) => c.value === view.current) : undefined;
+  return (
+    <PickRow
+      glyph={
+        chosen?.product ? (
+          <span className="block h-full w-full overflow-hidden rounded-sm">
+            <ProductImage product={chosen.product} />
+          </span>
+        ) : (
+          <Amphora className="h-4 w-4 text-muted" strokeWidth={1.75} />
+        )
+      }
+      name={view.name}
+      meta={own === undefined ? "כמו בקטלוג" : own === null ? "ללא כלי בתוכנית הזו" : "בתוכנית הזו"}
+      pickerLabel="כלי"
+      pickerIcon={Amphora}
+    >
+      {(close) => (
+        <VesselFields
+          own={own}
+          rowVessel={rowVessel}
+          onVessel={(v) => {
+            onVessel(v);
+            close();
+          }}
+        />
+      )}
+    </PickRow>
+  );
+}
+
+/** The vessel list itself — the chip's panel, and the ״כלי״ group's picker. */
+function VesselFields({ own, rowVessel, onVessel }: { own: string | null | undefined; rowVessel?: string; onVessel: (v: string | null | undefined) => void }) {
+  const { choices, nameOf, value } = vesselView(own, rowVessel);
+  return (
+    <>
       {/* Typed to narrow, and listed INSIDE the panel — a Select's list dropped off the canvas card. */}
       <VesselPicker
         autoFocus
         value={value}
-        onChange={(v) => onVessel(v === ROW ? undefined : v === NONE ? null : v)}
+        onChange={(v) => onVessel(v === VESSEL_ROW ? undefined : v === VESSEL_NONE ? null : v)}
         choices={choices}
         lead={[
-          { value: ROW, label: rowVessel ? `כמו בקטלוג — ${nameOf(rowVessel) ?? "כלי"}` : "כמו בקטלוג — ללא כלי" },
-          { value: NONE, label: "ללא כלי" },
+          { value: VESSEL_ROW, label: rowVessel ? `כמו בקטלוג — ${nameOf(rowVessel) ?? "כלי"}` : "כמו בקטלוג — ללא כלי" },
+          { value: VESSEL_NONE, label: "ללא כלי" },
         ]}
       />
       <Note>
@@ -3782,35 +4022,104 @@ function VesselPopover({ own, rowVessel, onVessel }: { own: string | null | unde
           ? "אין עדיין כלים בקטלוג — מוסיפים אותם בקטגוריה ״אגרטלים וכלים״."
           : "הכלי מצויר מתחת לסידור, נספר ונארז איתו. אפשר גם לגרור סידור אל כלי שכבר מונח על השולחן."}
       </Note>
+    </>
+  );
+}
+
+/** How big one item is drawn on this plan, as a percentage of its catalog size. A drawing size only:
+ *  the quote, the packing list and the order still count it as the row it is. */
+function ScalePopover({ scale, onScale }: { scale: number; onScale: (scale: number) => void }) {
+  return (
+    <Popover label="גודל על התוכנית" icon={Scaling} value={ltr(`${Math.round(scale * 100)}%`)}>
+      <ScaleFields scale={scale} onScale={onScale} />
     </Popover>
   );
 }
 
-function ScalePopover({ scale, onScale }: { scale: number; onScale: (scale: number) => void }) {
+/** The drawing size's fields — the chip's panel, and a design item's ״גודל על התוכנית״ group: four
+ *  ready sizes (the board's segmented look) and the percentage typed. */
+function ScaleFields({ scale, onScale }: { scale: number; onScale: (scale: number) => void }) {
   const pct = Math.round(scale * 100);
   return (
-    <Popover label="גודל על התוכנית" icon={Scaling} value={ltr(`${pct}%`)}>
-      <div className="grid grid-cols-4 gap-1" role="group" aria-label="גדלים מוכנים">
-        {[75, 100, 125, 150].map((v) => (
-          <button
-            key={v}
-            type="button"
-            aria-pressed={pct === v}
-            onClick={() => onScale(v / 100)}
-            className={
-              "nums rounded-sm py-1 text-xs font-semibold transition-colors " +
-              (pct === v ? "bg-accent text-canvas" : "bg-inset text-ink-soft hover:bg-accent-tint hover:text-accent")
-            }
-          >
-            {ltr(`${v}%`)}
-          </button>
-        ))}
-      </div>
+    <>
+      <Segmented
+        label="גדלים מוכנים"
+        hideLabel
+        value={String(pct)}
+        options={[75, 100, 125, 150].map((v) => [String(v), `${v}%`] as const)}
+        onChange={(v) => onScale(Number(v) / 100)}
+      />
       <PanelRow label="אחוז" htmlFor="placement-scale">
         <NumberField id="placement-scale" decimals={0} min={30} max={300} value={pct} onChange={(v) => onScale(v / 100)} className="w-20" />
         <span className="text-xs text-muted">%</span>
       </PanelRow>
       <Note>גודל הציור בלבד — המחיר, הכמות ורשימת הציוד לא משתנים.</Note>
-    </Popover>
+    </>
+  );
+}
+
+/** How many of a thing stand here — − N +, inline: the one number edited over and over while
+ *  placing. The old bar's, the quick bar's (an item counted by the unit) and the ״פריט״ group's. */
+function QuantityStepper({ quantity, onStep }: { quantity: number; onStep: (delta: number) => void }) {
+  return (
+    <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="כמות">
+      <BarButton icon={Minus} label="פריט אחד פחות" onClick={() => onStep(-1)} disabled={quantity <= 1} />
+      <span className="nums w-5 text-center text-sm font-semibold text-ink">{quantity}</span>
+      <BarButton icon={Plus} label="פריט אחד נוסף" onClick={() => onStep(1)} />
+    </div>
+  );
+}
+
+/** A shade picked from swatches, its name spelled out under them — colour never carries the meaning
+ *  alone: two of a designer's creams look identical at 18px. The chip's panel and the ״גוון״ group. */
+function ShadeFields({ shades, value, onChange }: { shades: ReturnType<typeof shadesOf>; value: string; onChange: (variantId: string) => void }) {
+  const shade = shades.find((s) => s.id === value);
+  return (
+    <>
+      <SwatchPicker options={shades} value={value} onChange={onChange} label="גוון הפריט" />
+      <p className="mt-2 text-xs text-muted">{shade?.name ?? "ברירת מחדל"}</p>
+    </>
+  );
+}
+
+/** A contour read back on its chip or its group's title row: the band's width in cm, or "ללא". */
+function borderWords(b: Border | undefined): ReactNode {
+  return b ? ltr(`${Math.round(b.widthMm) / 10}`) : "ללא";
+}
+
+/** A design item's ״פריט״ group: what it is — a pick row swapping it for another row of its kind
+ *  when the catalog has one, else the row itself — and how many of it stand here. */
+function ItemFields({
+  product,
+  swap,
+  onSwap,
+  quantity,
+  onQuantity,
+}: {
+  product?: Product;
+  swap: SwapPanel | null;
+  onSwap: (productId: string, all: boolean) => void;
+  quantity: number;
+  onQuantity: (delta: number) => void;
+}) {
+  return (
+    <>
+      {swap ? (
+        <SwapPickRow swap={swap} onSwap={onSwap} label="החלפה בפריט אחר" />
+      ) : product ? (
+        <div className="flex items-center gap-2.5 rounded-md border border-inset-border bg-inset p-2">
+          <span className="h-10 w-10 shrink-0 overflow-hidden rounded-sm border border-border bg-surface">
+            <ProductImage product={product} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] font-semibold text-ink">{product.name}</span>
+            <span className="nums block truncate text-xs text-muted">{formatDimensions(product.dimensions)}</span>
+          </span>
+        </div>
+      ) : null}
+      <PanelRow label="כמות">
+        <QuantityStepper quantity={quantity} onStep={onQuantity} />
+      </PanelRow>
+    </>
   );
 }
