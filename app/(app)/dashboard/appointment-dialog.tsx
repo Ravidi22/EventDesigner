@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ChevronDown, Link2, Plus, RefreshCw, Search, Sparkles, Trash2, TriangleAlert } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { ChevronDown, Link2, Plus, RefreshCw, Sparkles, Trash2, TriangleAlert } from "lucide-react";
 import type { Appointment, AppointmentKind } from "@/lib/appointments/types";
 import { APPOINTMENT_KIND_LABEL, appointmentLabel, isClientKind } from "@/lib/appointments/types";
 import { clock, dayItems, freeStarts, overlapOf, stripSpan, type DayItem } from "@/lib/appointments/day-strip";
@@ -15,6 +15,8 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DateField } from "@/components/date-field";
 import { MODAL_CLASS, ModalFooter, ModalHeader, ModalStatus } from "@/components/modal-frame";
 import { Segmented } from "@/components/segmented";
+import { SearchInput } from "@/components/search-input";
+import { controlClassName } from "@/components/control";
 import { Switch } from "@/components/toggle";
 import { TextField } from "@/components/text-field";
 import { TimeField } from "@/components/time-field";
@@ -343,6 +345,7 @@ export function AppointmentDialog({
                         chosen={linkedEvent}
                         open={picking}
                         onToggle={() => setPicking((p) => !p)}
+                        onClose={() => setPicking(false)}
                         onChoose={chooseEvent}
                         look={look}
                       />
@@ -533,14 +536,19 @@ function DayWell({
   );
 }
 
-/** The event to attach to — chosen IN FLOW, never in an absolute panel: the dialog's body scrolls,
- *  and a popover hung out of a scrolling box is clipped by it. Upcoming events first (by date), then
- *  past ones (latest first), then undated; a search narrows by name or zone. */
+/** The event to attach to — the shade picker's shape (components/shade-picker.tsx): a control-height
+ *  field reading the choice back, and a FLOATING panel with the shared search and the rows. The panel
+ *  is `position: fixed` (never absolute — the dialog's body scrolls and the modal <dialog> clips) and
+ *  stays a DOM child of the dialog, so it is in its top layer; `place` puts it under the field (above
+ *  when there is more room there) on open, resize and any scroll. It closes on a choice, its trigger,
+ *  Escape (taken in the capture phase, so the dialog stays open) or a press outside. Upcoming events
+ *  first (by date), then past ones (latest first), then undated; the search narrows by name or zone. */
 function EventPicker({
   events,
   chosen,
   open,
   onToggle,
+  onClose,
   onChoose,
   look,
 }: {
@@ -548,10 +556,17 @@ function EventPicker({
   chosen?: EventSummary;
   open: boolean;
   onToggle: () => void;
+  onClose: () => void;
   onChoose: (id: string) => void;
   look: (e: EventSummary) => { label: string; tone: CardTone };
 }) {
   const [query, setQuery] = useState("");
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  useLayoutEffect(() => {
+    closeRef.current = onClose;
+  });
   const today = toISODate(new Date());
   const ordered = useMemo(() => {
     const live = events.filter((e) => !e.archived);
@@ -562,47 +577,93 @@ function EventPicker({
   const q = query.trim();
   const shown = q ? ordered.filter((e) => e.clientName.includes(q) || e.zonesLabel.includes(q)) : ordered;
 
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const panel = panelRef.current;
+      const field = triggerRef.current?.getBoundingClientRect();
+      if (!panel || !field) return;
+      const margin = 12;
+      const width = Math.min(field.width, window.innerWidth - margin * 2);
+      const left = Math.min(Math.max(field.left, margin), window.innerWidth - margin - width);
+      const below = window.innerHeight - field.bottom - 6 - margin;
+      const above = field.top - 6 - margin;
+      const down = below >= PICKER_WANTS || below >= above;
+      Object.assign(panel.style, {
+        left: `${left}px`,
+        width: `${width}px`,
+        top: down ? `${field.bottom + 6}px` : "",
+        bottom: down ? "" : `${window.innerHeight - field.top + 6}px`,
+        maxHeight: `${down ? below : above}px`,
+      });
+    };
+    place();
+    panelRef.current?.querySelector("input")?.focus();
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (!triggerRef.current?.contains(t) && !panelRef.current?.contains(t)) closeRef.current();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeRef.current();
+      triggerRef.current?.focus();
+    };
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      setQuery("");
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [open]);
+
   return (
-    <div className="flex flex-col gap-1.5">
+    <div>
       <button
+        ref={triggerRef}
         type="button"
         aria-expanded={open}
+        aria-haspopup="listbox"
         onClick={onToggle}
-        className={`flex h-11 w-full items-center gap-2.5 rounded-sm border bg-surface pe-2.5 ps-3 text-start text-sm transition-colors ${
-          open || chosen ? "border-accent" : "border-border hover:border-accent-line"
-        }`}
+        className={`${controlClassName} flex w-full items-center gap-2.5 ps-3 pe-2.5 text-start`}
       >
         {chosen ? (
           <EventRowContent event={chosen} look={look(chosen)} />
         ) : (
           <span className="flex-1 text-muted">בחרו אירוע</span>
         )}
-        <ChevronDown className={`h-4 w-4 shrink-0 text-muted transition-transform ${open ? "rotate-180" : ""}`} strokeWidth={2} />
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 text-muted transition-transform duration-150 ${open ? "rotate-180" : ""}`}
+          strokeWidth={2}
+        />
       </button>
       {open && (
-        <div className="flex flex-col gap-1 rounded-sm border border-border bg-surface p-1.5">
+        <div
+          ref={panelRef}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && e.target instanceof HTMLInputElement) e.preventDefault();
+          }}
+          className="fixed z-30 flex flex-col rounded-md border border-border bg-surface p-2 shadow-lifted"
+        >
           {events.length > 6 && (
-            <label className="flex h-9 items-center gap-2 rounded-sm bg-inset px-2.5">
-              <Search className="h-3.5 w-3.5 shrink-0 text-muted" strokeWidth={2} />
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && e.preventDefault()}
-                placeholder="חיפוש אירוע"
-                aria-label="חיפוש אירוע"
-                className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-muted"
-                autoFocus
-              />
-            </label>
+            <SearchInput value={query} onChange={setQuery} placeholder="חיפוש אירוע" aria-label="חיפוש אירוע" className="mb-2 shrink-0" />
           )}
-          <div className="scroll-slim flex max-h-56 flex-col overflow-y-auto">
+          <div role="listbox" aria-label="אירועים" className="scroll-slim flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
             {shown.map((e) => (
               <button
                 key={e.id}
                 type="button"
+                role="option"
+                aria-selected={chosen?.id === e.id}
                 onClick={() => onChoose(e.id)}
-                className={`flex min-h-10 items-center gap-2.5 rounded-sm px-2.5 py-1.5 text-start text-sm transition-colors hover:bg-accent-tint ${
-                  chosen?.id === e.id ? "bg-accent-tint" : ""
+                className={`flex min-h-10 shrink-0 items-center gap-2.5 rounded-sm px-2.5 py-1.5 text-start text-sm transition-colors ${
+                  chosen?.id === e.id ? "bg-accent-wash" : "hover:bg-accent-tint"
                 }`}
               >
                 <EventRowContent event={e} look={look(e)} />
@@ -617,6 +678,10 @@ function EventPicker({
     </div>
   );
 }
+
+/** Roughly the open list's natural height (search + ~6 rows): below the field unless less than
+ *  this fits there AND more fits above it. */
+const PICKER_WANTS = 320;
 
 function EventRowContent({ event: e, look }: { event: EventSummary; look: { label: string; tone: CardTone } }) {
   const t = STATUS_CARD_THEME[look.tone];
