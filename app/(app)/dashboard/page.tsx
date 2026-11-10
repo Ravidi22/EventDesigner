@@ -6,7 +6,6 @@ import { fetchGoogleBusy, fetchGoogleStatus } from "@/lib/google/actions";
 import { defaultBusyWindow } from "@/lib/google/mapping";
 import { fetchBookings } from "@/lib/hosting/actions";
 import { fetchMenu } from "@/lib/menus/actions";
-import { fetchStudioLinks } from "@/lib/event-links/actions";
 import { DashboardScreen } from "./dashboard-screen";
 import { VenueDashboard } from "./venue-dashboard";
 
@@ -24,11 +23,15 @@ export const metadata: Metadata = { title: "לוח בקרה · Eve" };
 // Venues are absent on purpose: the (app) layout already read them for the sidebar's switcher and
 // the dashboard reads that same copy through VenuesProvider. Fetching them a third time here is
 // exactly the duplication this change exists to remove.
-export default async function DashboardPage() {
+export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ [key: string]: string | string[] | undefined }> }) {
   // Before the reads, not alongside them: the layout's guard runs in parallel with this file and
   // therefore cannot gate it. See lib/auth/guard.ts — it is free, and it is what turns a signed-out
   // visit into a redirect rather than "not signed in" thrown out of fetchEvents.
   const session = await requireHost();
+  // `?event=<id>` opens that event's drawer (the notifications sheet links a studio's event here; a
+  // venue's go to /bookings, which reads the same parameter).
+  const params = await searchParams;
+  const eventId = Array.isArray(params.event) ? params.event[0] : params.event;
 
   // The Google window is computed here so the server's read and the client hook's idea of "what is
   // already loaded" are the same range — see defaultBusyWindow.
@@ -63,12 +66,13 @@ export default async function DashboardPage() {
   // somebody else's servers. It is safe in this position for one reason: fetchGoogleBusy resolves
   // to an empty array on every failure rather than rejecting (lib/google/sync.ts), so a Google
   // outage costs this page its overlay and its patience, never its render.
-  const [events, appointments, busy, google, links] = await Promise.all([
+  // The venues' invitations are not read here any more: they are answered in the bell's sheet,
+  // which reads them when it opens.
+  const [events, appointments, busy, google] = await Promise.all([
     fetchEvents(),
     fetchAppointments(),
     fetchGoogleBusy(busyWindow.from, busyWindow.to),
     fetchGoogleStatus(),
-    fetchStudioLinks(),
   ]);
 
   return (
@@ -79,7 +83,7 @@ export default async function DashboardPage() {
       busyWindow={busyWindow}
       googleConnected={google.connection?.pullEnabled ?? false}
       suggestGoogle={google.configured && !google.connection?.pullEnabled}
-      venueLinks={links}
+      initialEventId={eventId}
     />
   );
 }

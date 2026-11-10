@@ -25,7 +25,7 @@ import { quickAddItems } from "./quick-add";
 
 /**
  * A venue's home — THE SAME SCREEN AS THE DESIGNER'S (./dashboard-screen.tsx; the user, 2026-10-30:
- * "why are the calendars different? should be the same", "owner also has meetings"). Today's evening and sittings beside the month's figures, and the one calendar (./calendar-card.tsx)
+ * "why are the calendars different? should be the same", "owner also has meetings"). Today's evenings, today's sittings and the week ahead (./today-focus.tsx, board 1b), and the one calendar (./calendar-card.tsx)
  * — its cards in the booking's status (lib/hosting bookingStatus), a free day offering an evening or a
  * meeting. A booking opens the hall's drawer; a sitting (a tasting, a tour, a first meeting) the
  * diary's own dialog, exactly as a designer's does.
@@ -60,6 +60,8 @@ export function VenueDashboard({
   const [deleting, setDeleting] = useState<Booking | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [sitting, setSitting] = useState<{ editing: Appointment | null; date: string; eventId?: string; kind?: AppointmentKind } | null>(null);
+  // The week tile's strip → the calendar shows that day's week (CalendarCard `jump`).
+  const [jump, setJump] = useState<{ iso: string; n: number } | null>(null);
   const today = toISODate(new Date());
 
   // The header's "+ יצירת אירוע חדש" (components/app-shell.tsx) opens the booking dialog here.
@@ -114,19 +116,25 @@ export function VenueDashboard({
         </p>
       )}
 
-      <div className="mb-6 grid gap-6 lg:grid-cols-2">
+      {/* The designer's row exactly (./dashboard-screen.tsx says why it is two-up at lg). */}
+      <div className="mb-6 grid gap-5 lg:grid-cols-2 xl:grid-cols-3">
         <TodayFocus
           events={events}
           appointments={visibleAppointments}
           busy={busy.byDate.get(today) ?? []}
+          look={look}
           onOpenEvent={(e) => setOpenId(e.id)}
           onOpenAppointment={editSitting}
           onCreateAppointment={() => bookOn(today)}
+          onJump={(iso) => setJump((j) => ({ iso, n: (j?.n ?? 0) + 1 }))}
         />
       </div>
 
       <CalendarCard
         suggestGoogle={suggestGoogle}
+        googleConnected={googleConnected}
+        eventsLabel="ערבים"
+        jump={jump}
         events={events}
         appointments={visibleAppointments}
         busy={busy}

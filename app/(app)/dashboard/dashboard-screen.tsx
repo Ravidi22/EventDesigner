@@ -15,8 +15,6 @@ import { useActiveVenueScope } from "@/lib/venues/use-active-venue-scope";
 import { CalendarCard } from "./calendar-card";
 import { TodayFocus } from "./today-focus";
 import { EventDetailDrawer } from "./event-detail-drawer";
-import { VenueInvites } from "./venue-invites";
-import type { StudioSideLink } from "@/lib/event-links/types";
 import { EventDialog } from "@/components/event-dialog";
 import { PAGE_GUTTER } from "@/components/page-gutter";
 import { AppointmentDialog } from "./appointment-dialog";
@@ -27,11 +25,13 @@ import { toISODate } from "./dashboard-view-utils";
 // F-1.1: the Dashboard's old event-card grid (filters, search, sort) moved off this screen — first
 // to the Gantt tab, and now to the production runway (/production), which plans backward from each
 // event's date instead of listing them.
-// This screen is "my week" at a glance — today's events and today's meetings up top (two tiles,
-// ./today-focus.tsx; the statistics card was dropped 2026-10-30, the user's call),
-// the week/month calendar below. There's no venue picker on this page anymore — every section
-// scopes to whichever venue is active in the sidebar (useActiveVenueScope), the one shared
-// source of truth also used by /production, so switching venues in the sidebar updates everything.
+// This screen is "my week" at a glance — today's events, today's meetings and the week ahead up top
+// (three tiles, ./today-focus.tsx; the statistics card was dropped 2026-10-30, the user's call, and
+// the week joined them 2026-11-10, board 1b), the week/month calendar below. A venue's invitation
+// to design an evening is answered in the bell's sheet now, not in a strip over this page. There's
+// no venue picker on this page anymore — every section scopes to whichever venue is active in the
+// sidebar (useActiveVenueScope), the one shared source of truth also used by /production, so
+// switching venues in the sidebar updates everything.
 //
 // It is also the only screen in the app that WRITES a meeting. Everything else here navigates:
 // clicking an event opens its drawer or jumps into the meeting flow. Booking a meeting happens
@@ -44,7 +44,7 @@ export function DashboardScreen({
   busyWindow,
   googleConnected,
   suggestGoogle = false,
-  venueLinks = [],
+  initialEventId,
 }: {
   initialEvents: EventSummary[];
   initialAppointments: Appointment[];
@@ -57,9 +57,9 @@ export function DashboardScreen({
   /** Google is set up on this deployment and this person's calendar pull is off — the calendar's
    *  header offers the way to turn it on (CalendarCard). */
   suggestGoogle?: boolean;
-  /** Venues that named this studio the designer of an evening (lib/event-links) — the pending ones
-   *  are the invitations strip; the active ones say which events are already linked. */
-  venueLinks?: StudioSideLink[];
+  /** `?event=` — a link that names an event (the notifications sheet's group header) opens its
+   *  drawer on arrival. */
+  initialEventId?: string;
 }) {
   const router = useRouter();
   // Seeded by page.tsx's server-side read, so both lists are here for the first paint. The hooks
@@ -70,9 +70,24 @@ export function DashboardScreen({
   // The drawer's event, by id and read off the live list: an edit made from the drawer, a
   // confirmation, a delete — each re-reads the list, and the drawer shows (or leaves with) the row
   // as it now is rather than the snapshot it was opened on.
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() =>
+    initialEventId && initialEvents.some((e) => e.id === initialEventId) ? initialEventId : null,
+  );
   const selectedEvent = useMemo(() => events.find((e) => e.id === selectedId) ?? null, [events, selectedId]);
   const setSelectedEvent = (e: EventSummary | null) => setSelectedId(e?.id ?? null);
+  // A second link while the screen is mounted is a new PROP, not a remount (the sheet lives in the
+  // shell): adjusted during render when it changes, React's pattern for state that follows a prop.
+  const [linkedId, setLinkedId] = useState(initialEventId);
+  if (initialEventId !== linkedId) {
+    setLinkedId(initialEventId);
+    if (initialEventId && events.some((e) => e.id === initialEventId)) setSelectedId(initialEventId);
+  }
+  // Closing a drawer a link opened takes `?event=` off the address. Otherwise the prop never changes
+  // again, and the same link pressed a second time would open nothing; a reload would also reopen it.
+  const closeDrawer = () => {
+    setSelectedId(null);
+    if (initialEventId) router.replace("/dashboard", { scroll: false });
+  };
   // The details form, opened over the drawer to edit the event in place.
   const [editingEvent, setEditingEvent] = useState<EventSummary | null>(null);
   // The event the drawer has asked to delete. ONE dialog for the whole screen, and it is here
@@ -99,6 +114,10 @@ export function DashboardScreen({
   // A new event on a day the calendar's quick-add was opened on (board 4f) — the shell's own
   // "+ יצירת אירוע חדש" opens the same dialog without a date.
   const [creatingOn, setCreatingOn] = useState<string | null>(null);
+  // The week tile's strip → the calendar shows that day's week. `n` counts the clicks, so the same
+  // day pressed again jumps again after the calendar was paged away from it.
+  const [jump, setJump] = useState<{ iso: string; n: number } | null>(null);
+  const jumpTo = (iso: string) => setJump((j) => ({ iso, n: (j?.n ?? 0) + 1 }));
 
   // An event names its venue directly now (it occupies zones OF a venue), so scoping to the
   // sidebar's active venue is a field read — no hall→venue lookup table in between.
@@ -121,7 +140,7 @@ export function DashboardScreen({
   // whole screen away while the card beside it opened a panel. EVERY event click here opens the
   // drawer instead — the quick look a day-of glance actually wants (the plan, the phone, the event's
   // own diary) — and the whole-screen jump is a deliberate second click rather than a stray first.
-  const openEvent = (e: EventSummary, to: "/meeting" | "/outputs" | "/studio" = "/meeting") => {
+  const openEvent = (e: EventSummary, to: "/meeting" | "/outputs" | "/studio" | "/scene" = "/meeting") => {
     setActiveEventId(e.id);
     router.push(to);
   };
@@ -177,13 +196,12 @@ export function DashboardScreen({
         </p>
       )}
 
-      <VenueInvites links={venueLinks} events={events} onChanged={() => void reloadEvents()} />
-
-      {/* `lg:`, not `sm:`. The two-up row is measured against the CONTENT width, and the sidebar
-          takes a fixed 258px out of it before this grid sees anything — so at the sm breakpoint
-          (640px viewport) each of these cards got about 147px, which is narrower than the statistics
-          tiles inside one of them. They stack until there is genuinely room for two. */}
-      <div className="mb-6 grid gap-6 lg:grid-cols-2">
+      {/* `lg:`, not `sm:`, and three-up only at `xl:`. The row is measured against the CONTENT width,
+          and the sidebar takes a fixed 258px out of it before this grid sees anything — at the sm
+          breakpoint (640px viewport) each of two cards got about 147px, and three at lg would be
+          about 205px each, narrower than the week's seven-day strip reads. Two-up at lg (the week
+          spanning under them), three once there is genuinely room for three. */}
+      <div className="mb-6 grid gap-5 lg:grid-cols-2 xl:grid-cols-3">
         <TodayFocus
           events={visibleEvents}
           appointments={visibleAppointments}
@@ -191,11 +209,14 @@ export function DashboardScreen({
           onOpenEvent={setSelectedEvent}
           onOpenAppointment={editAppointment}
           onCreateAppointment={bookToday}
+          onJump={jumpTo}
         />
       </div>
 
       <CalendarCard
         suggestGoogle={suggestGoogle}
+        googleConnected={googleConnected}
+        jump={jump}
         events={visibleEvents}
         appointments={visibleAppointments}
         busy={busy}
@@ -214,7 +235,7 @@ export function DashboardScreen({
         event={selectedEvent}
         venueName={activeVenueName}
         appointments={selectedEventAppointments}
-        onClose={() => setSelectedEvent(null)}
+        onClose={closeDrawer}
         onContinue={openEvent}
         onEdit={setEditingEvent}
         onOpenAppointment={editAppointment}

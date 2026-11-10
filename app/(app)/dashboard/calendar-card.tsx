@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, Lock, Plus, Sparkles, type LucideIcon } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
 import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus } from "@/lib/events/types";
 import type { Appointment } from "@/lib/appointments/types";
@@ -86,6 +86,47 @@ function dayNotes(days: Date[]) {
 
 type Mode = "week" | "month";
 
+/** How an event reads on the dashboard: the caller's `look` (a hall's booking status), else a
+ *  designer's meeting status and progress against the studio's OWN flow. One hook, so the calendar
+ *  and the top row's tiles say the same word about the same event. */
+export function useEventLook(look?: (e: EventSummary) => EventLook): (e: EventSummary) => EventLook {
+  // Read once per surface, not per card: a month view renders dozens of them, all measured against
+  // the same configured meeting flow.
+  const flow = useMeetingFlow();
+  return (e) => {
+    if (look) return look(e);
+    const status = eventStatus(e, flow);
+    return { label: STATUS_LABEL[status], tone: STATUS_TONE[status], progress: eventProgress(e, flow) };
+  };
+}
+
+// WHAT THE GRID DRAWS (board 1b): the events, the diary and the person's Google entries are three
+// layers a designer can take off the month one at a time — a delivery-heavy week reads cleaner
+// without the deliveries, a busy Google calendar buries the studio's own work. A choice for this
+// sitting, not a preference: every visit starts with all three on.
+type Layer = "events" | "diary" | "google";
+const ALL_LAYERS: Record<Layer, boolean> = { events: true, diary: true, google: true };
+
+function LayerToggle({ on, icon: Icon, label, onToggle }: { on: boolean; icon: LucideIcon; label: string; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={on}
+      title={on ? `הסתרת ${label} מהיומן` : `הצגת ${label} ביומן`}
+      className={
+        "inline-flex h-8 items-center gap-1.5 rounded-pill border px-3 text-[13px] font-semibold transition-colors " +
+        (on
+          ? "border-accent-line bg-accent-wash text-accent-hover"
+          : "border-border bg-surface text-ink-soft hover:border-accent-line hover:text-accent-hover")
+      }
+    >
+      <Icon className="h-[13px] w-[13px] shrink-0" strokeWidth={2} aria-hidden />
+      {label}
+    </button>
+  );
+}
+
 // "השבוע שלי" / "החודש שלי" (F-1.1): one card, two grids. MONTH is the default: the dashboard
 // is the first thing opened in the morning, and the question it gets asked is "what is coming" —
 // which a week answers only until Thursday. Week is the toggle now, for the days actually in
@@ -117,6 +158,9 @@ export function CalendarCard({
   summary,
   addItems,
   suggestGoogle = false,
+  googleConnected = false,
+  eventsLabel = "אירועים",
+  jump,
 }: {
   events: EventSummary[];
   appointments: Appointment[];
@@ -135,6 +179,13 @@ export function CalendarCard({
   /** Google can be connected on this deployment and this person has not (or has the pull off):
    *  the header offers the way to settings → יומן Google. */
   suggestGoogle?: boolean;
+  /** This person's Google pull is on — the Google layer gets its toggle even on a month it left empty. */
+  googleConnected?: boolean;
+  /** The events layer's name: "אירועים" for a designer, a hall's "ערבים". */
+  eventsLabel?: string;
+  /** Show the week `iso` is in (the week tile's strip, board 1b). A NEW `n` jumps again, so the same
+   *  day clicked twice brings the grid back after the designer paged away from it. */
+  jump?: { iso: string; n: number } | null;
 }) {
   const [mode, setMode] = useState<Mode>("month");
   const [anchor, setAnchor] = useState(() => new Date());
@@ -142,14 +193,36 @@ export function CalendarCard({
   const [openDay, setOpenDay] = useState<{ iso: string; anchor: HTMLElement } | null>(null);
   // Stable, so the popover's listeners are bound once per opening rather than once per render.
   const closeDay = useCallback(() => setOpenDay(null), []);
-  // Read once here, not in each card: a month view renders dozens of them, all measuring progress
-  // against the same configured meeting flow.
-  const flow = useMeetingFlow();
-  const lookOf = (e: EventSummary): EventLook => {
-    if (look) return look(e);
-    const status = eventStatus(e, flow);
-    return { label: STATUS_LABEL[status], tone: STATUS_TONE[status], progress: eventProgress(e, flow) };
+  const lookOf = useEventLook(look);
+  const [layers, setLayers] = useState(ALL_LAYERS);
+  const toggleLayer = (l: Layer) => {
+    setOpenDay(null);
+    setLayers((s) => ({ ...s, [l]: !s[l] }));
   };
+  // Only a Google that is there to hide earns its toggle: connected, or blocks already on the grid.
+  const hasGoogle = googleConnected || busy.byDate.size > 0;
+
+  // A jump from the week tile: week mode, on that day's week. Adjusted DURING RENDER when the prop
+  // brings a new jump (React's pattern for state that follows a prop) — compared by value, so a
+  // parent that rebuilds the object on every render cannot loop it.
+  const [seenJump, setSeenJump] = useState(jump);
+  if (jump?.n !== seenJump?.n || jump?.iso !== seenJump?.iso) {
+    setSeenJump(jump);
+    if (jump) {
+      const [y, m, d] = jump.iso.split("-").map(Number);
+      setMode("week");
+      setAnchor(new Date(y, m - 1, d));
+      setOpenDay(null);
+    }
+  }
+  // ...and the grid is brought on screen: it sits under the top row, and a jump to a week the
+  // designer cannot see has done nothing they can tell. `nearest` scrolls only as far as it must.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const jumpN = jump?.n;
+  useEffect(() => {
+    if (jumpN !== undefined) rootRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [jumpN]);
+
   const today = new Date();
   const todayIso = toISODate(today);
 
@@ -219,7 +292,7 @@ export function CalendarCard({
       : anchor.getMonth() === today.getMonth() && anchor.getFullYear() === today.getFullYear();
 
   return (
-    <div className="rounded-lg border border-border bg-surface px-3 py-5">
+    <div ref={rootRef} className="rounded-lg border border-border bg-surface px-3 py-5">
       {/* NO TITLE, THE MONTH IS THE HEADING (2026-10-30, the user: "remove the title 'החודש שלי' and
           put the month navigator like in billing"). The range itself stands where the title stood,
           between its two arrows in the /billing screen's own shape (app/(app)/billing/billing-
@@ -240,20 +313,29 @@ export function CalendarCard({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* The calendar is half a picture until the person's own Google entries are on it (the
-              busy blocks below are how a day that looks free is not quietly double-booked). Gone
-              once the pull is on; never shown where the server has no Google set up — settings
-              would only say so. */}
-          {suggestGoogle && (
-            <Link
-              href="/settings#calendar"
-              aria-label="חיבור יומן Google"
-              title="חיבור יומן Google — הפגישות שלך יופיעו ביומן הזה, והיומן יופיע ב-Google"
-              className="inline-flex h-9 w-9 items-center justify-center rounded-pill border border-border bg-canvas transition-colors hover:border-accent-line hover:bg-accent-tint"
-            >
-              <GoogleMark className="h-4 w-4" />
-            </Link>
-          )}
+          {/* The layers, before "היום", parted from the view's own controls by a hairline. */}
+          <div className="flex flex-wrap items-center gap-1.5 border-e border-border-soft pe-2">
+            <LayerToggle on={layers.events} icon={Sparkles} label={eventsLabel} onToggle={() => toggleLayer("events")} />
+            <LayerToggle on={layers.diary} icon={CalendarDays} label="יומן" onToggle={() => toggleLayer("diary")} />
+            {hasGoogle ? (
+              <LayerToggle on={layers.google} icon={Lock} label="Google" onToggle={() => toggleLayer("google")} />
+            ) : (
+              // The calendar is half a picture until the person's own Google entries are on it (the
+              // busy blocks below are how a day that looks free is not quietly double-booked). The
+              // way to connect stands in the Google layer's place until the pull is on; never shown
+              // where the server has no Google set up — settings would only say so.
+              suggestGoogle && (
+                <Link
+                  href="/settings#calendar"
+                  aria-label="חיבור יומן Google"
+                  title="חיבור יומן Google — הפגישות שלך יופיעו ביומן הזה, והיומן יופיע ב-Google"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-pill border border-border bg-canvas transition-colors hover:border-accent-line hover:bg-accent-tint"
+                >
+                  <GoogleMark className="h-4 w-4" />
+                </Link>
+              )
+            )}
+          </div>
           <button
             type="button"
             onClick={goToday}
@@ -302,9 +384,10 @@ export function CalendarCard({
           <div className="grid grid-cols-7">
             {days.map((d, i) => {
               const iso = toISODate(d);
-              const dayEvents = eventsByDate.get(iso) ?? [];
-              const dayAppointments = appointmentsByDate.get(iso) ?? [];
-              const dayBusy = busy.byDate.get(iso) ?? [];
+              // A layer taken off is gone from the cell, from its "+N" and from the day popover alike.
+              const dayEvents = layers.events ? (eventsByDate.get(iso) ?? []) : [];
+              const dayAppointments = layers.diary ? (appointmentsByDate.get(iso) ?? []) : [];
+              const dayBusy = layers.google ? (busy.byDate.get(iso) ?? []) : [];
               const isToday = sameDay(d, today);
               const isPast = !isToday && iso < todayIso;
               const inMonth = mode === "week" || d.getMonth() === anchor.getMonth();
@@ -458,9 +541,9 @@ export function CalendarCard({
           key={openDay.iso}
           iso={openDay.iso}
           anchor={openDay.anchor}
-          events={eventsByDate.get(openDay.iso) ?? []}
-          appointments={appointmentsByDate.get(openDay.iso) ?? []}
-          busy={busy.byDate.get(openDay.iso) ?? []}
+          events={layers.events ? (eventsByDate.get(openDay.iso) ?? []) : []}
+          appointments={layers.diary ? (appointmentsByDate.get(openDay.iso) ?? []) : []}
+          busy={layers.google ? (busy.byDate.get(openDay.iso) ?? []) : []}
           lookOf={lookOf}
           addItems={addItems}
           past={openDay.iso < todayIso}
