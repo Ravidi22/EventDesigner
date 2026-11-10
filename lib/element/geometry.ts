@@ -20,6 +20,9 @@ import { composeShapes, footprintBounds, footprintOutlines, pieceOf, sizedShapes
 import { outlinePathD, outlineStrokeD } from "@/lib/studio/geometry";
 import { isMain } from "../self-check";
 import type { ElementDefinition, ElementPart, ElementSize } from "./types";
+import type { Product } from "@/lib/catalog/types";
+import { resolveFootprint } from "@/lib/studio/footprint";
+import { definitionOf, hasOwnBody } from "./adapter";
 
 /** One part, evaluated: the outlines it is drawn as in the element's frame (a hollow part is
  *  several), its bottom and its height. `index` is the part's place in the definition — the
@@ -58,7 +61,9 @@ export interface ElementGeometry {
 /** A part as the ShapePart the footprint engine reads — its profile at its place, with its pin and
  *  its repeat (footprint.ts lays the copies and follows the pins). */
 export function asShapePart(p: ElementPart): ShapePart {
-  return { id: p.id, ...p.profile, x: p.x, y: p.y, rotation: p.rotation, ...(p.pin ? { pin: p.pin } : {}), ...(p.repeat ? { repeat: p.repeat } : {}) };
+  // A panel is a front shape again, so the engine plans its band.
+  const front = p.op.kind === "panel" ? { plane: "front" as const, thicknessMm: p.op.thicknessMm, bendDeg: p.op.bendDeg, faceTurnDeg: p.op.faceTurnDeg } : {};
+  return { id: p.id, ...p.profile, ...front, x: p.x, y: p.y, rotation: p.rotation, ...(p.pin ? { pin: p.pin } : {}), ...(p.repeat ? { repeat: p.repeat } : {}) };
 }
 
 /** Which part each outline of a footprint draws: a multi's pieces say (BuiltOutline.of, else their
@@ -208,5 +213,40 @@ if (isMain(import.meta.url)) {
   assert(Math.abs(pgWide.box.w - 6000) < 0.6 && pgWide.parts[1].pieces.length === 4 && pgWide.parts[3].pieces.length === 19, `laid 6 × 4: still four posts, nineteen slats (${pgWide.parts[3].pieces.length})`);
   const postX = pgWide.parts[1].pieces.map((o) => o.outline.reduce((s, v) => s + v.x, 0) / o.outline.length).map(Math.abs);
   assert(postX.every((x) => Math.abs(x - 2940) < 0.6), "…the posts stand in the new corners");
+
+  // THE FRONT PLANE (backdrops S2): picture 5's three wave layers at three depths, 2.4 / 2.0 / 1.6 m.
+  const panel = (thicknessMm: number) => ({ kind: "panel" as const, thicknessMm, bendDeg: 0, faceTurnDeg: 0 });
+  const layers = def([
+    // The first part stands at the element's origin; the others are placed from it.
+    part({ id: "l1", profile: { shape: "rect", widthMm: 4000, depthMm: 2400 }, op: panel(30), heightMm: 2400, own: true }),
+    part({ id: "l2", profile: { shape: "rect", widthMm: 3600, depthMm: 2000 }, y: 300, op: panel(30), heightMm: 2000, own: true }),
+    part({ id: "l3", profile: { shape: "rect", widthMm: 3200, depthMm: 1600 }, y: 600, op: panel(30), heightMm: 1600, own: true }),
+  ]);
+  const lg = elementGeometry(layers);
+  assert(lg.footprint.kind === "multi" && lg.footprint.parts.length === 3, "three panels are three bands");
+  assert(Math.abs(lg.box.w - 4000) < 0.6 && Math.abs(lg.box.h - 630) < 0.6, `…the lot 4000 × 630 (${lg.box.w}×${lg.box.h})`);
+  assert(lg.topMm === 2400, "…the tallest is the top");
+  // A row read off the catalog: a front base row is a panel on the floor, its face height high.
+  const wallRow = {
+    id: "w",
+    name: "קיר",
+    category: "other",
+    layer: "floor",
+    dimensions: { widthMm: 4000, depthMm: 30, heightMm: 2600 },
+    categoryFields: {},
+    styleTags: [],
+    variants: [],
+    appearance: { shape: "rect", content: "none", plane: "front" },
+  } as Product;
+  const wd = definitionOf(wallRow);
+  assert(wd.parts[0].op.kind === "panel" && wd.parts[0].heightMm === 2600 && wd.parts[0].profile.depthMm === 2600 && wd.parts[0].zMm === 0, "a front base is a panel 2600 high on the floor");
+  assert(wd.parts[0].op.kind === "panel" && wd.parts[0].op.thicknessMm === 30, "…30 thick");
+  assert(hasOwnBody(wallRow), "…and the element model builds it");
+  assert(sameFootprint(elementGeometry(wd).footprint, resolveFootprint(wallRow)), "the element's footprint is the row's");
+  // A front PART behind a plan base: a panel at its own z, its rise its face's.
+  const barRow = { ...wallRow, dimensions: { widthMm: 3000, depthMm: 600, heightMm: 1100 }, appearance: { shape: "rect", content: "none", parts: [{ id: "p", plane: "front", shape: "rect", widthMm: 3000, depthMm: 900, thicknessMm: 40, x: 0, y: -500, rotation: 0, zMm: 1100 }] } } as Product;
+  const bd2 = definitionOf(barRow);
+  assert(bd2.parts[1].op.kind === "panel" && bd2.parts[1].zMm === 1100 && bd2.parts[1].heightMm === 900 && bd2.parts[1].own === true, "a front part stands at its z, 900 high");
+  assert(sameFootprint(elementGeometry(bd2).footprint, resolveFootprint(barRow)), "…and the lot's footprint is the row's");
   console.log("element geometry self-check passed");
 }

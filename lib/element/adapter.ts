@@ -9,8 +9,8 @@
 // textures.ts) — base 0, then each part — which is how ItemSurface already finds a shape's texture.
 //
 // PURE. Run: npm run check:element-parity (./parity.ts holds this adapter to every row's plan).
-import type { MapShape, PartBody, Product, RevolvePoint, ShapePart } from "@/lib/catalog/types";
-import { resizeSpecOf, catalogBox } from "@/lib/studio/footprint";
+import { FRONT_THICK_MM, type MapShape, type PartBody, type Product, type RevolvePoint, type ShapePart } from "@/lib/catalog/types";
+import { resizeSpecOf, catalogBox, frontFace, rowShapeDims } from "@/lib/studio/footprint";
 import { hasSurface, type Surface } from "@/lib/catalog/textures";
 import { sizeParams, type ElementDefinition, type ElementPart, type ElementSize, type PartOp, type Profile } from "./types";
 
@@ -37,6 +37,14 @@ function surfaceOf(s: Surface): Surface | undefined {
 
 /** An added shape (ShapePart) as a part: its profile, its place, its own z and height when it has
  *  them, else the floor and the item's height. */
+/** A front shape's op: its face pushed back by its thickness, bent, turned in its face. */
+const panelOf = (s: { thicknessMm?: number; bendDeg?: number; faceTurnDeg?: number }): PartOp => ({
+  kind: "panel",
+  thicknessMm: s.thicknessMm ?? FRONT_THICK_MM,
+  bendDeg: s.bendDeg ?? 0,
+  faceTurnDeg: s.faceTurnDeg ?? 0,
+});
+
 export function partOf(p: ShapePart, itemHeightMm: number): ElementPart {
   const profile: Profile = defined({
     shape: p.shape,
@@ -51,7 +59,8 @@ export function partOf(p: ShapePart, itemHeightMm: number): ElementPart {
     hollow: p.hollow,
   });
   const surface = surfaceOf(p);
-  const op = opOf(p.shape, p.revolve, p.hollow, p.body);
+  const front = p.plane === "front";
+  const op = front ? panelOf(p) : opOf(p.shape, p.revolve, p.hollow, p.body);
   const own = p.zMm !== undefined || p.heightMm !== undefined || op.kind !== "extrude" ? true : undefined;
   return defined({
     id: p.id,
@@ -62,7 +71,8 @@ export function partOf(p: ShapePart, itemHeightMm: number): ElementPart {
     pin: p.pin,
     repeat: p.repeat,
     zMm: p.zMm ?? 0,
-    heightMm: p.heightMm ?? itemHeightMm,
+    // A front shape rises as far as its face is tall; its own heightMm is not read.
+    heightMm: front ? frontFace(p.shape, p).h : (p.heightMm ?? itemHeightMm),
     own,
     op,
     surface,
@@ -76,13 +86,15 @@ export function partOf(p: ShapePart, itemHeightMm: number): ElementPart {
 export function definitionOf(product: Product): ElementDefinition {
   const a = product.appearance;
   const d = product.dimensions;
-  const shape = a?.shape ?? (d.diameterMm ? "circle" : "rect");
   const heightMm = d.heightMm ?? 0;
+  // The base as the engine reads it — a front base's face (its depth the row's height) and thickness.
+  const { shape, dims } = rowShapeDims(product);
+  const front = dims.plane === "front";
   const profile: Profile = defined({
     shape,
-    widthMm: d.widthMm,
-    depthMm: d.depthMm,
-    diameterMm: d.diameterMm,
+    widthMm: dims.widthMm,
+    depthMm: dims.depthMm,
+    diameterMm: dims.diameterMm,
     outline: a?.outline,
     edgeCurves: a?.edgeCurves,
     open: a?.open,
@@ -98,7 +110,8 @@ export function definitionOf(product: Product): ElementDefinition {
     rotation: 0,
     zMm: 0,
     heightMm,
-    op: opOf(shape, a?.revolve, a?.hollow, a?.body),
+    own: front ? true : undefined,
+    op: front ? panelOf(dims) : opOf(shape, a?.revolve, a?.hollow, a?.body),
     surface: a ? surfaceOf(a) : undefined,
     colour: a?.baseStyle?.fill,
   });
@@ -120,8 +133,8 @@ export function definitionOf(product: Product): ElementDefinition {
 export function hasOwnBody(product: Product): boolean {
   const a = product.appearance;
   if (!a) return false;
-  if ((a.revolve && a.revolve.length >= 2) || a.body === "none") return true;
-  return (a.parts ?? []).some((p) => p.zMm !== undefined || p.heightMm !== undefined || (p.revolve?.length ?? 0) >= 2 || p.body === "none");
+  if ((a.revolve && a.revolve.length >= 2) || a.body === "none" || a.plane === "front") return true;
+  return (a.parts ?? []).some((p) => p.zMm !== undefined || p.heightMm !== undefined || (p.revolve?.length ?? 0) >= 2 || p.body === "none" || p.plane === "front");
 }
 
 /** The size the element is drawn at: a placement's stretched size when the row may be stretched

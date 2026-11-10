@@ -48,7 +48,15 @@ export type PartRole = "frame" | "surface" | "cloth" | "glass" | "ground" | "sea
  *  plan draws, z = 1 the part's top. The millimetres are read off the piece as it stands. `none`: an
  *  outline only — on the plan it is the element's reach (a pergola's roof line), in the room it
  *  builds nothing (lib/catalog/types.ts PartBody). */
-export type PartOp = { kind: "extrude" } | { kind: "sheet" } | { kind: "revolve"; profile: RevolvePoint[] } | { kind: "none" };
+export type PartOp =
+  | { kind: "extrude" }
+  | { kind: "sheet" }
+  | { kind: "revolve"; profile: RevolvePoint[] }
+  | { kind: "none" }
+  /** A FRONT shape (lib/catalog/types.ts ShapePart.plane, ./front.ts): the profile is its FACE (x
+   *  across, its depth UP), pushed back `thicknessMm`, bent `bendDeg` on the plan, turned
+   *  `faceTurnDeg` within the face. On the plan it is its band (lib/studio/footprint.ts frontBand). */
+  | { kind: "panel"; thicknessMm: number; bendDeg: number; faceTurnDeg: number };
 
 export interface ElementPart {
   id: string;
