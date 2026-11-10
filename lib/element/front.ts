@@ -14,7 +14,7 @@
 // Pure. Run: npm run check:front
 import { FRONT_BEND_MAX_DEG, FRONT_THICK_MM, type Product, type ShapePart } from "@/lib/catalog/types";
 import { frontBand, frontBandOffset, frontFace, footprintBounds, placedPartOutline, placedPartOutlines, resolveFootprint, rowShapeDims, sampledBounds } from "@/lib/studio/footprint";
-import type { Point } from "@/lib/studio/hall";
+import type { EdgeCurve, Point } from "@/lib/studio/hall";
 import { isMain } from "../self-check";
 
 /** A shape drawn on the front plane. */
@@ -81,6 +81,62 @@ export function clipSlab(polygon: readonly Point[], a: number, b: number): Point
   };
   const lo = clip(polygon, (p) => p.x >= a, a);
   return lo.length ? clip(lo, (p) => p.x <= b, b) : [];
+}
+
+// ── The front-only presets (the חזית rail's גל and עלה) ─────────────────────────────────────────
+//
+// Outlines in the FACE frame (x across, y = −up), filling exactly their w × h box: every extreme is a
+// vertex and every curve's tangent is level or plumb there, so the box read off the points is the box
+// drawn (lib/studio/footprint.ts rule 2).
+
+/** A WAVE — picture 5's "mountain" layer: a flat foot, plumb sides, and a top of `crests` smooth
+ *  hills, the valleys `WAVE_DIP` of the height down, both ends in a valley. */
+export function waveOutline(widthMm: number, heightMm: number, crests = 3): { outline: Point[]; edgeCurves: (EdgeCurve | null)[] } {
+  const w = Math.max(10, widthMm);
+  const h = Math.max(10, heightMm);
+  const n = Math.max(1, Math.round(crests));
+  const top = -h / 2;
+  const valley = top + WAVE_DIP * h;
+  const outline: Point[] = [{ x: -w / 2, y: h / 2 }, { x: w / 2, y: h / 2 }];
+  const edgeCurves: (EdgeCurve | null)[] = [null, null];
+  // The top, right to left: valley, crest, valley … — each edge an S with level tangents at both ends.
+  const steps = 2 * n;
+  for (let k = 0; k <= steps; k++) {
+    outline.push({ x: w / 2 - (w * k) / steps, y: k % 2 ? top : valley });
+    const dx = -w / steps;
+    edgeCurves.push(k < steps ? { c1: { x: dx / 2, y: 0 }, c2: { x: -dx / 2, y: 0 } } : null);
+  }
+  return { outline, edgeCurves };
+}
+
+/** How far a wave's valleys dip below its crests, as a share of its height. */
+export const WAVE_DIP = 0.35;
+
+/** A PETAL — picture 2's pleated panel: a flat foot narrower than the petal, round shoulders at its
+ *  widest, and a pointed tip on top in the middle. */
+export function petalOutline(widthMm: number, heightMm: number): { outline: Point[]; edgeCurves: (EdgeCurve | null)[] } {
+  const w = Math.max(10, widthMm);
+  const h = Math.max(10, heightMm);
+  const foot = 0.3 * w;
+  const shoulderY = h / 2 - 0.4 * h;
+  const outline: Point[] = [
+    { x: -foot, y: h / 2 },
+    { x: foot, y: h / 2 },
+    { x: w / 2, y: shoulderY },
+    { x: 0, y: -h / 2 },
+    { x: -w / 2, y: shoulderY },
+  ];
+  const k = 0.3 * h;
+  const edgeCurves: (EdgeCurve | null)[] = [
+    null,
+    // Out from the foot to the shoulder, arriving plumb (the shoulder is the widest point).
+    { c1: { x: 0.12 * w, y: -0.05 * h }, c2: { x: 0, y: k * 0.5 } },
+    // Up from the shoulder, leaving plumb, to the tip.
+    { c1: { x: 0, y: -k }, c2: { x: 0.12 * w, y: 0.25 * h } },
+    { c1: { x: -0.12 * w, y: 0.25 * h }, c2: { x: 0, y: -k } },
+    { c1: { x: 0, y: k * 0.5 }, c2: { x: -0.12 * w, y: -0.05 * h } },
+  ];
+  return { outline, edgeCurves };
 }
 
 if (isMain(import.meta.url)) {
@@ -167,6 +223,16 @@ if (isMain(import.meta.url)) {
     assert(near(Math.max(...half.map((p) => p.x)) - Math.min(...half.map((p) => p.x)), 10), "a slab clip keeps x ∈ [a, b]");
     assert(clipSlab(sq, 30, 40).length === 0, "…and nothing outside it");
     assert([300, -300, 1].every((b) => Number.isFinite(panelPoint(W / 2, -10, 100, 5000, b).x) && Number.isFinite(panelPoint(W / 2, -10, 100, 5000, b).y)), "extreme bends are finite");
+    // ── The presets ──────────────────────────────────────────────────────────────────────────────
+    const wave = waveOutline(3000, 1200, 3);
+    const wb = sampledBounds([wave]);
+    assert(wb.w === 3000 && near(wb.h, 1200, 1), `a wave fills its box (${wb.w}×${wb.h})`);
+    assert(wave.outline.filter((v) => near(v.y, -600, 0.01)).length === 3, "…three crests on top");
+    assert(near(Math.max(...wave.outline.map((v) => v.y)), 600, 0.01), "…a flat foot");
+    const petal = petalOutline(1600, 2400);
+    const peb = sampledBounds([petal]);
+    assert(near(peb.w, 1600, 2) && near(peb.h, 2400, 2), `a petal fills its box (${peb.w}×${peb.h})`);
+    assert(petal.outline.some((v) => near(v.x, 0, 0.01) && near(v.y, -1200, 0.01)), "…its tip on top in the middle");
     console.log("front self-check passed");
   }
 }
