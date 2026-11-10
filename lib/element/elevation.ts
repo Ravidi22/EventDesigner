@@ -206,6 +206,13 @@ function frontRectEdit(shape: ShapePart, b: ElevationBox, rect: ElevationRect, v
   return { patch, ...(itemHeightMm !== undefined ? { itemHeightMm } : {}) };
 }
 
+/** A front shape's face resized to a new width and/or height ON THE FACE, measured off what it is now
+ *  — the item's height field and the face's top edge write a front base's face through this. */
+export function faceSized(shape: ShapePart, to: { widthMm?: number; heightMm?: number }): Partial<ShapePart> {
+  const face = frontFace(shape.shape, { ...shape, faceTurnDeg: undefined });
+  return faceResize(shape, face.w, face.h, to.widthMm, to.heightMm);
+}
+
 /** A front shape's face made `w` across and `h` high (either absent = as it is): a hand-drawn face
  *  rescaled, a round one resized whole by whichever changed, any other its width and its height on
  *  the face (`depthMm`). */
@@ -521,5 +528,7 @@ if (isMain(import.meta.url)) {
   const drawn = drawnFront([{ x: 0, y: -100 }, { x: 1000, y: -100 }, { x: 500, y: -1800 }], undefined, 0)!;
   assert(drawn.plane === "front" && drawn.shape === "custom" && drawn.zMm === 100 && drawn.depthMm === 1700 && drawn.x === 500 && drawn.y === 0, "a free drawing in front is a front custom shape at its height");
   assert(drawnFront([{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 0, y: 5 }], undefined, 0) === null, "…none under 10 mm");
+  assert(faceSized(panel, { heightMm: 2600 }).depthMm === 2600 && faceSized(arch, { heightMm: 1500 }).diameterMm === 3000, "faceSized: a face's height by its own measure");
+  assert(faceSized(petalPart, { heightMm: 1000 }).outline?.length === 3 && faceSized(petalPart, { heightMm: 1000 }).depthMm === 1000, "…a hand-drawn one rescaled");
   console.log("elevation self-check passed");
 }

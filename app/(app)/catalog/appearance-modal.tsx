@@ -21,6 +21,7 @@ import {
   FlipVertical2,
   Frame,
   Layers,
+  Leaf,
   Lock,
   LockOpen,
   Magnet,
@@ -40,12 +41,13 @@ import {
   Spline,
   Trash2,
   Type,
+  Waves,
   X,
 } from "lucide-react";
 import type { ArcSpec, ChandelierCrystals, ChandelierSpec, ChuppahFinish, ChuppahFlowers, ChuppahRoof, ChuppahSpec, HollowSpec, MapAppearance, MapShape, PendantFitting, Pin, PinMode, Product, Repeat, RepeatAlong, RevolvePoint, RingSpec, ShapePart } from "@/lib/catalog/types";
 import { CHANDELIER_CRYSTALS, CHANDELIER_PROFILES, FITTING_LABEL, PENDANT_FITTINGS, PENDANT_GLASS, PENDANT_GLASS_FORMS, PENDANT_GLASS_LABEL, CHANDELIER_PROFILE_FORMS, CHANDELIER_PROFILE_LABEL, CHANDELIER_TIERS_MAX, CRYSTALS_LABEL, CRYSTAL_STYLES, PROFILED_STYLES, TIERED_STYLES, asksStrands, chandelierDrawOf, chandelierHint, chandelierOf, chandelierPatch, strandsLabel } from "@/lib/catalog/chandelier";
 import { CHUPPAH_FINISHES, CHUPPAH_FINISH_LABEL, CHUPPAH_FLOWERS_LABEL, CHUPPAH_FLOWER_SPOTS, CHUPPAH_PROFILES, CHUPPAH_PROFILE_FORMS, CHUPPAH_PROFILE_LABEL, CHUPPAH_ROOFS, CHUPPAH_ROOF_LABEL, chuppahDrawOf, chuppahLayout, chuppahOf, chuppahPatch } from "@/lib/catalog/chuppah";
-import { ARC_SWEEP, MAP_SHAPES, PICKER_SHAPES, RING_GAP, ROUND_FIELD, SHAPE_LABEL, canHollow, usesDiameter } from "@/lib/catalog/types";
+import { ARC_SWEEP, FRONT_BEND_MAX_DEG, FRONT_THICK_MM, MAP_SHAPES, PICKER_SHAPES, RING_GAP, ROUND_FIELD, SHAPE_LABEL, canHollow, usesDiameter } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { drawnBounds, drawnPieces, flipShapes, lookOf, rescaleOutline, shapesOf, type FlipAxis } from "@/lib/catalog/shape-list";
 import type { EdgeCurve } from "@/lib/studio/hall";
@@ -54,12 +56,14 @@ import {
   customShapeBounds,
   defaultHollowBand,
   footprintBounds,
+  frontFace,
   hollowGapSide,
   hollowOuter,
   hollowSideNames,
   resolveContent,
   resolveFootprint,
   placedPartOutline,
+  piecesFootprint,
   ringSpecOf,
   roundSizeMm,
   sampledBounds,
@@ -70,7 +74,7 @@ import {
   type Footprint,
   type RingShape,
 } from "@/lib/studio/footprint";
-import { bulgeDepthMm, maxBulgeDepthMm, wallAngleDeg, wallLengthMm } from "@/lib/studio/geometry";
+import { bulgeDepthMm, faceStrokeD, maxBulgeDepthMm, outlinePathD, wallAngleDeg, wallLengthMm } from "@/lib/studio/geometry";
 import { alignedCentres, alignGuide, needsThree, type AlignOp } from "@/lib/studio/align";
 import { useHistory } from "@/lib/studio/use-history";
 import { hitsInBox, mergeSelection } from "@/lib/venues/selection";
@@ -88,7 +92,8 @@ import { ShapeGrid, ShapeIcon } from "@/components/shape-grid";
 import { ElevationView } from "./elevation-view";
 import { ElevationCanvas } from "./elevation-canvas";
 import { ElevationQuickBar } from "./elevation-bar";
-import { elevationNudge, type ElevationView as SideView } from "@/lib/element/elevation";
+import { drawnFront, elevationBoxes, elevationNudge, faceSized, placedFront, type ElevationView as SideView } from "@/lib/element/elevation";
+import { bendKeepingMiddle, petalOutline, toFront, toPlan, waveOutline } from "@/lib/element/front";
 import { RevolveFields, type RevolveTiles } from "./revolve-editor";
 import { REVOLVE_LABEL, revolveFormOf } from "@/lib/element/revolve";
 import { ScenePane } from "./scene-pane";
@@ -518,6 +523,28 @@ type RailShape = Exclude<MapShape, "custom">;
 const RAIL_SHAPES = PICKER_SHAPES.filter((s): s is RailShape => s !== "custom");
 const isRailShape = (id: string): id is RailShape => (RAIL_SHAPES as readonly string[]).includes(id);
 
+/** The FRONT-only tools (backdrops S2, lib/element/front.ts): a wave and a petal, placed in the חזית
+ *  view as hand-drawn faces the designer then reshapes point by point. */
+type FrontPreset = "wave" | "petal";
+const FRONT_PRESETS: readonly { id: FrontPreset; label: string; title: string }[] = [
+  { id: "wave", label: "גל", title: "גל — שכבה גלית, כמו ״הרים״ בקיר רקע" },
+  { id: "petal", label: "עלה", title: "עלה — פאנל בצורת עלה כותרת" },
+];
+const isFrontPreset = (id: string): id is FrontPreset => id === "wave" || id === "petal";
+/** What a click on the canvas places: a shape of the drawer, or a front tool. */
+type Armed = RailShape | FrontPreset;
+const armedLabel = (a: Armed) => (isFrontPreset(a) ? FRONT_PRESETS.find((t) => t.id === a)!.label : SHAPE_LABEL[a]);
+
+/** A front tool's picture on its tile: the preset's own outline. */
+function FrontPresetIcon({ id }: { id: FrontPreset }) {
+  const o = id === "wave" ? waveOutline(26, 14, 3) : petalOutline(16, 22);
+  return (
+    <svg viewBox="-14 -12 28 24" className="h-6 w-6" aria-hidden>
+      <path d={outlinePathD(o.outline, o.edgeCurves)} fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 /** The view switch over the canvas — the plan and the two side views (lib/element/elevation.ts). */
 const VIEW_OPTIONS = [
   ["plan", "תוכנית"],
@@ -525,10 +552,12 @@ const VIEW_OPTIONS = [
   ["side", "צד"],
 ] as const;
 
-function ShapeRail({ armed, drawing, onArm, onDraw, disabled = false }: { armed: RailShape | null; drawing: boolean; onArm: (s: RailShape | null) => void; onDraw: () => void; disabled?: boolean }) {
-  // A side view places nothing new yet (front shapes are the next stage): shapes are added on the
-  // plan, and the rail says so rather than arming a tool the view cannot place.
-  const why = disabled ? "צורות חדשות מונחות בתוכנית" : undefined;
+function ShapeRail({ armed, drawing, onArm, onDraw, view }: { armed: Armed | null; drawing: boolean; onArm: (s: Armed | null) => void; onDraw: () => void; view: "plan" | SideView }) {
+  // The plan places plan shapes; the חזית view places FRONT shapes (backdrops S2) — the same tiles,
+  // a free drawing, a wave and a petal. The צד view places nothing: the rail says where to go.
+  const disabled = view === "side";
+  const front = view === "front";
+  const why = disabled ? "צורות חדשות — בתוכנית או בחזית" : undefined;
   return (
     <aside className={"flex w-56 shrink-0 flex-col border-e border-border bg-surface" + (disabled ? " opacity-50" : "")} title={why}>
       <div className="scroll-slim flex flex-1 flex-col gap-2.5 overflow-y-auto p-2.5">
@@ -537,7 +566,7 @@ function ShapeRail({ armed, drawing, onArm, onDraw, disabled = false }: { armed:
           onClick={onDraw}
           disabled={disabled}
           aria-pressed={drawing}
-          title={why ?? "ציור חופשי — נקודה אחר נקודה"}
+          title={why ?? (front ? "ציור חופשי בחזית — נקודה אחר נקודה" : "ציור חופשי — נקודה אחר נקודה")}
           className={
             "flex h-9 w-full items-center justify-center gap-2 rounded-sm border px-2.5 text-[13px] font-semibold transition-colors " +
             (drawing ? "border-accent bg-accent-tint text-accent" : "border-border bg-surface text-ink hover:border-accent-line hover:bg-inset")
@@ -552,7 +581,7 @@ function ShapeRail({ armed, drawing, onArm, onDraw, disabled = false }: { armed:
               key={s}
               glyph={<ShapeIcon shape={s} />}
               label={SHAPE_SHORT[s] ?? SHAPE_LABEL[s]}
-              title={why ?? SHAPE_LABEL[s]}
+              title={why ?? (front ? `${SHAPE_LABEL[s]} — בחזית` : SHAPE_LABEL[s])}
               armed={armed === s}
               disabled={disabled}
               onClick={() => onArm(armed === s ? null : s)}
@@ -560,6 +589,13 @@ function ShapeRail({ armed, drawing, onArm, onDraw, disabled = false }: { armed:
             />
           ))}
         </ToolGrid>
+        {front && (
+          <ToolGrid label="חזית">
+            {FRONT_PRESETS.map((t) => (
+              <ToolTile key={t.id} glyph={<FrontPresetIcon id={t.id} />} label={t.label} title={t.title} armed={armed === t.id} onClick={() => onArm(armed === t.id ? null : t.id)} dragId={t.id} />
+            ))}
+          </ToolGrid>
+        )}
       </div>
     </aside>
   );
@@ -585,7 +621,8 @@ function patchedPart(part: ShapePart, p: Partial<ShapePart>): ShapePart {
  *  120×60 ellipse, a ⌀90 circle a 90×90 rectangle. Its band comes across (hollowAcross); a sweep, a
  *  ring and anything else that only one kind reads is the new kind's default. */
 function reshaped(part: ShapePart, next: RailShape): ShapePart {
-  const b = sampledBounds([hollowOuter(part.shape, part)]);
+  // A front shape's size is its FACE's, not its band's.
+  const b = part.plane === "front" ? frontFace(part.shape, { ...part, hollow: undefined, faceTurnDeg: undefined }) : sampledBounds([hollowOuter(part.shape, part)]);
   const w = Math.round(b.w) || 1200;
   const h = Math.round(b.h) || 600;
   return {
@@ -1182,8 +1219,9 @@ function moreItems(onFlip: (axis: FlipAxis) => void, onRestack: (how: "front" | 
 /** The editor's side-panel groups (2026-11-09, the user's redesign): one folding section per subject,
  *  each reading back its value on its end. Which are open is kept across selections — a designer
  *  working down a row of posts keeps "חזרה" open from one to the next. */
-type GroupKey = "picture" | "content" | "seats" | "border" | "look" | "pos" | "height" | "body" | "pin" | "rep" | "arc" | "sweep" | "ring" | "fill" | "texture";
+type GroupKey = "picture" | "content" | "seats" | "border" | "look" | "pos" | "height" | "body" | "pin" | "rep" | "arc" | "sweep" | "ring" | "fill" | "texture" | "front";
 const GROUPS_OPEN: Record<GroupKey, boolean> = {
+  front: true,
   picture: true,
   content: false,
   seats: false,
@@ -1247,7 +1285,8 @@ function ShapeQuickBar({
   const D = roundSizeMm(part.shape, part);
   const deg = Math.round(part.rotation || 0) % 360;
   const turn = (by: number) => onChange({ rotation: ((((part.rotation || 0) + by) % 360) + 360) % 360 });
-  const title = drawn ? (part.open ? "קווים" : "צורה חופשית") : SHAPE_LABEL[part.shape];
+  const front = part.plane === "front";
+  const title = `${drawn ? (part.open ? "קווים" : "צורה חופשית") : SHAPE_LABEL[part.shape]}${front ? " · חזית" : ""}`;
   return (
     <Bar
       icon={drawn ? (part.open ? Route : PenLine) : Shapes}
@@ -1282,7 +1321,10 @@ function ShapeQuickBar({
               "120" — a hand-drawn one through rescaleCustomPart each time. */}
           <QuickNumber min={0} label={part.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={cmOf(part.widthMm)} onChange={(v) => onChange({ widthMm: Math.round(v * 10) })} />
           <QuickUnit>×</QuickUnit>
-          {part.shape === "line" ? (
+          {front ? (
+            // A front shape's second number is its height ON THE FACE.
+            <QuickNumber min={0} label="גובה (ס״מ)" value={cmOf(part.depthMm)} onChange={(v) => onChange({ depthMm: Math.round(v * 10) })} />
+          ) : part.shape === "line" ? (
             <QuickNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(part.depthMm ?? 0) / 10} onChange={(v) => onChange({ depthMm: Math.max(1, Math.round(v * 10)) })} />
           ) : (
             <QuickNumber min={0} label="עומק (ס״מ)" value={cmOf(part.depthMm)} onChange={(v) => onChange({ depthMm: Math.round(v * 10) })} />
@@ -1290,6 +1332,13 @@ function ShapeQuickBar({
         </>
       )}
       <QuickUnit>ס״מ</QuickUnit>
+      {front && (
+        <>
+          <QuickSep />
+          <QuickNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(part.thicknessMm ?? FRONT_THICK_MM) / 10} onChange={(v) => onChange({ thicknessMm: Math.max(1, Math.round(v * 10)) })} />
+          <QuickUnit>ס״מ</QuickUnit>
+        </>
+      )}
       <QuickSep />
       <BarButton icon={RotateCcw} label="רבע סיבוב שמאלה" onClick={() => turn(-90)} />
       <NumberField size="sm" aria-label="זווית במעלות" decimals={0} value={deg} onChange={(v) => onChange({ rotation: ((v % 360) + 360) % 360 })} className="w-12" />
@@ -1327,7 +1376,7 @@ function PaintSummary({ style, empty = "כמו הפריט" }: { style: ShapePart
 
 /** A shape's own outline, small — the glyph on its row in the side panel's "צורות בפריט". */
 function PartGlyph({ part }: { part: ShapePart }) {
-  const f = shapeFootprint(part.shape, part);
+  const f = part.plane === "front" ? piecesFootprint(frontFace(part.shape, part).pieces) : shapeFootprint(part.shape, part);
   const b = footprintBounds(f);
   // A line's thickness is a sliver at this size; it is drawn at least a twentieth of its length.
   const w = Math.max(b.w, 1);
@@ -1397,10 +1446,49 @@ function ShapePanel({
   const cm = cmOf;
   const D = roundSizeMm(part.shape, part);
   const spec = part.shape === "arc" ? arcSpecOf(D || DEFAULT_PRESET_MM.w, part.arc) : null;
-  const ringShape = ringShapeOf(part.shape);
+  const front = part.plane === "front";
+  // A front shape's own (backdrops S2): its plan-only groups — a body, a pin, a repeat, a slice, a
+  // ring — do not apply to a face.
+  const ringShape = front ? null : ringShapeOf(part.shape);
   const ringSpec = ringShape ? ringSpecOf(part.widthMm || DEFAULT_PRESET_MM.w, part.depthMm || DEFAULT_PRESET_MM.h, part.ring, ringShape) : null;
   return (
     <>
+      {front && (
+        <FoldRow
+          {...group(groups, "front")}
+          icon={Frame}
+          title="חזית"
+          summary={ltr(`עובי ${cm(part.thicknessMm ?? FRONT_THICK_MM)}${part.bendDeg ? ` · כיפוף ${part.bendDeg}°` : ""}${part.faceTurnDeg ? ` · ${part.faceTurnDeg}°` : ""}`)}
+        >
+          <PanelRow label="עובי (ס״מ)" htmlFor={`${id}-thick`}>
+            <NumberField id={`${id}-thick`} decimals={1} min={0.1} commitOnBlur value={(part.thicknessMm ?? FRONT_THICK_MM) / 10} onChange={(v) => onChange({ thicknessMm: Math.max(1, Math.round(v * 10)) })} className="w-20" />
+          </PanelRow>
+          <PanelRow label="כיפוף (°)" htmlFor={`${id}-bend`}>
+            <NumberField
+              id={`${id}-bend`}
+              decimals={0}
+              min={-FRONT_BEND_MAX_DEG}
+              max={FRONT_BEND_MAX_DEG}
+              commitOnBlur
+              value={part.bendDeg ?? 0}
+              onChange={(v) => onChange(bendKeepingMiddle(part, v))}
+              className="w-20"
+            />
+          </PanelRow>
+          <PanelRow label="סיבוב בחזית (°)" htmlFor={`${id}-fturn`}>
+            <NumberField id={`${id}-fturn`} decimals={0} commitOnBlur value={part.faceTurnDeg ?? 0} onChange={(v) => onChange({ faceTurnDeg: ((Math.round(v) % 360) + 360) % 360 || undefined })} className="w-20" />
+          </PanelRow>
+          <Note>כיפוף חיובי — הקצוות באים קדימה, אל מה שעומד מול הקיר; שלילי — המרכז בולט קדימה. הצורה מתכופפת סביב האמצע שלה.</Note>
+          {onOpenElevation && (
+            <Button type="button" variant="outline" size="sm" className="w-full" onClick={onOpenElevation}>
+              פתיחה בחזית
+            </Button>
+          )}
+          <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => onChange(toPlan(part))}>
+            החזרה לתוכנית — צורה על הרצפה
+          </Button>
+        </FoldRow>
+      )}
       {others && (
         <FoldRow {...group(groups, "pos")} icon={Move} title="מיקום" summary={ltr(`${cm(part.x - others.x)}, ${cm(part.y - others.y)}`)}>
           <PanelRow label="אופקי (ס״מ)" htmlFor={`${id}-x`}>
@@ -1446,6 +1534,13 @@ function ShapePanel({
                   : "הצורה הראשונה עומדת על הרצפה בגובה הפריט — אותו גובה שבטופס."}
               </Note>
             </>
+          ) : front ? (
+            <>
+              <PanelRow label="גובה מהרצפה (ס״מ)" htmlFor={`${id}-z`}>
+                <NumberField id={`${id}-z`} decimals={0} min={0} commitOnBlur value={cm(part.zMm ?? 0)} onChange={(v) => onChange({ zMm: Math.max(0, Math.round(v * 10)) })} className="w-20" />
+              </PanelRow>
+              <Note>גובה הצורה הוא גובה החזית שלה — בסרגל למטה, או במשיכה בחזית.</Note>
+            </>
           ) : (
             <>
               <PanelRow label="גובה הצורה (ס״מ)" htmlFor={`${id}-height`}>
@@ -1476,7 +1571,7 @@ function ShapePanel({
           turned from a side profile — a bowl, a vase, a basin's tier — for the 3D room and the חזית
           view; the plan still draws the circle, which is the body's widest ring. Not for a band or
           a slice, which have no body of revolution. */}
-      {(part.shape === "circle" || part.shape === "ellipse") && !part.hollow && !(part.arc?.sweepDeg && part.arc.sweepDeg < 360) && (
+      {!front && (part.shape === "circle" || part.shape === "ellipse") && !part.hollow && !(part.arc?.sweepDeg && part.arc.sweepDeg < 360) && (
         <FoldRow {...group(groups, "body")} icon={Cylinder} title={bodyTiles ? bodyTiles.title.split(" — ")[0] : "גוף"} summary={bodyValue(part, bodyTiles)}>
           <RevolveFields value={part.revolve} onChange={(revolve) => onChange({ revolve })} tiles={bodyTiles} onEditInView={onOpenElevation} />
         </FoldRow>
@@ -1484,7 +1579,7 @@ function ShapePanel({
       {/* PIN (Stage 3): how this shape follows a resize of the item on the sketch — against the first
           shape's box. Absent = scaled with the whole, as every part was. Not for the first shape,
           which IS the box, nor for a repeated one, whose copies are laid afresh at every size. */}
-      {!base && !part.repeat && (
+      {!base && !part.repeat && !front && (
         <FoldRow {...group(groups, "pin")} icon={Magnet} title="עיגון" summary={pinValue(part.pin)}>
           <PanelRow label="אופקי" stack>
             <Select aria-label="עיגון אופקי" value={part.pin?.x ?? "scale"} onChange={(v) => onChange({ pin: withPin(part.pin, "x", v as PinMode) })} options={PIN_X} className="w-full" />
@@ -1497,7 +1592,7 @@ function ShapePanel({
       )}
       {/* REPEAT (Stage 3): this shape laid in copies against the first shape. The copies are drawn
           faint on the canvas; the shape itself is the prototype — its size is the copies' section. */}
-      {!base && (
+      {!base && !front && (
         <FoldRow {...group(groups, "rep")} icon={RepeatIcon} title="חזרה" summary={repeatValue(part.repeat)}>
           <PanelRow label="פריסה" stack>
             <Select
@@ -1575,7 +1670,7 @@ function ShapePanel({
           <ArcFields idPrefix={id} diameterMm={D ?? 0} arc={part.arc} onChange={(arc) => onChange({ arc })} />
         </FoldRow>
       )}
-      {part.shape === "circle" && (
+      {part.shape === "circle" && !front && (
         <FoldRow {...group(groups, "sweep")} icon={ChartPie} title="חלק מהעיגול" summary={sweepValue(part.arc)}>
           <CircleSweepFields
             idPrefix={id}
@@ -1594,7 +1689,7 @@ function ShapePanel({
           <RingFields idPrefix={id} shape={ringShape} widthMm={part.widthMm ?? 0} depthMm={part.depthMm ?? 0} ring={part.ring} onChange={(ring) => onChange({ ring })} />
         </FoldRow>
       )}
-      {part.shape === "u-shape" && (
+      {part.shape === "u-shape" && !front && (
         <FoldRow {...group(groups, "ring")} icon={Donut} title="ח" summary={`דלפק ${cm(uShapeBandOf(part.widthMm || DEFAULT_PRESET_MM.w, part.depthMm || DEFAULT_PRESET_MM.h, part.ring))}`}>
           <CounterFields idPrefix={id} widthMm={part.widthMm ?? 0} depthMm={part.depthMm ?? 0} ring={part.ring} onChange={(ring) => onChange({ ring })} />
         </FoldRow>
@@ -1604,10 +1699,11 @@ function ShapePanel({
           {/* The shape's sides named as it stands on the canvas, turn included. */}
           <HollowFields
             idPrefix={`${id}-hollow`}
-            outer={placedPartOutline(part)}
+            // A front shape's band is cut in its FACE (a frame), so its sides are the face's.
+            outer={front ? frontFace(part.shape, { ...part, hollow: undefined }).pieces[0] : placedPartOutline(part)}
             hollow={part.hollow}
             defaultBand={(() => {
-              const b = sampledBounds([hollowOuter(part.shape, part)]);
+              const b = front ? frontFace(part.shape, { ...part, hollow: undefined }) : sampledBounds([hollowOuter(part.shape, part)]);
               return defaultHollowBand(b.w, b.h);
             })()}
             onChange={(hollow) => {
@@ -1782,7 +1878,8 @@ export function AppearanceModal({
   const seated = product.category === "tables";
   // A shape being drawn (a new one) or redrawn by hand. While it is, the canvas's outline editor is
   // ITS, with its own Ctrl+Z, and the item's history steps aside.
-  const [drawingPart, setDrawingPart] = useState<{ id: string; isNew: boolean; open?: boolean } | null>(null);
+  // …drawn on the חזית canvas as a FRONT shape (`plane`), standing at plan depth `planY`.
+  const [drawingPart, setDrawingPart] = useState<{ id: string; isNew: boolean; open?: boolean; plane?: "front"; planY?: number } | null>(null);
   // Mounted by the act of opening and unmounted on close, so the draft and its history are born and
   // die with one editing session.
   const hist = useHistory<Draft>(
@@ -1795,7 +1892,7 @@ export function AppearanceModal({
   const { look: draft, shapes } = hist.present;
   const partEd = useOutlineEditor({ outline: [] }, { enabled: !!drawingPart });
   const [sel, setSel] = useState<string[]>([]);
-  const [armedShape, setArmedShape] = useState<RailShape | null>(null);
+  const [armedShape, setArmedShape] = useState<Armed | null>(null);
   const [pickingIcon, setPickingIcon] = useState(false);
   // Which side-panel groups are open — kept across selections, for the whole editing session.
   const [groupsOpen, setGroupsOpen] = useState<Record<GroupKey, boolean>>(GROUPS_OPEN);
@@ -1888,7 +1985,12 @@ export function AppearanceModal({
 
   /** A new list of shapes, its seat sides kept only while they still exist. Side indices run over the
    *  whole item's outline, so a shape added or taken away can leave one pointing past the end. */
-  const withShapes = (d: Draft, next: ShapePart[]): Draft => {
+  const withShapes = (d0: Draft, next: ShapePart[]): Draft => {
+    // A FRONT first shape stands on the floor and its face IS the item's height (backdrops S2): every
+    // edit that changes the face — the bar, a drag in חזית, the panel — moves the item's height with it.
+    const lead = next[0];
+    const faceH = lead?.plane === "front" ? Math.round(frontFace(lead.shape, lead).h) : null;
+    const d = faceH !== null && faceH !== d0.look.dimensions.heightMm ? { ...d0, look: { ...d0.look, dimensions: { ...d0.look.dimensions, heightMm: faceH } } } : d0;
     const had = d.look.appearance?.blockedSides;
     if (!had?.length || !next.length) return { ...d, shapes: next };
     const count = seatSides(resolveFootprint({ ...d.look, ...lookOf(d.look, next) })).length;
@@ -1924,8 +2026,17 @@ export function AppearanceModal({
         return { ...list, look: { ...list.look, appearance: list.look.appearance && { ...list.look.appearance, blockedSides: undefined } } };
       });
   };
-  const place = (shape: RailShape, at: { x: number; y: number }) => {
-    const part = newPart(shape, at);
+  /** A tile placed on the חזית canvas: a front shape of its kind, or a wave / a petal as a hand-drawn
+   *  face — at the plan depth of the selected shape (a layer beside it), else at the item's middle. */
+  const frontTile = (a: Armed, at: { x: number; y: number }): ShapePart | null => {
+    const planY = one?.y ?? 0;
+    if (!isFrontPreset(a)) return placedFront(a, at, "front", planY);
+    const o = a === "wave" ? waveOutline(3000, 1200, 3) : petalOutline(1200, 2400);
+    return drawnFront(o.outline.map((v) => ({ x: v.x + at.x, y: v.y + at.y })), o.edgeCurves, planY);
+  };
+  const place = (shape: Armed, at: { x: number; y: number }) => {
+    const part = side === "front" ? frontTile(shape, at) : isFrontPreset(shape) ? null : newPart(shape, at);
+    if (!part) return;
     editShapes((l) => [...l, part]);
     setSel([part.id]);
     setArmedShape(null);
@@ -2006,6 +2117,31 @@ export function AppearanceModal({
   // from exactly what was there. Finishing writes it back as a "custom" shape: the outline, its box's
   // centre as its place, no turn (the turn is in the points now).
   const startDrawing = (part?: ShapePart) => {
+    // A FRONT shape is drawn — and redrawn — on the חזית canvas, as its face.
+    if (part ? part.plane === "front" : side === "front") {
+      if (part) {
+        const i = shapes.indexOf(part);
+        const box = elevationBoxes(shapes, draft.dimensions.heightMm ?? 0, "front")[i];
+        if (!box?.front?.asItself) {
+          showHint("כדי לערוך את קווי הצורה היא צריכה לפנות לחזית — בלי סיבוב ובלי כיפוף");
+          return;
+        }
+        const face = frontFace(part.shape, { ...part, hollow: undefined }).pieces[0];
+        const cx = (box.a0 + box.a1) / 2;
+        const cy = -(box.z + box.h / 2);
+        setSel([]);
+        setArmedShape(null);
+        if (side !== "front") showView("front");
+        partEd.reset({ mode: "edit", outline: face.outline.map((v) => ({ x: v.x + cx, y: v.y + cy })), edgeCurves: padCurves(face.edgeCurves, face.outline.length) });
+        setDrawingPart({ id: part.id, isNew: false, open: part.shape === "custom" && !!part.open, plane: "front", planY: part.y });
+      } else {
+        setSel([]);
+        setArmedShape(null);
+        partEd.reset({ mode: "draw", outline: [] });
+        setDrawingPart({ id: crypto.randomUUID(), isNew: true, plane: "front", planY: one?.y ?? 0 });
+      }
+      return;
+    }
     setSel([]);
     setArmedShape(null);
     if (part) {
@@ -2022,6 +2158,31 @@ export function AppearanceModal({
    *  never closed, it is kept as LINES (ShapePart.open); a shape that was lines stays lines. */
   const shapesWithDrawing = (): ShapePart[] => {
     if (!drawingPart) return shapes;
+    if (drawingPart.plane === "front") {
+      const open = partEd.mode === "draw" || !!drawingPart.open;
+      const drawnF = drawnFront(partEd.outline, padCurves(partEd.edgeCurves, partEd.outline.length), drawingPart.planY ?? 0, open);
+      if (!drawnF) return shapes;
+      const old = shapes.find((p) => p.id === drawingPart.id);
+      if (!old) return [...shapes, { ...drawnF, id: drawingPart.id }];
+      const sameSides = old.hollow && old.shape === "custom" && (old.outline?.length ?? 0) === partEd.outline.length;
+      const redrawn: ShapePart = {
+        ...old,
+        shape: "custom",
+        outline: drawnF.outline,
+        edgeCurves: drawnF.edgeCurves,
+        open: drawnF.open,
+        widthMm: drawnF.widthMm,
+        depthMm: drawnF.depthMm,
+        diameterMm: undefined,
+        arc: undefined,
+        ring: undefined,
+        faceTurnDeg: undefined,
+        hollow: open ? undefined : old.hollow && !sameSides ? hollowAcross(old.hollow, "custom") : old.hollow,
+        x: drawnF.x,
+        zMm: shapes.indexOf(old) === 0 ? undefined : drawnF.zMm,
+      };
+      return shapes.map((p) => (p.id === old.id ? redrawn : p));
+    }
     const line = straightLine(partEd.outline, partEd.edgeCurves);
     if (line) {
       const old = shapes.find((p) => p.id === drawingPart.id);
@@ -2094,6 +2255,27 @@ export function AppearanceModal({
 
   // ── The canvas's shapes, as the hall plan's features ──────────────────────────────────────────
   const featureOf = (p: ShapePart): StructureFeature => {
+    if (p.plane === "front") {
+      // On the plan a front shape is its BAND (its face's width by its thickness, bent); its face is
+      // marked over it (the overlay below). Moved and turned here; its face is drawn in חזית.
+      const band = placedPartOutline({ ...p, x: 0, y: 0, rotation: 0 });
+      const bb = sampledBounds([band]);
+      return {
+        id: p.id,
+        kind: "other",
+        label: "",
+        x: p.x,
+        y: p.y,
+        widthMm: bb.w || 1,
+        depthMm: bb.h || 1,
+        heightMm: 0,
+        shape: "custom",
+        outline: band.outline,
+        ...(band.edgeCurves ? { edgeCurves: band.edgeCurves } : {}),
+        rotationDeg: p.rotation || 0,
+        style: { ...draft.appearance?.style, ...p.style, dash: "solid" },
+      };
+    }
     const round = usesDiameter(p.shape);
     // A hand-drawn shape's box is its outline's; the feature layer stretches the outline to it.
     const ob = p.shape === "custom" && p.outline && p.outline.length >= 3 ? customShapeBounds(p.outline, p.edgeCurves) : null;
@@ -2150,6 +2332,13 @@ export function AppearanceModal({
     const sole = ids.length === 1 ? shapes.find((s) => s.id === ids[0]) : undefined;
     return [
       ...(sole ? [{ label: "עריכת הקווים", icon: PenLine, onSelect: () => startDrawing(sole) }] : []),
+      ...(sole
+        ? [
+            sole.plane === "front"
+              ? { label: "החזרה לתוכנית", icon: Layers, onSelect: () => patchShape(sole.id, toPlan(sole)) }
+              : { label: "העמדה בחזית", icon: Frame, onSelect: () => patchShape(sole.id, toFront(sole, draft.dimensions.heightMm ?? 0)) },
+          ]
+        : []),
       ...(ids.length > 1 && alignPanel ? [{ label: "יישור", icon: AlignCenterVertical, onSelect: () => {}, children: alignItems(alignPanel) }] : []),
       { label: "היפוך מצד לצד", icon: FlipHorizontal2, onSelect: () => flip(ids, "horizontal") },
       { label: "היפוך מלמעלה למטה", icon: FlipVertical2, onSelect: () => flip(ids, "vertical") },
@@ -2253,7 +2442,7 @@ export function AppearanceModal({
   const boxText = base
     ? baseRound
       ? `${baseField.label === "רדיוס" ? "R" : "⌀"}${mmToCm((roundSizeMm(base.shape, base) ?? 0) / baseField.factor)}`
-      : `${mmToCm(base.widthMm ?? 0)}×${mmToCm(base.depthMm ?? 0)}`
+      : `${mmToCm(base.widthMm ?? 0)}×${mmToCm(base.plane === "front" ? (base.thicknessMm ?? FRONT_THICK_MM) : (base.depthMm ?? 0))}`
     : null;
   // The figures go in an LRI…PDI isolate: in a Hebrew line "240×120×75" is a run of numbers joined by
   // neutrals, and the bidi algorithm prints it backwards (75×120×240).
@@ -2261,7 +2450,14 @@ export function AppearanceModal({
   const sizeText = boxText ? (baseRound ? `${iso(boxText)} ס״מ${heightCm ? ` · גובה ${heightCm}` : ""}` : `${iso(`${boxText}${heightCm ? `×${heightCm}` : ""}`)} ס״מ`) : stretch && heightCm ? `גובה ${heightCm} ס״מ` : null;
   const headLine = [draft.name.trim() || "מוצר ללא שם", category?.label, sizeText].filter(Boolean).join(" · ");
   const setBase = (p: Partial<ShapePart>) => editShapes((l) => l.map((s, i) => (i === 0 ? patchedPart(s, p) : s)));
-  const setItemHeight = (mm: number) => hist.set((d) => ({ ...d, look: { ...d.look, dimensions: { ...d.look.dimensions, heightMm: mm } } }));
+  const setItemHeight = (mm: number) =>
+    hist.set((d) => {
+      const look = { ...d.look, dimensions: { ...d.look.dimensions, heightMm: mm } };
+      // A front base's face IS the item's height: typed here, the face is resized to it.
+      const lead = d.shapes[0];
+      if (lead?.plane !== "front" || mm <= 0) return { ...d, look };
+      return withShapes({ ...d, look }, d.shapes.map((s, i) => (i === 0 ? { ...s, ...faceSized(s, { heightMm: mm }) } : s)));
+    });
   const CategoryIcon = category?.icon ?? Shapes;
   // What to do next, over the canvas — a refusal first, then the armed shape, then the empty canvas,
   // then the size a new row was opened at (withSizeFor), until the first edit says it was seen.
@@ -2270,7 +2466,7 @@ export function AppearanceModal({
     (drawingPart
       ? null
       : armedShape
-        ? `לחצו על הקנבס כדי להניח ${SHAPE_LABEL[armedShape]} · Esc לביטול`
+        ? `לחצו על הקנבס כדי להניח ${armedLabel(armedShape)}${side === "front" ? " בחזית" : ""} · Esc לביטול`
         : missing
           ? "גררו צורה מהמגירה אל הקנבס, או ״ציור חופשי״"
           : side && !selected.length
@@ -2480,7 +2676,7 @@ export function AppearanceModal({
         </header>
 
         <div className="flex min-h-0 flex-1">
-          {!stretch && <ShapeRail armed={armedShape} drawing={!!drawingPart?.isNew} onArm={setArmedShape} onDraw={() => startDrawing()} disabled={!!side} />}
+          {!stretch && <ShapeRail armed={armedShape} drawing={!!drawingPart?.isNew} onArm={setArmedShape} onDraw={() => startDrawing()} view={view} />}
 
           <div className="relative min-w-0 flex-1 bg-canvas">
             {/* Why something was refused (an outline that crosses itself), for a moment, over the
@@ -2516,7 +2712,7 @@ export function AppearanceModal({
                 drawAngleStepDeg={45}
                 drawAngleFromFirstSide
                 drawAngleFree
-                {...(drawingPart
+                {...(drawingPart && drawingPart.plane !== "front"
                   ? {
                       // The shape being drawn owns the canvas's outline editor.
                       mode: partEd.mode,
@@ -2626,10 +2822,29 @@ export function AppearanceModal({
                 gridMm={PRODUCT_FRAME.gridMm}
                 overlay={(ctx) => (
                   <>
+                    {/* A front shape's FACE, marked on its band — which way the backdrop faces. */}
+                    {shown
+                      .filter((p) => p.plane === "front")
+                      .map((p) => {
+                        const o = placedPartOutline(p);
+                        const d = faceStrokeD(o.outline, o.edgeCurves, o.face);
+                        return d ? (
+                          <path
+                            key={`face-${p.id}`}
+                            d={d}
+                            className="pointer-events-none"
+                            fill="none"
+                            stroke={selected.includes(p.id) ? "var(--color-accent)" : "var(--color-ink)"}
+                            strokeWidth={3}
+                            strokeLinecap="round"
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        ) : null;
+                      })}
                     {/* Each hollow shape's band, under its (clear-filled) outline — the feature layer
                         drags and sizes the shape's outside. */}
                     {shown
-                      .filter((p) => p.hollow && canHollow(p.shape))
+                      .filter((p) => p.hollow && canHollow(p.shape) && p.plane !== "front")
                       .map((p) => (
                         <g key={`band-${p.id}`} transform={`translate(${p.x} ${p.y})${p.rotation ? ` rotate(${p.rotation})` : ""}`} className="pointer-events-none">
                           {shapePieces(p.shape, p).map((o, i) => (
@@ -2648,7 +2863,7 @@ export function AppearanceModal({
                     {/* A lines-only shape's lines — its feature underneath is clear, there for the
                         pointer and the handles. */}
                     {shown
-                      .filter((p) => p.open && p.shape === "custom")
+                      .filter((p) => p.open && p.shape === "custom" && p.plane !== "front")
                       .map((p) => (
                         <g key={`lines-${p.id}`} transform={`translate(${p.x} ${p.y})${p.rotation ? ` rotate(${p.rotation})` : ""}`} className="pointer-events-none">
                           {shapePieces(p.shape, p).map((o, i) => (
@@ -2728,6 +2943,14 @@ export function AppearanceModal({
                                 const part = shapes.find((x) => x.id === id);
                                 const before = features.find((f) => f.id === id);
                                 if (!part || !before) return;
+                                if (part.plane === "front") {
+                                  // On the plan a front shape's band is its face's width (flat) and its thickness.
+                                  const patch: Partial<ShapePart> = { x: Math.round(r.x), y: Math.round(r.y) };
+                                  if (Math.abs(part.bendDeg || 0) < 0.5 && Math.round(r.widthMm) !== Math.round(before.widthMm)) Object.assign(patch, faceSized(part, { widthMm: Math.max(100, Math.round(r.widthMm)) }));
+                                  if (Math.round(r.depthMm) !== Math.round(before.depthMm)) patch.thicknessMm = Math.max(5, Math.round(r.depthMm));
+                                  dragShapes((l) => l.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+                                  return;
+                                }
                                 if (part.shape === "line" && Math.round(r.depthMm) !== Math.round(before.depthMm)) return;
                                 let { widthMm, depthMm, x, y } = r;
                                 // The edge being dragged is pulled onto the guides; the opposite one
@@ -2857,7 +3080,43 @@ export function AppearanceModal({
                 <div className={"absolute inset-0" + (side ? "" : " invisible pointer-events-none")} aria-hidden={!side}>
                   <ElevationCanvas
                     view={sideView}
-                    shapes={shapes}
+                    shapes={drawingPart?.plane === "front" && !drawingPart.isNew ? shapes.filter((s) => s.id !== drawingPart.id) : shapes}
+                    onPlace={armedShape && side === "front" ? (at) => place(armedShape, at) : undefined}
+                    onDropAt={(e, at) => {
+                      const id = e.dataTransfer.getData("text/plain");
+                      if (!drawingPart && side === "front" && (isRailShape(id) || isFrontPreset(id))) place(id, at);
+                    }}
+                    drawing={
+                      drawingPart?.plane === "front"
+                        ? {
+                            mode: partEd.mode,
+                            outline: partEd.outline,
+                            edgeCurves: partEd.edgeCurves,
+                            lockedEdges: partEd.lockedEdges,
+                            selected: partEd.selected,
+                            onSelect: (r: SelectedRef | null) => partEd.setSelected(r ? [r] : []),
+                            onToggleSelect: partEd.toggleSelected,
+                            onSelectMany: partEd.selectMany,
+                            onAddVertex: partEd.addVertex,
+                            onCloseOutline: closeDrawn,
+                            onCancelDraw: cancelDrawing,
+                            openEdges: drawingPart.open ? [partEd.outline.length - 1] : undefined,
+                            onMoveVertex: partEd.moveVertex,
+                            onMoveWall: partEd.moveWall,
+                            onMoveWallHandle: partEd.moveWallHandle,
+                            onMoveSelection: partEd.moveSelection,
+                            onToggleWallLock: partEd.toggleWallLock,
+                            cursor: "default",
+                            onCanvasClick: () => {},
+                            onMarquee: undefined,
+                            onCommit: partEd.commit,
+                            canUndo: partEd.canUndo,
+                            canRedo: partEd.canRedo,
+                            onUndo: partEd.undo,
+                            onRedo: partEd.redo,
+                          }
+                        : undefined
+                    }
                     itemHeightMm={draft.dimensions.heightMm ?? 0}
                     itemStyle={draft.appearance?.style}
                     selected={selected}
@@ -2981,7 +3240,10 @@ export function AppearanceModal({
                           <>
                             <QuickNumber min={0} label={base.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={mmToCm(base.widthMm ?? 0)} onChange={(v) => setBase({ widthMm: Math.round(v * 10) })} />
                             <QuickUnit>×</QuickUnit>
-                            {base.shape === "line" ? (
+                            {base.plane === "front" ? (
+                              // A front base: its width, its thickness, and its face's height is the item's.
+                              <QuickNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(base.thicknessMm ?? FRONT_THICK_MM) / 10} onChange={(v) => setBase({ thicknessMm: Math.max(1, Math.round(v * 10)) })} />
+                            ) : base.shape === "line" ? (
                               <QuickNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(base.depthMm ?? 0) / 10} onChange={(v) => setBase({ depthMm: Math.max(1, Math.round(v * 10)) })} />
                             ) : (
                               <QuickNumber min={0} label="עומק (ס״מ)" value={mmToCm(base.depthMm ?? 0)} onChange={(v) => setBase({ depthMm: Math.round(v * 10) })} />

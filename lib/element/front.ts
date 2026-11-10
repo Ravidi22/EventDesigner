@@ -12,7 +12,7 @@
 // face is cut to bend it, and the front-only presets (a wave, a petal).
 //
 // Pure. Run: npm run check:front
-import { FRONT_BEND_MAX_DEG, FRONT_THICK_MM, type Product, type ShapePart } from "@/lib/catalog/types";
+import { FRONT_BEND_MAX_DEG, FRONT_THICK_MM, usesDiameter, type Product, type ShapePart } from "@/lib/catalog/types";
 import { frontBand, frontBandOffset, frontFace, footprintBounds, placedPartOutline, placedPartOutlines, resolveFootprint, rowShapeDims, sampledBounds } from "@/lib/studio/footprint";
 import type { EdgeCurve, Point } from "@/lib/studio/hall";
 import { isMain } from "../self-check";
@@ -81,6 +81,59 @@ export function clipSlab(polygon: readonly Point[], a: number, b: number): Point
   };
   const lo = clip(polygon, (p) => p.x >= a, a);
   return lo.length ? clip(lo, (p) => p.x <= b, b) : [];
+}
+
+// ── Editing a front shape ───────────────────────────────────────────────────────────────────────
+
+/** A front shape bent to `bendDeg` without moving its MIDDLE: a shape's place is its band's box
+ *  centre, which slides as the arc deepens, so the place is moved by the difference — the panel
+ *  bends about the point of its mid-line it is held by. */
+export function bendKeepingMiddle(s: ShapePart, bendDeg: number): Partial<ShapePart> {
+  const bend = Math.max(-FRONT_BEND_MAX_DEG, Math.min(FRONT_BEND_MAX_DEG, Math.round(bendDeg)));
+  const W = frontFace(s.shape, s).w;
+  const t = s.thicknessMm ?? FRONT_THICK_MM;
+  const before = panelPoint(0, 0, W, t, s.bendDeg ?? 0);
+  const after = panelPoint(0, 0, W, t, bend);
+  const r = ((s.rotation || 0) * Math.PI) / 180;
+  const dx = before.x - after.x;
+  const dy = before.y - after.y;
+  return {
+    bendDeg: bend || undefined,
+    x: Math.round(s.x + dx * Math.cos(r) - dy * Math.sin(r)),
+    y: Math.round(s.y + dx * Math.sin(r) + dy * Math.cos(r)),
+  };
+}
+
+/** A plan shape stood up on the front plane ("העמדה בחזית"): its outline becomes its face, its height
+ *  (else the item's) the face's height, 2 cm thick, at its own z; what a front shape does not take
+ *  (a body of revolution, a pin, a repeat) goes. A round one keeps its diameter. */
+export function toFront(s: ShapePart, itemHeightMm: number): ShapePart {
+  const rise = s.heightMm ?? itemHeightMm;
+  return {
+    ...s,
+    plane: "front",
+    ...(s.shape === "custom" || usesDiameter(s.shape) ? {} : { depthMm: rise }),
+    thicknessMm: FRONT_THICK_MM,
+    heightMm: undefined,
+    revolve: undefined,
+    pin: undefined,
+    repeat: undefined,
+  };
+}
+
+/** A front shape laid back on the plan ("החזרה לתוכנית"): as deep as it was thick, as tall as its
+ *  face, at its own z. */
+export function toPlan(s: ShapePart): ShapePart {
+  const face = frontFace(s.shape, s);
+  return {
+    ...s,
+    plane: undefined,
+    ...(s.shape === "custom" || usesDiameter(s.shape) ? {} : { depthMm: s.thicknessMm ?? FRONT_THICK_MM }),
+    heightMm: Math.round(face.h),
+    thicknessMm: undefined,
+    bendDeg: undefined,
+    faceTurnDeg: undefined,
+  };
 }
 
 // ── The front-only presets (the חזית rail's גל and עלה) ─────────────────────────────────────────
@@ -223,6 +276,24 @@ if (isMain(import.meta.url)) {
     assert(near(Math.max(...half.map((p) => p.x)) - Math.min(...half.map((p) => p.x)), 10), "a slab clip keeps x ∈ [a, b]");
     assert(clipSlab(sq, 30, 40).length === 0, "…and nothing outside it");
     assert([300, -300, 1].every((b) => Number.isFinite(panelPoint(W / 2, -10, 100, 5000, b).x) && Number.isFinite(panelPoint(W / 2, -10, 100, 5000, b).y)), "extreme bends are finite");
+    // ── Bending about the middle, and turning a shape between the plan and the front ─────────────
+    const s1: ShapePart = { id: "s", plane: "front", shape: "rect", widthMm: 3000, depthMm: 2000, thicknessMm: 20, x: 200, y: -300, rotation: 30, zMm: 0 };
+    const midOf = (s: ShapePart) => {
+      const pp = panelPoint(0, 0, 3000, 20, s.bendDeg ?? 0);
+      const t = ((s.rotation || 0) * Math.PI) / 180;
+      return { x: s.x + pp.x * Math.cos(t) - pp.y * Math.sin(t), y: s.y + pp.x * Math.sin(t) + pp.y * Math.cos(t) };
+    };
+    const bentS = { ...s1, ...bendKeepingMiddle(s1, 120) };
+    assert(bentS.bendDeg === 120 && near(midOf(bentS).x, midOf(s1).x, 1) && near(midOf(bentS).y, midOf(s1).y, 1), "bending keeps the panel's middle where it was");
+    const backS = { ...bentS, ...bendKeepingMiddle(bentS, 0) };
+    assert(near(backS.x, s1.x, 1) && near(backS.y, s1.y, 1) && !backS.bendDeg, "…and straightening brings it back");
+    const plan: ShapePart = { id: "q", shape: "rect", widthMm: 3000, depthMm: 600, x: 0, y: 0, rotation: 0, zMm: 900, heightMm: 1500, repeat: { along: "corners" } };
+    const asFront = toFront(plan, 1100);
+    assert(asFront.plane === "front" && asFront.widthMm === 3000 && asFront.depthMm === 1500 && asFront.thicknessMm === FRONT_THICK_MM && asFront.zMm === 900 && asFront.heightMm === undefined && asFront.repeat === undefined, "a plan shape stood up: its height its face's, 2 cm thick, at its z");
+    const asPlan = toPlan(asFront);
+    assert(asPlan.plane === undefined && asPlan.widthMm === 3000 && asPlan.depthMm === FRONT_THICK_MM && asPlan.heightMm === 1500 && asPlan.thicknessMm === undefined, "…and laid back down: as deep as it was thick, as tall as its face");
+    assert(toFront({ ...plan, heightMm: undefined }, 1100).depthMm === 1100, "a plan shape with no height of its own stands as tall as the item");
+
     // ── The presets ──────────────────────────────────────────────────────────────────────────────
     const wave = waveOutline(3000, 1200, 3);
     const wb = sampledBounds([wave]);
