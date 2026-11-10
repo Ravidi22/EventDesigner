@@ -32,6 +32,10 @@ export interface PanelGroup {
   body: ReactNode;
 }
 
+/** A group in one line — key, icon, title, summary, body, and whether it warns. The studio's
+ *  selection groups and the fill tool's are written with it (imported as `G`). */
+export const panelGroup = (key: string, icon: LucideIcon, title: string, summary: ReactNode, body: ReactNode, warn = false): PanelGroup => ({ key, icon, title, summary, body, warn });
+
 const CHANGE_EVENT = "eve:end-panel-change";
 
 /** The device's open/closed preference as an external store: read straight from storage, told of a

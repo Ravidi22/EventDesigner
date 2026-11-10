@@ -107,7 +107,7 @@ import { MIN_EDGE_ITEM_MM, isRoundPiece, isShapedPiece, pieceOutline, placeEdgeI
 /** The room as a frame: what a stage's pieces are carried into to stand in room coordinates
  *  (the fill tool keeps its hand-placed decks there, see StageFillState.pieces). */
 const ROOM_FRAME: Frame = { position: { x: 0, y: 0 }, rotation: 0 };
-import { StageDrawBar, StageFillPanel, sameDeckRef, type DeckAction, type DeckRef, type PickedDeck, type StageFillState } from "./stage-fill-panel";
+import { StageDrawBar, StageFillPanel, sameDeckRef, type DeckAction, type DeckRef, type PickedDeck, type StageFillPanelProps, type StageFillState } from "./stage-fill-panel";
 import { boundsOf, deckBox, snapDeck } from "@/lib/studio/deck-move";
 import { catalogBox, clampSize, footprintBounds, resizeAxes, resizeSpecOf, sizedFootprint } from "@/lib/studio/footprint";
 import { chipBox, dressBlockOf, dressingSpots, tableBlock, tableBox, tableFootprint, tableUnder } from "@/components/footprint-shape";
@@ -150,6 +150,7 @@ import { ScenePreview } from "./scene-preview";
 import { EndPanel, PanelGroups, PanelList, PanelListFolded, PanelListHeading, PanelListRow, type PanelGroup } from "@/components/end-panel";
 import { Note } from "@/components/inspector-bar";
 import { listCrumb, planListRows, type PlanListRow } from "@/lib/studio/plan-list";
+import { groupMemory } from "@/lib/studio/panel-groups";
 import { clearanceRows, missingRows, type CheckRow } from "@/lib/studio/plan-checks";
 import { missingByShape } from "@/lib/design-document/stage";
 import { pieceName } from "@/lib/studio/stage-rim";
@@ -2790,16 +2791,16 @@ export function StudioScreen({
     },
     [stageShape, stageLayout],
   );
-  /** A deck clicked: picked, or — picked already — let go of. Null clears the pick. */
-  const pickDeck = useCallback(
-    (ref: DeckRef | null) =>
-      setStageFill((cur) => {
-        if (cur?.phase !== "pick") return cur;
-        const { picked: _was, ...rest } = cur;
-        return ref === null || sameDeckRef(cur.picked, ref) ? rest : { ...rest, picked: ref };
-      }),
-    [],
-  );
+  /** A deck clicked: picked, or — picked already — let go of. Null clears the pick. A pick opens the
+   *  end panel's ״פלטה״ group, where its verbs are (the chip it replaced was in view in the bar). */
+  const pickDeck = useCallback((ref: DeckRef | null) => {
+    if (ref) groupMemory.open("studio:fill", "deck");
+    setStageFill((cur) => {
+      if (cur?.phase !== "pick") return cur;
+      const { picked: _was, ...rest } = cur;
+      return ref === null || sameDeckRef(cur.picked, ref) ? rest : { ...rest, picked: ref };
+    });
+  }, []);
   /** The deck's right-click menu: the bar's verbs, the sizes as a submenu. */
   const deckMenu = useCallback(
     (ref: DeckRef): ContextMenuItem[] => {
@@ -4291,7 +4292,8 @@ export function StudioScreen({
   // The list folds to one line while something is selected (the selection's groups go under it);
   // its folded row unfolds it for THAT selection, and a new pick folds it again (halls' pattern).
   const [unfoldedFor, setUnfoldedFor] = useState<SelectionRef[] | null>(null);
-  const listOpen = selected.length === 0 || unfoldedFor === selected;
+  // While the fill tool has an area (its groups take the panel), the list folds as for a selection.
+  const listOpen = (selected.length === 0 && stageFill?.phase !== "pick") || unfoldedFor === selected;
   const selectedKeys = useMemo(() => new Set(selected.map((r) => `${r.kind}:${r.id}`)), [selected]);
 
   const changeQuantity = (id: string, delta: number) => {
@@ -5512,6 +5514,26 @@ export function StudioScreen({
   // While the stage fill tool is out its own bars take the dock (StageDrawBar, StageFillPanel), and
   // the selection's groups stand down with the selection's bar.
   const fillToolOut = (stageFill?.phase === "draw" && stageTool?.kind !== "level") || stageFill?.phase === "pick";
+  // The fill tool's pick phase is, like the selection, ONE component rendered twice over ONE object:
+  // its quick bar in the dock, its groups in the end panel (in place of the selection's).
+  const fillProps: StageFillPanelProps | null =
+    stageFill?.phase === "pick"
+      ? {
+          state: stageFill,
+          types: deckTypes,
+          layout: stageLayout,
+          onChange: setStageFill,
+          overlaps: stageShape?.overlaps ?? false,
+          onRedraw: () => setStageFill((cur) => ({ phase: "draw", chosen: cur?.chosen, editing: cur?.editing, shape: cur?.shape, pieces: cur?.pieces })),
+          onResize: resizeStageArea,
+          onCommit: commitStageFill,
+          picked: pickedDeck,
+          pinnedCount: stageFill.pieces?.length ?? 0,
+          onDeck: (action) => deckAction(action),
+          onAddPieces: (infos) => void addStagePieces(infos),
+          onClose: () => setStageFill(null),
+        }
+      : null;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -5843,22 +5865,8 @@ export function StudioScreen({
                   onRemoveTemplate={(id) => void removeTemplate(id)}
                   onClose={() => setStageFill(null)}
                 />
-              ) : stageFill?.phase === "pick" ? (
-                <StageFillPanel
-                  state={stageFill}
-                  types={deckTypes}
-                  layout={stageLayout}
-                  onChange={setStageFill}
-                  overlaps={stageShape?.overlaps ?? false}
-                  onRedraw={() => setStageFill((cur) => ({ phase: "draw", chosen: cur?.chosen, editing: cur?.editing, shape: cur?.shape, pieces: cur?.pieces }))}
-                  onResize={resizeStageArea}
-                  onCommit={commitStageFill}
-                  picked={pickedDeck}
-                  pinnedCount={stageFill.pieces?.length ?? 0}
-                  onDeck={(action) => deckAction(action)}
-                  onAddPieces={(infos) => void addStagePieces(infos)}
-                  onClose={() => setStageFill(null)}
-                />
+              ) : fillProps ? (
+                <StageFillPanel part="bar" {...fillProps} />
               ) : (
               <Inspector part="bar" {...inspectorProps} />
               )}
@@ -5955,7 +5963,7 @@ export function StudioScreen({
                 {stageFill.smooth?.length
                   ? "הקו הרציף הוא חזית הבמה · לשינוי הצורה — ״סימון מחדש״, ואחרי ההוספה — הרוחב והעומק בסרגל הבמה, או הידיות"
                   : stageShape?.shapedOutline
-                    ? "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · הרדיוס והקימור נקבעים ב״פינות״ בסרגל; רדיוס 0 וחזית 0 מחזירים את ידיות הפינות"
+                    ? "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · הרדיוס והקימור נקבעים ב״פינות״ בלוח שבצד; רדיוס 0 וחזית 0 מחזירים את ידיות הפינות"
                     : "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · גררו פינה או צד לשינוי הצורה · גררו פלטה למקומה, לחצו עליה להחלפה או סיבוב · Shift שומר על זוויות ישרות · לחיצה כפולה על צד מפצלת אותו, על פינה מוחקת אותה · Alt בלי הצמדה"}
               </HintPill>
             )}
@@ -6091,7 +6099,7 @@ export function StudioScreen({
               icon={Layers}
               title="בתוכנית"
               count={planTotal}
-              crumb={listCrumb(planRows, selected)}
+              crumb={fillProps ? (fillProps.state.editing ? "עריכת במה" : "מילוי במות") : listCrumb(planRows, selected)}
               badge={
                 checkRows.length > 0 ? (
                   <span title={`בדיקות: ${checkRows.length}`} className="nums inline-flex shrink-0 items-center gap-0.5 rounded-pill bg-warn-tint px-1.5 text-[11px] font-bold text-warn-ink">
@@ -6103,13 +6111,16 @@ export function StudioScreen({
               onOpen={() => setUnfoldedFor(selected)}
             />
           )}
+          {/* The fill tool with its area drawn: its groups, in place of the selection's and the
+              sketch's own, under the folded list — the same props as its quick bar. */}
+          {fillProps && <StageFillPanel part="groups" {...fillProps} />}
           {/* The selection's groups — every field it has, under the folded list (or, with a zone or a
               layer scope and nothing selected, the scope's). The same props as the quick bar. */}
           {!fillToolOut && (selected.length > 0 || !!focusZoneId || activeLayer !== null) && <Inspector part="groups" {...inspectorProps} />}
           {/* Nothing selected: the sketch's own groups — who it seats, what is wrong with it, how its
               tables are numbered, the saved sketches, and what this event took out of the venue. The
               selection's groups (they arrive with the quick bar) take this place otherwise. */}
-          {selected.length === 0 && (
+          {selected.length === 0 && !fillProps && (
             <PanelGroups
               kind="studio:none"
               title="הסקיצה"

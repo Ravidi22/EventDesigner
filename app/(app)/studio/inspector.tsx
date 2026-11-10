@@ -64,7 +64,6 @@ import {
   Zap,
   Sailboat,
   Waves,
-  type LucideIcon,
 } from "lucide-react";
 import type { MirrorAxis } from "@/lib/design-document/mirror";
 import type { Product, ResizeSpec } from "@/lib/catalog/types";
@@ -106,7 +105,7 @@ import {
 } from "@/lib/venues/climb";
 import { SeatSidesPicker } from "@/components/seat-sides-picker";
 import { Bar, BarButton, ModeVerb, Note, PanelRow, QuickLead, QuickNumber, QuickSep, QuickTail, QuickTurn, QuickUnit, ltr } from "@/components/inspector-bar";
-import { PanelGroups, PanelListRow, PickRow, type PanelGroup } from "@/components/end-panel";
+import { PanelGroups, PanelListRow, PickRow, panelGroup as G, type PanelGroup } from "@/components/end-panel";
 import type { ElementStyle } from "@/lib/element-style";
 import type { FeatureKind, VenueStructure } from "@/lib/venues/structure";
 import { FEATURE_KIND_LABEL } from "@/lib/venues/structure";
@@ -2634,8 +2633,6 @@ export function Inspector({
     ["seating", "cloth"],
   );
 }
-
-const G = (key: string, icon: LucideIcon, title: string, summary: ReactNode, body: ReactNode, warn = false): PanelGroup => ({ key, icon, title, summary, body, warn });
 
 /** "#4", or "ללא מספור" — a table's (or a block's) ״שולחן״ group read back. */
 function numberSummary(number: number, unnumbered: boolean): ReactNode {
