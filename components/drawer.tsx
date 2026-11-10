@@ -29,6 +29,7 @@ import { CloseButton } from "./close-button";
 export function Drawer({
   title,
   titleAside,
+  subtitle,
   onClose,
   closeLabel = "סגירה",
   actions,
@@ -38,6 +39,10 @@ export function Drawer({
   /** Something that belongs right after the title rather than at the far end — the product drawer's
    *  category pill ("מוצר חדש [שולחנות ▾]"). The title then takes only its own width. */
   titleAside?: ReactNode;
+  /** A line of facts under the title — the event drawer's "חתונה · יום ה׳ 12 בנוב׳ · 240 אורחים", so
+   *  the header says WHICH wedding before anything is read (2026-11-10, the board's 3b). A drawer
+   *  with one becomes a two-line header: a little tighter, its title bold over its facts. */
+  subtitle?: ReactNode;
   /** Fired by Esc and by the header's close button — the caller unmounts the drawer. */
   onClose: () => void;
   closeLabel?: string;
@@ -71,8 +76,20 @@ export function Drawer({
       className="drawer fixed m-0 w-full max-w-md overflow-hidden rounded-md bg-bg text-ink shadow-floating"
     >
       <div className="flex h-full flex-col">
-        <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-surface px-5 py-3.5">
-          {titleAside ? (
+        <header
+          className={
+            "flex shrink-0 items-center justify-between gap-2 border-b border-border bg-surface px-5 " + (subtitle ? "py-3" : "py-3.5")
+          }
+        >
+          {subtitle ? (
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <h2 className="min-w-0 shrink truncate whitespace-nowrap text-base font-bold">{title}</h2>
+                {titleAside}
+              </div>
+              <p className="nums truncate text-xs text-muted">{subtitle}</p>
+            </div>
+          ) : titleAside ? (
             <>
               <h2 className="min-w-0 shrink truncate whitespace-nowrap text-base font-semibold">{title}</h2>
               {titleAside}

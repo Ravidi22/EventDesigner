@@ -41,7 +41,8 @@ function waNumber(phone: string): string | null {
   return digits;
 }
 
-export function ClientAccessCard({ event }: { event: EventSummary }) {
+/** `bare`: the content alone, inside the event drawer's "שיתוף עם הלקוח" fold (DrawerSection). */
+export function ClientAccessCard({ event, bare }: { event: EventSummary; bare?: boolean }) {
   const [clients, setClients] = useState<EventClientRow[] | null>(null);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState(event.contactName || event.clientName);
@@ -96,7 +97,7 @@ export function ClientAccessCard({ event }: { event: EventSummary }) {
   };
 
   return (
-    <DrawerSection title="שיתוף הסקיצה עם הלקוח">
+    <DrawerSection title="שיתוף הסקיצה עם הלקוח" bare={bare}>
         {invite && (
           <InviteLink key={invite.url} invite={invite} eventId={event.id} phone={event.phone} emailEnabled={emailEnabled} onDone={() => setInvite(null)} />
         )}

@@ -1,5 +1,6 @@
 "use client";
-// Which event THIS DEVICE currently has open. That is all that is left here.
+// Which event THIS DEVICE currently has open — and, since 2026-11-10, which of the event drawer's
+// folds it keeps open. Both are per-device UI positions; nothing else is left here.
 //
 // The events themselves moved to Postgres (lib/events/actions.ts) — the list, the details, the
 // meeting-flow progress. What stayed is the pointer, and it stayed for the same reason the active
@@ -58,4 +59,73 @@ export function clearActiveEventId(): void {
  */
 export function activeEvent(): Promise<EventSummary | null> {
   return fetchActiveEvent(loadActiveEventId());
+}
+
+// --- the event drawer's folds (app/(app)/dashboard/event-detail-drawer.tsx) ------------------------
+//
+// Which of the drawer's folded groups (פגישות, שיתוף עם הלקוח, הצעת מחיר ותשלומים, הפקה) this device
+// keeps open. A UI preference like the end panel's, never data: the laptop that lives in the billing
+// fold finds it open on the next event, the phone that only reads the diary keeps that — and nothing
+// is stored per event, because a fold opened on one wedding is wanted open on the next.
+
+export type DrawerFolds = Readonly<Record<string, boolean>>;
+
+const FOLDS_KEY = storageKey("drawer-folds");
+const FOLDS_CHANGED = "eve:drawer-folds-change";
+
+/** What a device that never folded anything sees: the diary open, the rest folded (the board, 3b). */
+export const DEFAULT_DRAWER_FOLDS: DrawerFolds = { meetings: true };
+
+// The last raw value read and what it parsed to, so a read returns the SAME object until storage
+// changes (a stable snapshot for useSyncExternalStore). Also what a toggle lands in when storage
+// refuses the write — a private window keeps its folds for the tab rather than refusing to open one.
+let foldsSeen: string | null | undefined;
+let folds: DrawerFolds = DEFAULT_DRAWER_FOLDS;
+
+function parseFolds(raw: string | null): DrawerFolds {
+  if (!raw) return DEFAULT_DRAWER_FOLDS;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return DEFAULT_DRAWER_FOLDS;
+    return Object.fromEntries(Object.entries(value).filter(([, open]) => typeof open === "boolean"));
+  } catch {
+    return DEFAULT_DRAWER_FOLDS;
+  }
+}
+
+export function loadDrawerFolds(): DrawerFolds {
+  if (typeof window === "undefined") return DEFAULT_DRAWER_FOLDS;
+  try {
+    const raw = window.localStorage.getItem(FOLDS_KEY);
+    if (raw !== foldsSeen) {
+      foldsSeen = raw;
+      folds = parseFolds(raw);
+    }
+  } catch {
+    // Storage refused the read: what this tab toggled, from memory.
+  }
+  return folds;
+}
+
+export function setDrawerFold(key: string, open: boolean): void {
+  if (typeof window === "undefined") return;
+  folds = { ...loadDrawerFolds(), [key]: open };
+  try {
+    const raw = JSON.stringify(folds);
+    window.localStorage.setItem(FOLDS_KEY, raw);
+    foldsSeen = raw;
+  } catch {
+    // A blocked or full store loses the preference at the next visit, not the fold now.
+  }
+  window.dispatchEvent(new Event(FOLDS_CHANGED));
+}
+
+/** Told of a toggle in this tab (our event) or another tab (`storage`). */
+export function subscribeDrawerFolds(onChange: () => void): () => void {
+  window.addEventListener(FOLDS_CHANGED, onChange);
+  window.addEventListener("storage", onChange);
+  return () => {
+    window.removeEventListener(FOLDS_CHANGED, onChange);
+    window.removeEventListener("storage", onChange);
+  };
 }
