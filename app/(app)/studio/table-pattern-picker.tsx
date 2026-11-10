@@ -5,7 +5,7 @@ import type { DesignTable } from "@/lib/design-document/types";
 import { PATTERN_HALVES, PATTERN_HINT, PATTERN_LABEL, patternTables, type PatternTable, type TablePattern } from "@/lib/studio/table-patterns";
 import { FootprintShape, tableBox, tableFootprint } from "@/components/footprint-shape";
 import { MIRROR_TRANSFORM } from "@/lib/design-document/mirror";
-import { Segmented } from "@/components/segmented";
+import { Segmented, segmentClass } from "@/components/segmented";
 import { Button } from "@/components/button";
 import { fieldLabelClassName } from "@/components/control";
 import { SwatchPicker } from "@/components/swatch-field";
@@ -124,7 +124,9 @@ export function TablePatternPicker({
     <div className="space-y-3">
       <div>
         <span className={fieldLabelClassName}>על אילו שולחנות</span>
-        <div className="grid grid-cols-2 gap-1" role="group" aria-label="דפוס">
+        {/* The board's segmented look (components/segmented.tsx — the user's note 4: every toggle in the
+            panel), in two columns: a hairline frame, the chosen pattern in the accent wash. */}
+        <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-surface p-0.5" role="group" aria-label="דפוס">
           {patterns.map((p) => {
             const disabled = p === "selected" && selectedKeys.filter((k) => k !== sourceKey).length === 0;
             return (
@@ -134,10 +136,7 @@ export function TablePatternPicker({
                 aria-pressed={pattern === p}
                 disabled={disabled}
                 onClick={() => setPattern(p)}
-                className={
-                  "rounded-sm px-2 py-1.5 text-xs font-semibold leading-snug transition-colors disabled:cursor-not-allowed disabled:opacity-40 " +
-                  (pattern === p ? "bg-accent text-canvas" : "bg-inset text-ink-soft hover:bg-accent-tint hover:text-accent")
-                }
+                className={segmentClass(pattern === p, false) + " disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink-soft"}
               >
                 {PATTERN_LABEL[p]}
               </button>
