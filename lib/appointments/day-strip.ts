@@ -62,7 +62,9 @@ const overlaps = (s: number, e: number, item: DayItem) => s < item.end && item.s
  *  exactly when the slot starts is not in its way. */
 export function overlapOf(start: number, durationMin: number, items: DayItem[]): DayItem | null {
   const end = start + Math.max(durationMin, 1);
-  return items.find((it) => overlaps(start, end, it)) ?? null;
+  // An all-day entry holds the whole DAY, not just the strip's window: a 20:00 meeting on a
+  // vacation day still lands on it.
+  return items.find((it) => it.allDay || overlaps(start, end, it)) ?? null;
 }
 
 /** Up to `max` hours the slot could move to instead: the moments something on the day ENDS, from
@@ -122,6 +124,7 @@ if (isMain(import.meta.url)) {
   const vacation = [item("v", "08:00", "20:00", { allDay: true })];
   assert(overlapOf(600, 60, vacation)?.id === "v", "an all-day vacation is in the way of anything");
   assert(same(freeStarts(600, 60, vacation), []), "and leaves no free hour");
+  assert(overlapOf(1200, 60, vacation)?.id === "v" && overlapOf(420, 30, vacation)?.id === "v", "even outside 08:00–20:00");
 
   const base = { phone: "", note: "", createdAt: 0, durationMin: 60 } as const;
   const list: Appointment[] = [

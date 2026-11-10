@@ -33,8 +33,9 @@ export function EventDeleteDialog({
   const flow = useMeetingFlow();
   // Keyed on the event it was read for, so a second question never shows the first one's counts
   // while its own are in the air.
-  const [read, setRead] = useState<{ id: string; footprint: EventFootprint } | null>(null);
+  const [read, setRead] = useState<{ id: string; footprint: EventFootprint | null } | null>(null);
   const [marking, setMarking] = useState(false);
+  const [markError, setMarkError] = useState<{ id: string; text: string } | null>(null);
   const id = event?.id;
 
   useEffect(() => {
@@ -42,13 +43,16 @@ export function EventDeleteDialog({
     let live = true;
     fetchEventFootprint(id)
       .then((footprint) => live && setRead({ id, footprint }))
-      .catch(() => {});
+      // A read that failed is SAID (null), never left as a skeleton with the delete on offer.
+      .catch(() => live && setRead({ id, footprint: null }));
     return () => {
       live = false;
     };
   }, [id]);
 
-  const footprint = read && read.id === id ? read.footprint : null;
+  const settled = !!read && read.id === id;
+  const footprint = settled ? read.footprint : null;
+  const failed = settled && !footprint;
   const refused = !!footprint && footprint.billingDocuments > 0;
   const offerLost = !!event && !event.lostAt && !event.archived;
 
@@ -59,8 +63,11 @@ export function EventDeleteDialog({
   const markLost = async () => {
     if (marking) return;
     setMarking(true);
+    setMarkError(null);
     try {
       await onMarkLost();
+    } catch {
+      if (id) setMarkError({ id, text: "לא ניתן לסמן כרגע — נסו שוב." });
     } finally {
       setMarking(false);
     }
@@ -74,7 +81,9 @@ export function EventDeleteDialog({
       facts={facts}
       confirmLabel="מחיקה לצמיתות"
       confirmIcon={Trash2}
-      hideConfirm={refused}
+      // Not offered until the counts are in: an event with billing documents cannot be deleted, and
+      // the question must not offer what the server will refuse (or what nobody has read yet).
+      hideConfirm={!footprint || refused}
       onConfirm={onConfirm}
       onClose={onClose}
       body={
@@ -86,7 +95,13 @@ export function EventDeleteDialog({
           ) : (
             <div className="flex flex-col gap-2 rounded-md border border-inset-border bg-inset px-3.5 py-3 text-[13px]">
               <span className="text-xs font-semibold text-alert-ink">נמחק לצמיתות</span>
-              {footprint ? <Gone footprint={footprint} /> : <Loading />}
+              {footprint ? (
+                <Gone footprint={footprint} />
+              ) : failed ? (
+                <span className="text-ink-soft">לא ניתן לבדוק כרגע מה שמור באירוע — סגרו ונסו שוב.</span>
+              ) : (
+                <Loading />
+              )}
               {footprint && footprint.expenses > 0 && (
                 <span className="nums mt-1 border-t border-inset-border pt-2 text-xs text-ink-soft">
                   נשמרות: {footprint.expenses === 1 ? "הוצאה אחת שנרשמה" : `${footprint.expenses} הוצאות שנרשמו`}, בלי שיוך לאירוע.
@@ -106,6 +121,11 @@ export function EventDeleteDialog({
                 {marking ? "מסמן…" : "סימון כלא נסגר"}
               </button>
             </div>
+          )}
+          {markError && markError.id === id && (
+            <p role="alert" className="text-xs font-medium text-alert-ink">
+              {markError.text}
+            </p>
           )}
         </>
       }

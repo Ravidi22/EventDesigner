@@ -80,13 +80,17 @@ export function DashboardScreen({
   const [linkedId, setLinkedId] = useState(initialEventId);
   if (initialEventId !== linkedId) {
     setLinkedId(initialEventId);
-    if (initialEventId && events.some((e) => e.id === initialEventId)) setSelectedId(initialEventId);
+    // Against the FRESH server list: `events` is reseeded from it in this same pass, so an event
+    // created since this tab loaded is not in it yet — and the drawer would never open.
+    if (initialEventId && initialEvents.some((e) => e.id === initialEventId)) setSelectedId(initialEventId);
   }
   // Closing a drawer a link opened takes `?event=` off the address. Otherwise the prop never changes
   // again, and the same link pressed a second time would open nothing; a reload would also reopen it.
-  const closeDrawer = () => {
+  // NOT when the drawer closes because it is navigating away (המשך, סטודיו, a review): a second
+  // navigation discards the one in flight, and every way out of a linked drawer led back here.
+  const closeDrawer = (reason?: "navigate") => {
     setSelectedId(null);
-    if (initialEventId) router.replace("/dashboard", { scroll: false });
+    if (initialEventId && reason !== "navigate") router.replace("/dashboard", { scroll: false });
   };
   // The details form, opened over the drawer to edit the event in place.
   const [editingEvent, setEditingEvent] = useState<EventSummary | null>(null);
@@ -171,6 +175,11 @@ export function DashboardScreen({
   // when you meet about it.
   const bookForEvent = (e: EventSummary) =>
     setBooking({ editing: null, date: toISODate(new Date()), eventId: e.id });
+  // The event a booking is FOR may not be in the venue's list — a drawer opened from a notification
+  // (`?event=`) can show an event of another venue. The dialog links only to what it is offered, so
+  // that event is offered too, and the meeting takes its venue rather than the sidebar's.
+  const bookingEvent = booking?.eventId ? events.find((e) => e.id === booking.eventId) : undefined;
+  const bookingEvents = bookingEvent && !visibleEvents.includes(bookingEvent) ? [bookingEvent, ...visibleEvents] : visibleEvents;
 
   const confirmDelete = () => {
     const target = deleting;
@@ -233,7 +242,7 @@ export function DashboardScreen({
 
       <EventDetailDrawer
         event={selectedEvent}
-        venueName={activeVenueName}
+        venueName={venues.find((v) => v.id === selectedEvent?.venueId)?.name}
         appointments={selectedEventAppointments}
         onClose={closeDrawer}
         onContinue={openEvent}
@@ -272,8 +281,8 @@ export function DashboardScreen({
         defaultDate={booking?.date ?? ""}
         defaultEventId={booking?.eventId}
         defaultKind={booking?.kind}
-        defaultVenueId={activeVenueId ?? undefined}
-        events={visibleEvents}
+        defaultVenueId={bookingEvent?.venueId ?? activeVenueId ?? undefined}
+        events={bookingEvents}
         appointments={appointments}
         busyOn={(d) => busy.byDate.get(d) ?? []}
         venueName={activeVenueName}

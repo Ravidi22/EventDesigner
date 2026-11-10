@@ -92,7 +92,8 @@ export function EventDetailDrawer({
   /** Every meeting booked against this event, soonest first. A list, not a date: an event normally
    *  collects several (docs/01 §מצב פגישה), which is why `meetingDate` stopped being a column. */
   appointments: Appointment[];
-  onClose: () => void;
+  /** "navigate" when it closes because one of its buttons is leaving the screen. */
+  onClose: (reason?: "navigate") => void;
   /** Opens the event on one of its own surfaces — the meeting flow by default, its studio, outputs
    *  or 3D room from the three buttons under it. All need the same "this device has this event
    *  open" pointer set first, so it is one prop with a destination. */
@@ -172,9 +173,11 @@ export function EventDetailDrawer({
     onEventChanged();
   };
 
+  // "navigate": the screen must not rewrite its own address on this close (dashboard-screen's
+  // closeDrawer) — a second navigation would discard this one.
   const go = (to?: Destination) => {
     onContinue(event, to);
-    onClose();
+    onClose("navigate");
   };
 
   const late = mine?.billing ? lateInstallment(mine.billing.ledger.installments) : undefined;
@@ -215,7 +218,7 @@ export function EventDetailDrawer({
       // The studio opens the review straight from `?review=` (studio-screen.tsx) — on THIS event.
       setActiveEventId(event.id);
       router.push(`/studio?review=${item.proposalId}`);
-      onClose();
+      onClose("navigate");
     } else if (item.kind === "meeting") onOpenAppointment(item.appointment);
     else showBilling();
   };
