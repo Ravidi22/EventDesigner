@@ -128,7 +128,7 @@ import { Frame as RugIcon, Plus } from "lucide-react";
 import { centreOver, hangHeightOf } from "@/lib/studio/hang";
 import { autoStack, floorStack, isStackable, landOnTop, restackTo, type StackBox, type StackEntry, type StackKind, type StackRef } from "@/lib/design-document/stacking";
 import { clipCount, copySelection, heldClip, holdClip, nextPasteStep, pasteInto, type Clip } from "@/lib/studio/clipboard";
-import { hasTextSelection, isShortcut, isTypingTarget } from "@/lib/keyboard";
+import { escapeLeavesField, hasTextSelection, isShortcut, isTypingTarget } from "@/lib/keyboard";
 import { CatalogRail } from "./catalog-rail";
 import { HintPill, HintRow, SavePill, ViewCluster } from "@/components/canvas-chrome";
 import { IconButton } from "@/components/icon-button";
@@ -3526,6 +3526,7 @@ export function StudioScreen({
     if (!placing) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      if (escapeLeavesField(e)) return;
       e.preventDefault();
       e.stopPropagation();
       setPlacing(null);
@@ -3636,6 +3637,8 @@ export function StudioScreen({
       if (e.key !== "Escape") return;
       // A dialog over the plan (the add-product form) owns its own Escape.
       if (e.target instanceof Element && e.target.closest("dialog")) return;
+      // A field in the end panel has the focus: this Escape leaves the field, the arm stays.
+      if (escapeLeavesField(e)) return;
       e.preventDefault();
       e.stopPropagation();
       setArmedId(null);
@@ -4116,6 +4119,7 @@ export function StudioScreen({
     if (stageTool?.kind !== "stair") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      if (escapeLeavesField(e)) return;
       e.preventDefault();
       e.stopPropagation();
       setStageTool(null);
@@ -5076,6 +5080,10 @@ export function StudioScreen({
       // number and pressing Ctrl+Z has to take back the digit, not the whole plan — the field owns
       // its own undo stack and the browser is already about to use it.
       // The fill tool's picked deck takes its keys first (deckKey) — the arrows, R, Ctrl+D, Delete.
+      if (e.key === "Escape" && escapeLeavesField(e)) {
+        // Field-first: with a field focused, Escape leaves the field and nothing behind it.
+        return;
+      }
       if (!typing && deckKey(e)) {
         e.preventDefault();
       } else if (mod && !typing && isShortcut(e, "z")) {
@@ -5094,6 +5102,11 @@ export function StudioScreen({
       } else if (mod && !typing && isShortcut(e, "v")) {
         e.preventDefault();
         paste();
+      } else if (mod && !typing && !e.shiftKey && !e.altKey && isShortcut(e, "d")) {
+        // The quick bar's copy button, on the keyboard (after deckKey, so a picked deck in the
+        // fill tool still takes its own Ctrl+D). The browser would bookmark the page.
+        e.preventDefault();
+        if (docRefs(selected).length > 0) duplicate();
       } else if (mod && !typing && isShortcut(e, "g")) {
         e.preventDefault();
         if (e.shiftKey) ungroupSelection();
@@ -5145,7 +5158,7 @@ export function StudioScreen({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [deleteSelection, copy, cut, paste, groupAny, ungroupSelection, selectAll, restack, selected, docRefs, toggleLock, activeEdge, removeStair, stageFill, deckKey, pickDeck, dressing, nudgeDressing, backToGroup]);
+  }, [deleteSelection, copy, cut, paste, duplicate, groupAny, ungroupSelection, selectAll, restack, selected, docRefs, toggleLock, activeEdge, removeStair, stageFill, deckKey, pickDeck, dressing, nudgeDressing, backToGroup]);
 
   // --- the right-click menu ------------------------------------------------------------------------
   // The same verbs the bar offers, where the pointer already is. The menu is built the instant the
@@ -5795,54 +5808,6 @@ export function StudioScreen({
               }}
             />
           )}
-          {/* The table being dressed: how its items stand, and which tables should look like it. */}
-          {dressingTable && (
-            <div className="pointer-events-none absolute inset-x-3 top-3 flex justify-center">
-              <div className="pointer-events-auto flex min-w-0 justify-center">
-                <DressingBar
-                  title={dressingIds.size > 1 ? `עיצוב ${tableLabel(doc, dressingTable)} · שולחן ${blockMemberIndex(doc, dressingTable) + 1} מתוך ${dressingIds.size}` : `עיצוב ${tableLabel(doc, dressingTable)}`}
-                  // What the bar counts, arranges and spreads is the WHOLE block being dressed.
-                  count={[...dressingIds].reduce((n, id) => n + chipsOn(id).length, 0)}
-                  hungCount={[...dressingIds].reduce((n, id) => n + hungOn(id).length, 0)}
-                  selectedCount={
-                    selected.filter((r) => {
-                      if (r.kind !== "placement") return false;
-                      const p = doc.placements.find((x) => x.id === r.id);
-                      return !!p && ((p.layer === "table" && !!p.tableId && dressingIds.has(p.tableId)) || (p.layer === "ceiling" && !!p.over && dressingIds.has(p.over)));
-                    }).length
-                  }
-                  arranged={doc.tables.some((t) => dressingIds.has(t.id) && t.arranged)}
-                  onArrange={arrangeDressed}
-                  onAuto={() => arrangeDressed("auto")}
-                  spread={(() => {
-                    const sel = selected.filter((r) => r.kind === "placement");
-                    const p = sel.length === 1 ? doc.placements.find((x) => x.id === sel[0].id) : undefined;
-                    if (!p) return null;
-                    const overhead = p.layer === "ceiling" && !!p.over && dressingIds.has(p.over);
-                    const onTop = p.layer === "table" && !!p.tableId && dressingIds.has(p.tableId) && resolve(p.variantId)?.anchor !== "table";
-                    if (!overhead && !onTop) return null;
-                    const pool = [...dressingIds].flatMap((id) => (overhead ? hungOn(id) : chipsOn(id)));
-                    const same = pool.filter((x) => x.variantId === p.variantId);
-                    return {
-                      name: resolve(p.variantId)?.product.name ?? "הפריט",
-                      count: same.reduce((n, x) => n + x.quantity, 0),
-                      overhead,
-                      heightMm: hangHeightOf(p, resolve(p.variantId)?.product),
-                      dressed: doc.tables.filter((t) => dressingIds.has(t.id)).reduce((n, t) => n + spotsOn(t).filter((sp) => !sp.runner).length, 0),
-                    };
-                  })()}
-                  onSpread={spreadDressed}
-                  onAbove={(wave) => {
-                    const sel = selected.filter((r) => r.kind === "placement");
-                    if (sel.length === 1) hangOverDressing(sel[0].id, wave);
-                  }}
-                  picker={renderPattern(dressingTable.id)}
-                  designs={renderDesigns(dressingTable.id)}
-                  onClose={() => setDressing(null)}
-                />
-              </div>
-            </div>
-          )}
           {/* The inspector is a BAR along the bottom of the canvas now, centred — the shape the
               venue plan's inspector already has, and the shape that keeps a selection's controls
               from eating a column of the plan. It is centred rather than tucked into a corner
@@ -5908,9 +5873,54 @@ export function StudioScreen({
           {/* Everything that is not a tool and not the selection, in ONE row under the corners'
               line: the standing notices first, then what the armed tool waits for. */}
           <HintRow>
-            {/* While a table is dressed its bar stands at the top (DressingBar, above); the row
-                steps down under it. */}
-            {dressingTable && <div aria-hidden className="h-11 shrink-0" />}
+            {/* The table being dressed: how its items stand, and which tables should look like it.
+                Its bar leads the row (the hint row's own line, top-[68px], centred); the hints and
+                notices stack under it. */}
+            {dressingTable && (
+              <div className="pointer-events-auto flex max-w-full min-w-0 justify-center">
+                <DressingBar
+                  title={dressingIds.size > 1 ? `עיצוב ${tableLabel(doc, dressingTable)} · שולחן ${blockMemberIndex(doc, dressingTable) + 1} מתוך ${dressingIds.size}` : `עיצוב ${tableLabel(doc, dressingTable)}`}
+                  // What the bar counts, arranges and spreads is the WHOLE block being dressed.
+                  count={[...dressingIds].reduce((n, id) => n + chipsOn(id).length, 0)}
+                  hungCount={[...dressingIds].reduce((n, id) => n + hungOn(id).length, 0)}
+                  selectedCount={
+                    selected.filter((r) => {
+                      if (r.kind !== "placement") return false;
+                      const p = doc.placements.find((x) => x.id === r.id);
+                      return !!p && ((p.layer === "table" && !!p.tableId && dressingIds.has(p.tableId)) || (p.layer === "ceiling" && !!p.over && dressingIds.has(p.over)));
+                    }).length
+                  }
+                  arranged={doc.tables.some((t) => dressingIds.has(t.id) && t.arranged)}
+                  onArrange={arrangeDressed}
+                  onAuto={() => arrangeDressed("auto")}
+                  spread={(() => {
+                    const sel = selected.filter((r) => r.kind === "placement");
+                    const p = sel.length === 1 ? doc.placements.find((x) => x.id === sel[0].id) : undefined;
+                    if (!p) return null;
+                    const overhead = p.layer === "ceiling" && !!p.over && dressingIds.has(p.over);
+                    const onTop = p.layer === "table" && !!p.tableId && dressingIds.has(p.tableId) && resolve(p.variantId)?.anchor !== "table";
+                    if (!overhead && !onTop) return null;
+                    const pool = [...dressingIds].flatMap((id) => (overhead ? hungOn(id) : chipsOn(id)));
+                    const same = pool.filter((x) => x.variantId === p.variantId);
+                    return {
+                      name: resolve(p.variantId)?.product.name ?? "הפריט",
+                      count: same.reduce((n, x) => n + x.quantity, 0),
+                      overhead,
+                      heightMm: hangHeightOf(p, resolve(p.variantId)?.product),
+                      dressed: doc.tables.filter((t) => dressingIds.has(t.id)).reduce((n, t) => n + spotsOn(t).filter((sp) => !sp.runner).length, 0),
+                    };
+                  })()}
+                  onSpread={spreadDressed}
+                  onAbove={(wave) => {
+                    const sel = selected.filter((r) => r.kind === "placement");
+                    if (sel.length === 1) hangOverDressing(sel[0].id, wave);
+                  }}
+                  picker={renderPattern(dressingTable.id)}
+                  designs={renderDesigns(dressingTable.id)}
+                  onClose={() => setDressing(null)}
+                />
+              </div>
+            )}
             {/* The event is booked into a property this designer was never granted. The canvas stays
                 usable — items can still be placed and the meeting can go on — but the blank ground
                 under them gets a reason instead of being mistaken for an undrawn hall. The notice is
