@@ -13,7 +13,8 @@ import { Popover } from "@/components/popover";
 // lib/studio/stage-rim.ts): a quarter-round, a deck with a curved side, a triangle. One entry per
 // SHAPE, with how many of it, drawn small so the designer sees what is meant; each one either a
 // piece the catalog already has that this stage was not built from ("להשתמש") or one to add.
-// Shared by the fill tool's bar and the stage's own bar.
+// Shared by the fill tool's bar (a chip) and the stage's end-panel group (`bare`: the same list and
+// verbs, the group being its frame).
 
 /** The shape a missing piece is, small: its outline fitted to a box, as it stands on the stage. */
 function PieceGlyph({ outline }: { outline: Point[] }) {
@@ -47,12 +48,18 @@ function ownedFit(m: MissingPiece, types: readonly DeckType[], chosen: readonly 
 const ellipse = (w: number, d: number): Point[] =>
   Array.from({ length: 48 }, (_, k) => ({ x: (w / 2) * Math.cos((2 * Math.PI * k) / 48), y: (d / 2) * Math.sin((2 * Math.PI * k) / 48) }));
 
+/** "3 פלטות בצורה" — what "חסר בקטלוג" reads back, as a chip's value or a group's summary. */
+export function missingSummary(missing: readonly MissingPiece[]): string {
+  return `${missing.length} ${missing.length === 1 ? "פלטה" : "פלטות"} בצורה`;
+}
+
 export function MissingPieces({
   missing,
   types,
   chosen,
   onUse,
   onAdd,
+  bare,
 }: {
   missing: readonly MissingPiece[];
   /** The catalog's stage pieces, by the variant id a stage stores. */
@@ -63,6 +70,9 @@ export function MissingPieces({
   onUse: (ids: string[]) => void;
   /** Make these pieces catalog rows, chosen for the stage. */
   onAdd: (infos: PieceInfo[]) => void;
+  /** The list and its verbs alone, with no chip around them — an end-panel group's body (the
+   *  group is the frame, its title and summary the chip's label and value). */
+  bare?: boolean;
 }) {
   if (!missing.length) return null;
   const groups = missingByShape(missing).map((g) => {
@@ -70,8 +80,8 @@ export function MissingPieces({
     return { ...g, sample, have: ownedFit(sample, types, chosen) as (DeckType & { name: string }) | undefined };
   });
   const toAdd = groups.filter((g) => !g.have);
-  return (
-    <Popover label="חסר בקטלוג" icon={PackagePlus} tone="warn" value={`${missing.length} ${missing.length === 1 ? "פלטה" : "פלטות"} בצורה`} panelClassName="w-80">
+  const body = (
+    <>
       <ul className="space-y-2">
         {groups.map((g) => (
           <li key={g.shape} className="flex items-center gap-2.5">
@@ -101,6 +111,12 @@ export function MissingPieces({
         קשתות ופינות משופעות נבנות מפלטות בצורה, לא מחיתוך פלטות. מה שחסר מסומן בתוכנית בקו מקווקו; הוספה לקטלוג
         בוחרת את הפלטה לבמה, ואפשר לתת לה מחיר ושם בקטלוג.
       </Note>
+    </>
+  );
+  if (bare) return body;
+  return (
+    <Popover label="חסר בקטלוג" icon={PackagePlus} tone="warn" value={missingSummary(missing)} panelClassName="w-80">
+      {body}
     </Popover>
   );
 }
