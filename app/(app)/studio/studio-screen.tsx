@@ -5358,6 +5358,7 @@ export function StudioScreen({
     onRestack: restack,
     // A block is one table to the seat count's "ל־N שולחנות", as to setSeatsForSelection.
     selectedTables: new Set(selected.filter((r) => r.kind === "table").map((r) => unitOf(units, r.id)?.key ?? r.id)).size,
+    selectedTableIds: selected.filter((r) => r.kind === "table").map((r) => r.id),
     onSeatsForSelection: setSeatsForSelection,
     onChairForSelection: setChairForSelection,
     onChair: (id, variantId) => act({ type: "setTableChair", ids: [id], variantId }),

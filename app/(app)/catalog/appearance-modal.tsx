@@ -1148,7 +1148,7 @@ function PictureFields({
   );
 }
 
-/** The "…" of a shape's bar and of several shapes' — the studio's MoreMenu order: turn it over, then
+/** The "…" of a shape's bar and of several shapes' — the studio's ⋯ order: turn it over, then
  *  where it stands in the stack. */
 function moreItems(onFlip: (axis: FlipAxis) => void, onRestack: (how: "front" | "back") => void): MenuItem[] {
   return [

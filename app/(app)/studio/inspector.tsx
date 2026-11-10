@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   Minus,
   Plus,
@@ -105,9 +105,8 @@ import {
   type ClimbHost,
 } from "@/lib/venues/climb";
 import { SeatSidesPicker } from "@/components/seat-sides-picker";
-import { Actions, Bar, BarButton, ModeVerb, Note, PanelRow, QuickLead, QuickNumber, QuickSep, QuickTail, QuickTurn, QuickUnit, Rotation, ltr } from "@/components/inspector-bar";
+import { Bar, BarButton, ModeVerb, Note, PanelRow, QuickLead, QuickNumber, QuickSep, QuickTail, QuickTurn, QuickUnit, ltr } from "@/components/inspector-bar";
 import { PanelGroups, PanelListRow, PickRow, type PanelGroup } from "@/components/end-panel";
-import { InspectorDivider } from "@/components/plan-canvas";
 import type { ElementStyle } from "@/lib/element-style";
 import type { FeatureKind, VenueStructure } from "@/lib/venues/structure";
 import { FEATURE_KIND_LABEL } from "@/lib/venues/structure";
@@ -121,7 +120,6 @@ import { TextField } from "@/components/text-field";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Menu, type MenuItem } from "@/components/menu";
 import { AlignMenu, alignItems, type AlignPanel } from "./align-menu";
-import { Popover } from "@/components/popover";
 import { LAYER_LABEL } from "@/lib/catalog/categories";
 import { productVessel, takesVessel } from "@/lib/catalog/vessel";
 import { borderOf, cleanBorder, takesBorder, type Border } from "@/lib/catalog/border";
@@ -177,12 +175,12 @@ import { MissingPieces, missingSummary } from "./missing-pieces";
 // mode verb, then copy · delete · ⋯ — and the END PANEL's groups, every other field, folded under a
 // title that reads its value back. The screen renders `Inspector` twice over one props object
 // (`part`). The chips' fields moved into the groups as they were; a chip that was a picker (a type
-// swap, a cloth) is a group's pick row opening the same list beside the panel. Kinds are converted
-// one at a time — the table and the block first, then the stage, a group of stages and a stage's edge
-// item, then a design item and a ceiling item, then the special placements (a banquette, chair rows, a
-// flight, a covered carpet, a rug, anything on a rail) — every placement is asked in two places now.
-// A selection not yet converted (several things, a group of design items, a venue feature, the scope
-// bar) keeps its old bar for "bar" and shows no groups.
+// swap, a cloth) is a group's pick row opening the same list beside the panel. Every kind is asked in
+// two places: the table and the block, the stage, a group of stages and a stage's edge item, a design
+// item and a ceiling item, the special placements (a banquette, chair rows, a flight, a covered carpet,
+// a rug, anything on a rail), several things, a group of design items and a venue feature. The one bar
+// with no groups is the scope bar ("בחירה" — nothing selected, a zone or a plane worked in): it is a
+// menu of ways to start a selection, and has no fields.
 export type EdgeKindId = "stairs" | "bench" | "barrier" | "backdrop" | "ramp";
 export const EDGE_KIND_LABEL: Record<EdgeKindId, string> = {
   stairs: "מדרגות",
@@ -383,8 +381,10 @@ export type InspectorProps = {
   /** Whether anything in the selection is in a stack that could be moved through. */
   canRestack: boolean;
   onRestack: (to: "front" | "back") => void;
-  /** How many TABLES are selected — what the bulk seat control applies to. */
+  /** How many TABLES are selected — what the bulk seat control applies to (a block counts once). */
   selectedTables: number;
+  /** Every selected table, a block's members each — what several things' ״מפה״ and ״מראה״ reach. */
+  selectedTableIds: string[];
   onSeatsForSelection: (seats: number) => void;
   /** One chair over every selected table; null = the studio's default. */
   onChairForSelection?: (variantId: string | null) => void;
@@ -641,6 +641,7 @@ export function Inspector({
   canRestack,
   onRestack,
   selectedTables,
+  selectedTableIds,
   onSeatsForSelection,
   onChairForSelection,
   onChair,
@@ -754,11 +755,9 @@ export function Inspector({
   onCut,
   onSelectItems,
 }: InspectorProps) {
-  // Local to the one bar that offers it — a copy of another table's dressing has exactly one entry
-  // point on this screen, so there is no second dialog to keep in sync (contrast the catalog's
-  // delete, which the card menu AND the edit drawer can both open).
-  const [dressMode, setDressMode] = useState<"add" | "replace">("add");
-  const [confirmingReplace, setConfirmingReplace] = useState(false);
+  // Several things' spacing axis: the quick bar's number measures along it, the ״מרווח״ group's
+  // Segmented chooses it — two renders of this component, one choice (useSpacingAxis).
+  const [spaceAxis, setSpaceAxis] = useSpacingAxis(spacing);
 
   const selectItems = selectionItems({ zoneFocused, onSelectInZone, layerActive, onSelectLayer, onSelectSimilar });
   const bar = part === "bar";
@@ -767,9 +766,23 @@ export function Inspector({
   const groupsOf = (kindKey: string, title: string, sub: string | undefined, groups: (PanelGroup | false | null | undefined)[], defaultOpen?: string[]) => (
     <PanelGroups kind={`studio:${kindKey}`} title={title} sub={sub} defaultOpen={defaultOpen} groups={groups.filter((g): g is PanelGroup => !!g)} />
   );
-  /** A converted kind's ⋯: the clipboard first (Ctrl+C / Ctrl+X — the quick bar's copy button
-   *  duplicates), then the kind's MoreMenu sections, flattened as MoreMenu flattens them. */
+  /** A kind's ⋯: the clipboard first (Ctrl+C / Ctrl+X — the quick bar's copy button duplicates), then
+   *  the kind's sections, flattened (flatSections). */
   const moreOf = (sections: MenuItem[][]) => flatSections([clipboardItems(onCopy, onCut), ...sections]);
+  /** ״החלפה״ — the selection swapped for another catalog row, its pick row opening the list beside
+   *  the panel. Several things' and a group of design items' (a table's and a block's sits in its
+   *  ״שולחן״ group, a design item's in its ״פריט״). */
+  const swapGroup = (label: string) => {
+    if (!swap) return null;
+    const current = swap.options.find((o) => o.id === swap.current);
+    return G(
+      "swap",
+      Replace,
+      "החלפה",
+      current?.name ?? `${swap.count} ${swap.kind === "tables" ? "שולחנות" : "פריטים"}`,
+      <SwapPickRow swap={swap} onSwap={onSwap} label={label} />,
+    );
+  };
 
   // A GROUP — the designer pushed these together and said they are one thing. For tables that means
   // one number for the lot, so the number field here edits the group and not any table inside it.
@@ -781,24 +794,50 @@ export function Inspector({
       [group.seats, "כסא אחד", "כסאות"],
     ]);
 
-    // A group of design items only — not yet asked in two places: its bar as it was.
+    // A GROUP OF DESIGN ITEMS only — a lantern and its candles, two screens either side of a stage.
+    // The quick bar turns it and takes it apart (its one verb); the ⋯ flips it, saves it as one
+    // catalog item and locks it. Its group lists what it is made of, and swaps them for another row
+    // when they are all of one kind.
     if (group.tables === 0) {
-      if (!bar) return null;
-      return (
-        <Bar icon={Group} title="קבוצה" facts={facts} onClose={onClose}>
-          {swap && <SwapPopover swap={swap} onSwap={onSwap} label={swap.kind === "tables" ? "סוג השולחנות בקבוצה" : "החלפת הפריטים בקבוצה"} />}
-          <Rotation value={facing} onChange={onFace} />
-          <MoreMenu
-            label="עוד פעולות לקבוצה"
-            sections={[
-              mirrorItems(onMirror),
-              onSaveComposite ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : [],
-              [{ label: "פירוק הקבוצה", icon: Ungroup, onSelect: onUngroup }],
-              lockItems(lock),
-            ]}
-          />
-          <Actions onDuplicate={onDuplicate} duplicateLabel="שכפול הקבוצה" onDelete={onDelete} deleteLabel="מחיקת הקבוצה" />
-        </Bar>
+      if (bar)
+        return (
+          <Bar icon={Group} title="קבוצה" facts={facts} onClose={onClose}>
+            <QuickTurn value={facing} onChange={onFace} />
+            <QuickSep />
+            <ModeVerb icon={Ungroup} label="פירוק הקבוצה" onClick={onUngroup} />
+            <QuickTail
+              onCopy={onDuplicate}
+              copyLabel="שכפול הקבוצה"
+              onDelete={onDelete}
+              deleteLabel="מחיקת הקבוצה"
+              more={moreOf([
+                mirrorItems(onMirror),
+                onSaveComposite ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : [],
+                lockItems(lock),
+              ])}
+              moreLabel="עוד פעולות לקבוצה"
+            />
+          </Bar>
+        );
+      const items = doc.placements.filter((p) => p.groupId === group.id);
+      return groupsOf(
+        "items-group",
+        "קבוצה",
+        facts,
+        [
+          swapGroup("החלפת הפריטים בקבוצה"),
+          G(
+            "members",
+            Boxes,
+            "פריטים בקבוצה",
+            items.length === 1 ? "פריט אחד" : `${items.length} פריטים`,
+            <>
+              <TableItems items={items} />
+              <Note>הקבוצה זזה, מסתובבת ומשוכפלת כיחידה אחת. ״פירוק הקבוצה״ בסרגל משחרר אותם — כל פריט נשאר במקומו.</Note>
+            </>,
+          ),
+        ],
+        ["members"],
       );
     }
 
@@ -1167,134 +1206,141 @@ export function Inspector({
     );
   }
 
+  // SEVERAL THINGS — a rubber band across the room, Ctrl+A, a handful picked one by one. The quick bar
+  // turns them (each about its own centre), lines them up by one of them (יישור), sets the air
+  // between them (מרווח — measured along the axis the ״מרווח״ group holds) and makes them one (קיבוץ,
+  // the verb); the ⋯ holds the rarer verbs. The groups carry what can be said of all of them at once:
+  // another catalog row, chairs round every table, a copied table's dressing, the tables' cloths and
+  // look, and what the canvas's rotate handle does with them.
   if (selectedCount > 1) {
-    if (!bar) return null;
-    // Equal air between things along whichever axis the selection spans more — the two ends stay
-    // put. Only where the align menu does not already offer it (it spreads along either axis once
-    // there are three units); left out, not disabled, when something has no free position to move.
-    const distribute: MenuItem[] = canDistribute && !(align && align.units >= 3) ? [{ label: "פיזור אחיד", icon: AlignHorizontalDistributeCenter, onSelect: onDistribute }] : [];
-    return (
-      <Bar icon={Boxes} title={`${selectedCount} פריטים נבחרו`} facts="גרירה מזיזה את כולם יחד" onClose={onClose}>
-        {/* One number of chairs over the whole selection. A room of forty tables going from ten
-            places to twelve used to be forty trips through this inspector. Occupancy is deliberately
-            not here: how many seats a table HAS is the same across a room, how many are taken is a
-            different fact per table. */}
-        {selectedTables > 1 && (
-          <Popover label="כסאות לכל השולחנות שנבחרו" icon={Armchair} value={`${selectedTables} שולחנות`}>
-            <PanelRow>
-              {/* Blank rather than 0: this field REPORTS nothing (the selected tables may seat
-                  several different numbers) and only WRITES. A resting 0 would read as a claim that
-                  they all seat nobody. */}
-              <NumberField
-                id="bulk-seats"
-                aria-label="כסאות לכל שולחן"
-                decimals={0}
+    const title = `${selectedCount} פריטים נבחרו`;
+    const facts = "גרירה מזיזה את כולם יחד";
+    if (bar) {
+      // Equal air between things along whichever axis the selection spans more — the two ends stay
+      // put. Only where the align menu does not already offer it (it spreads along either axis once
+      // there are three units); left out, not disabled, when something has no free position to move.
+      const distribute: MenuItem[] = canDistribute && !(align && align.units >= 3) ? [{ label: "פיזור אחיד", icon: AlignHorizontalDistributeCenter, onSelect: onDistribute }] : [];
+      const gap = spacing ? spacingGap(spacing, spaceAxis) : null;
+      return (
+        <Bar icon={Boxes} title={title} facts={facts} onClose={onClose}>
+          <QuickTurn value={facing} onChange={onFace} />
+          {align && (
+            <>
+              <QuickSep />
+              <AlignMenu align={align} trigger="chip" />
+            </>
+          )}
+          {/* "1.5m between them" — typed, rather than nudged until the tape agrees. Blank when the
+              gaps differ along that axis, or the things overlap on it. */}
+          {spacing && (
+            <>
+              <QuickSep />
+              <QuickLead icon={MoveHorizontal} label={`מרווח — ${SPACING_AXIS_LABEL[spaceAxis]}`} />
+              <QuickNumber
+                label="מרווח בין הפריטים (ס״מ)"
                 min={0}
-                value={0}
-                hideZero
+                value={gap !== null && gap >= 0 ? cm(gap) : 0}
+                hideZero={gap === null || gap < 0}
                 placeholder="—"
-                onChange={(v) => onSeatsForSelection(v)}
-                className="w-20"
+                onChange={(v) => onSpace(v * 10, spaceAxis)}
               />
-              <span className="text-xs text-muted">כסאות ל־{selectedTables} שולחנות</span>
-            </PanelRow>
-            {/* Which chair, over the lot — the head table's armchairs set in one go. Writes only,
-                like the count above: the selection may hold several chairs between them. */}
-            {onChairForSelection && chairOptions().length > 0 && (
-              <PanelRow label="כיסא" stack>
-                <Select
-                  aria-label="סוג הכיסא לשולחנות שנבחרו"
-                  value=""
-                  options={[{ value: "", label: "—" }, { value: "__default", label: defaultChairLabel() }, ...chairOptions()]}
-                  onChange={(v) => v && onChairForSelection(v === "__default" ? null : v)}
-                />
-              </PanelRow>
-            )}
-          </Popover>
-        )}
+              <QuickUnit>ס״מ</QuickUnit>
+            </>
+          )}
+          <QuickSep />
+          <ModeVerb icon={Group} label="קיבוץ" title="קיבוץ לקבוצה אחת · Ctrl+G" onClick={onGroup} />
+          {/* The rest, in the "…": the clipboard, flipping, the floor stack, ways to grow the
+              selection, spreading evenly and — stages among them — closing the gaps or merging them
+              into one platform (so the skirt and stairs are worked out for the whole, not for the
+              parts, which would skirt the seam between them), saving the lot as one catalog item, and
+              the lock. */}
+          <QuickTail
+            onCopy={onDuplicate}
+            copyLabel="שכפול הנבחרים"
+            onDelete={onDelete}
+            deleteLabel="מחיקת הנבחרים"
+            more={moreOf([
+              mirrorItems(onMirror),
+              stackItems(canRestack, onRestack),
+              selectItems,
+              [
+                ...distribute,
+                ...(onStickStages ? [{ label: "הצמדת הבמות — סגירת הרווחים ויישור", icon: Magnet, onSelect: onStickStages }] : []),
+                ...(onMergeStages ? [{ label: "איחוד הבמות לבמה אחת", icon: Combine, onSelect: onMergeStages }] : []),
+              ],
+              onSaveComposite ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : [],
+              lockItems(lock),
+            ])}
+            moreLabel="עוד פעולות לנבחרים"
+          />
+        </Bar>
+      );
+    }
 
-        {/* Every selected table (or design item) for another row of the catalog, in one press. */}
-        {swap && (
-          <SwapPopover swap={swap} onSwap={onSwap} label={swap.kind === "tables" ? "סוג השולחנות שנבחרו" : "החלפת הפריטים שנבחרו"} />
-        )}
-
-        {/* One table's whole dressing, worn onto the rest of this selection — the bulk form of
-            "החל על כל שולחנות X", for whatever tables happen to be selected rather than a whole
-            type. Offered only once there is somewhere for it to land. */}
-        {dressCandidateCount > 0 && (
-          <Popover label="עיצוב השולחן שהועתק" icon={Sparkles} value={`${dressCandidateCount} שולחנות`}>
-            <Segmented
-              label="אופן ההחלה"
-              value={dressMode}
-              options={[
-                ["add", "הוספה"],
-                ["replace", "החלפה"],
-              ] as const}
-              onChange={setDressMode}
-            />
-            <Button
-              size="sm"
-              className="mt-3 w-full"
-              onClick={() => (dressMode === "replace" ? setConfirmingReplace(true) : onCopyDressing("add"))}
-            >
-              <Copy className="h-3.5 w-3.5" strokeWidth={2} />
-              החל על הנבחרים
-            </Button>
-          </Popover>
-        )}
-
-        {/* "1.5m between them" — typed, rather than nudged until the tape agrees. */}
-        {spacing && <SpacingPopover key={spacing.key} spacing={spacing} onSpace={onSpace} />}
-        <AlignMenu align={align} />
-
-        {/* Each turns about its OWN centre here, which is how a scattered handful is squared to the
-            room. */}
-        {/* Stages pushed together into one platform: the gaps closed and near-lines lined up, or
-            merged outright so the skirt and stairs are worked out for the whole — not for the parts,
-            which would skirt the seam between them. */}
-        {onStickStages && <BarButton icon={Magnet} label="הצמדת הבמות — סגירת הרווחים ויישור" onClick={onStickStages} />}
-        {onMergeStages && <BarButton icon={Combine} label="איחוד לבמה אחת" onClick={onMergeStages} />}
-
-        <Rotation value={facing} onChange={onFace} />
-
-        {/* What the rotate HANDLE does over several things — swing the lot about one shared centre (a
-            block aimed at the room), or turn each where it stands (twelve tables scattered across a
-            hall, which would otherwise all orbit the middle of the room) — is the "…"'s last
-            section, with a tick on the current answer: it is set once per selection, not edited. */}
-        <MoreMenu
-          label="עוד פעולות לנבחרים"
-          sections={[
-            mirrorItems(onMirror),
-            stackItems(canRestack, onRestack),
-            selectItems,
-            [...distribute, { label: "קיבוץ · Ctrl+G", icon: Group, onSelect: onGroup }],
-            onSaveComposite ? [{ label: "שמירה כפריט מורכב בקטלוג", icon: PackagePlus, onSelect: onSaveComposite }] : [],
-            [
-              { label: "ידית הסיבוב: סביב מרכז משותף", icon: spin === "together" ? Check : Orbit, onSelect: () => onSpin("together") },
-              { label: "ידית הסיבוב: כל אחד סביב עצמו", icon: spin === "each" ? Check : Orbit, onSelect: () => onSpin("each") },
-            ],
-            lockItems(lock),
-          ]}
-        />
-        <Actions
-          onDuplicate={onDuplicate}
-          duplicateLabel="שכפול הנבחרים"
-          onDelete={onDelete}
-          deleteLabel="מחיקת הנבחרים"
-        />
-
-        <ConfirmDialog
-          open={confirmingReplace}
-          title={`להחליף את העיצוב של ${dressCandidateCount} שולחנות?`}
-          body="המפה והפריטים הקיימים על השולחנות שנבחרו יוסרו ויוחלפו בעיצוב שהועתק."
-          confirmLabel="החלפה"
-          onConfirm={() => {
-            setConfirmingReplace(false);
-            onCopyDressing("replace");
-          }}
-          onClose={() => setConfirmingReplace(false)}
-        />
-      </Bar>
+    // The selected tables' cloths, as a block's: the first one shown, a change reaching every one.
+    const tables = selectedTableIds.map((id) => doc.tables.find((t) => t.id === id)).filter((t): t is DesignTable => !!t);
+    const covers = tables.map((t) => coverOn(doc, t.id)).filter((c): c is NonNullable<typeof c> => !!c);
+    const mixedCloths = covers.some((c) => resolve(c.variantId)?.product.id !== resolve(covers[0].variantId)?.product.id);
+    const lead = tables[0];
+    return groupsOf(
+      "multi",
+      title,
+      facts,
+      [
+        swapGroup(swap?.kind === "tables" ? "סוג השולחנות שנבחרו" : "החלפת הפריטים שנבחרו"),
+        // One number of chairs over the whole selection. A room of forty tables going from ten places
+        // to twelve used to be forty trips through this inspector. Occupancy is deliberately not
+        // here: how many seats a table HAS is the same across a room, how many are taken is a
+        // different fact per table.
+        selectedTables > 1 &&
+          G("seating", Armchair, "ישיבה", `${selectedTables} שולחנות`, <BulkSeatsFields count={selectedTables} onSeats={onSeatsForSelection} onChair={onChairForSelection} />),
+        // One table's whole dressing, worn onto the rest of this selection — the bulk form of "החל על
+        // כל שולחנות X", for whatever tables happen to be selected. Offered only once there is
+        // somewhere for it to land.
+        dressCandidateCount > 0 &&
+          G("copy-design", Sparkles, "העתקת עיצוב", `${dressCandidateCount} שולחנות`, <CopyDressingFields count={dressCandidateCount} onApply={onCopyDressing} />),
+        covers.length > 0 &&
+          !!onBlockCloth &&
+          G(
+            "cloth",
+            Shirt,
+            "מפה",
+            <ClothSummary cloth={covers[0]} />,
+            <ClothFields
+              cloth={covers[0]}
+              options={clothOptions}
+              onProduct={(productId) => onBlockCloth(selectedTableIds, { productId })}
+              onShade={(variantId) => onBlockCloth(selectedTableIds, { variantId })}
+              onBorder={onBorder ? (b) => onBorder(covers.map((c) => c.id), b) : undefined}
+              onAll={() => onApplyToAllTables(covers[0].id)}
+              onRemove={() => onBlockCloth(selectedTableIds, "remove")}
+              note={
+                [
+                  mixedCloths ? "המפות בבחירה שונות — מוצגת הראשונה, ושינוי כאן חל על כולן." : null,
+                  covers.length < tables.length
+                    ? `${tables.length - covers.length} מהשולחנות שנבחרו בלי מפה — שינוי כאן חל על מי שיש לו. להלבשת כולם: גוררים מפה מהסרגל על כל שולחן.`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" ") || undefined
+              }
+            />,
+          ),
+        !!spacing &&
+          G(
+            "spacing",
+            MoveHorizontal,
+            "מרווח",
+            `${spacingWords(spacingGap(spacing, spaceAxis))} · ${SPACING_AXIS_LABEL[spaceAxis]}`,
+            <SpacingFields key={spacing.key} spacing={spacing} axis={spaceAxis} onAxis={setSpaceAxis} onSpace={onSpace} />,
+          ),
+        // What the rotate HANDLE does over several things — swing the lot about one shared centre (a
+        // block aimed at the room), or turn each where it stands (twelve tables scattered across a
+        // hall, which would otherwise all orbit the middle of the room). Set once per selection.
+        G("spin", Orbit, "סיבוב", SPIN_LABEL[spin], <SpinFields spin={spin} onSpin={onSpin} />),
+        !!lead && !!onStyleTables && tableLookGroup(lead, (style) => onStyleTables(selectedTableIds, style)),
+      ],
+      ["seating", "spacing"],
     );
   }
 
@@ -1302,9 +1348,8 @@ export function Inspector({
   // the active plane. Without this the commands would be reachable only after something was already
   // picked, which defeats the one that is meant to start a selection from a bare canvas.
   //
-  // It stays up for exactly as long as the zone eye or the active layer is on — both are toolbar
-  // toggles, so with nothing on the card naming them it read as a panel stuck over the plan with no
-  // way out. It says what is holding it open, and its ✕ turns those off.
+  // It stays up for exactly as long as the zone chip or the active plane is on, says what is holding
+  // it open, and its ✕ turns those off. A menu of ways to start a selection, no fields — so no groups.
   if (selectedCount === 0 && (zoneFocused || layerActive)) {
     if (!bar) return null;
     return (
@@ -1316,43 +1361,68 @@ export function Inspector({
 
   if (!selection) return null;
 
-  // A VENUE FEATURE. Everything this bar offers is a placement of it for tonight and nothing more:
-  // no size, no name. Those are the property's, measured once at /halls, and an event that could
-  // edit them would be editing every other event held in the same room. "Remove" is tonight's too —
+  // A VENUE FEATURE. Everything asked here is a placement of it for tonight and nothing more: no
+  // size, no name. Those are the property's, measured once at /halls, and an event that could edit
+  // them would be editing every other event held in the same room. The quick bar turns it and puts it
+  // back where the venue has it (the verb, idle until it was moved); its delete is tonight's too —
   // the bar wheeled out for this event (FeaturePlacement.removed); the venue keeps it, and the
-  // toolbar's "פריטי מתחם שהוסרו" brings it back.
+  // panel's "פריטי מתחם שהוסרו" brings it back. A curtain or an LED strip hangs on its wall: nothing
+  // to turn or put back. A curtain's group swaps it for one of the catalog's.
   if (selection.kind === "feature") {
-    if (!bar || !feature) return null;
-    return (
-      <Bar
-        icon={Building2}
-        title={feature.label || FEATURE_KIND_LABEL[feature.kind]}
-        facts={`${FEATURE_KIND_LABEL[feature.kind]} · תוכנית המתחם`}
-        onClose={onClose}
-      >
-        {feature.kind !== "curtain" && feature.kind !== "led" && (
-          <BarButton
-            icon={Undo2}
-            label={feature.moved ? "החזרה למקום בתוכנית" : "נמצא במקומו המקורי"}
-            disabled={!feature.moved}
-            onClick={() => onResetFeature(feature.id)}
-          />
-        )}
-        {feature.kind !== "curtain" && feature.kind !== "led" && <Rotation value={facing} onChange={onFace} />}
-        {feature.kind === "curtain" && feature.curtainSwap && (
-          <SwapPopover swap={feature.curtainSwap} onSwap={(productId) => onSwapCurtain(feature.id, productId)} label="החלפה בווילון מהקטלוג" />
-        )}
-        <Popover label="פריט של המתחם" icon={Info}>
+    if (!feature) return null;
+    const pinned = feature.kind === "curtain" || feature.kind === "led";
+    const name = feature.label || FEATURE_KIND_LABEL[feature.kind];
+    const facts = `${FEATURE_KIND_LABEL[feature.kind]} · תוכנית המתחם`;
+    if (bar)
+      return (
+        <Bar icon={Building2} title={name} facts={facts} onClose={onClose}>
+          {!pinned && (
+            <>
+              <QuickTurn value={facing} onChange={onFace} />
+              <QuickSep />
+              <ModeVerb
+                icon={Undo2}
+                label="החזרה למקום"
+                disabled={!feature.moved}
+                title={feature.moved ? "החזרה למקום שבתוכנית המתחם" : "נמצא במקומו בתוכנית המתחם"}
+                onClick={() => onResetFeature(feature.id)}
+              />
+            </>
+          )}
+          <QuickTail onDelete={onDelete} deleteLabel="הסרה מהסקיצה של האירוע הזה" />
+        </Bar>
+      );
+    const curtainSwap = feature.kind === "curtain" ? (feature.curtainSwap ?? null) : null;
+    return groupsOf(
+      "feature",
+      name,
+      facts,
+      [
+        G(
+          "venue",
+          Info,
+          "פריט של המתחם",
+          pinned ? "תלוי על הקיר" : feature.moved ? "הוזז לאירוע הזה" : "במקומו בתוכנית",
           <Note>
-            אפשר להזיז, לסובב ולהסיר אותו לאירוע הזה בלבד. הגודל והמקום הקבוע נקבעים במסך האולמות,
-            ואירועים אחרים באותו מתחם לא מושפעים. פריט שהוסר חוזר מ״פריטי מתחם שהוסרו״ בסרגל העליון.
-          </Note>
-        </Popover>
-        <div className="ms-auto flex items-center gap-1">
-          <InspectorDivider />
-          <BarButton icon={Trash2} label="הסרה מהסקיצה של האירוע הזה · Delete" tone="danger" onClick={onDelete} />
-        </div>
-      </Bar>
+            {pinned
+              ? `תלוי על הקיר של המתחם — לא זז ולא מסתובב. אפשר להסיר אותו${feature.kind === "curtain" ? " או להחליף אותו בווילון מהקטלוג" : ""} לאירוע הזה בלבד; `
+              : "אפשר להזיז, לסובב ולהסיר אותו לאירוע הזה בלבד; "}
+            הגודל והמקום הקבוע נקבעים במסך האולמות, ואירועים אחרים באותו מתחם לא מושפעים. פריט שהוסר חוזר מ״פריטי מתחם שהוסרו״ בלוח, כשדבר אינו נבחר.
+          </Note>,
+        ),
+        !!curtainSwap &&
+          G(
+            "curtain",
+            Replace,
+            "החלפה בווילון",
+            `${curtainSwap.options.length} בקטלוג`,
+            <>
+              <SwapPickRow swap={curtainSwap} onSwap={(productId) => onSwapCurtain(feature.id, productId)} label="החלפה בווילון מהקטלוג" current={{ name, meta: "הווילון של המתחם" }} />
+              <Note>הווילון של המתחם יורד לאירוע הזה, ווילון מהקטלוג נתלה באותו קטע — מתומחר ונארז כמו כל וילון שמזמינים. הווילון המקורי חוזר מ״פריטי מתחם שהוסרו״.</Note>
+            </>,
+          ),
+      ],
+      ["venue", "curtain"],
     );
   }
 
@@ -2697,8 +2767,9 @@ function tableLookGroup(table: DesignTable, onChange: (style: ElementStyle | und
   );
 }
 
-/** What stands on a table, one row each: its picture's category (or its shade), its name, its shade
- *  and how many. A click selects it (absent = plain rows). */
+/** What stands on a table (or what a group of design items is made of), one row each: its picture's
+ *  category (or its shade), its name, its shade and how many. A click selects it (absent = plain
+ *  rows — a group's member cannot be selected out of its group). */
 function TableItems({ items, onSelect }: { items: Placement[]; onSelect?: (id: string) => void }) {
   return (
     <>
@@ -2975,7 +3046,7 @@ export interface SizePanel {
 }
 
 export interface Spacing {
-  /** Which selection this reading is of — the panel keeps what was typed until the selection changes. */
+  /** Which selection this reading is of — the axis chosen in ״מרווח״ is kept for it (useSpacingAxis). */
   key: string;
   count: number;
   axis: "x" | "y";
@@ -3025,29 +3096,28 @@ function swapFacts(swap: SwapPanel, p: Product): string {
   return [formatDimensions(p.dimensions), swap.kind === "tables" && seats > 0 ? `${seats} כסאות` : null].filter(Boolean).join(" · ");
 }
 
-/** "Change these for that" as a chip — the bars not yet asked in two places. */
-function SwapPopover({ swap, onSwap, label }: { swap: SwapPanel; onSwap: (productId: string, all: boolean) => void; label: string }) {
-  const state = useSwapScope(swap);
-  const current = swap.options.find((p) => p.id === swap.current);
-  const many = swap.kind === "tables" ? "שולחנות" : "פריטים";
-  return (
-    <Popover label={label} icon={Replace} value={current?.name ?? (swap.count > 1 ? `${swap.count} ${many}` : undefined)} panelClassName="w-80">
-      <SwapList swap={swap} onSwap={onSwap} state={state} />
-    </Popover>
-  );
-}
-
 /** "Change these for that" as a group's pick row: what they are now, and "החלפה" opens the same list
- *  as a picker beside the panel — a pick applies and the picker goes. */
-function SwapPickRow({ swap, onSwap, label }: { swap: SwapPanel; onSwap: (productId: string, all: boolean) => void; label: string }) {
+ *  as a picker beside the panel — a pick applies and the picker goes. `current` names what stands
+ *  there when it is no catalog row of the list (the venue's own curtain). */
+function SwapPickRow({
+  swap,
+  onSwap,
+  label,
+  current: named,
+}: {
+  swap: SwapPanel;
+  onSwap: (productId: string, all: boolean) => void;
+  label: string;
+  current?: { name: string; meta?: string };
+}) {
   const state = useSwapScope(swap);
   const current = swap.options.find((p) => p.id === swap.current);
   const many = swap.kind === "tables" ? "שולחנות" : "פריטים";
   return (
     <PickRow
       glyph={current ? <span className="block h-full w-full overflow-hidden rounded-sm"><ProductImage product={current} /></span> : <Replace className="h-4 w-4 text-muted" strokeWidth={1.75} />}
-      name={current?.name ?? `${swap.count} ${many}`}
-      meta={current ? swapFacts(swap, current) : undefined}
+      name={current?.name ?? named?.name ?? `${swap.count} ${many}`}
+      meta={current ? swapFacts(swap, current) : named?.meta}
       pickerLabel={label}
       pickerIcon={Replace}
     >
@@ -3150,23 +3220,17 @@ function SwapList({ swap, onSwap, state }: { swap: SwapPanel; onSwap: (productId
 const cm = (mm: number) => Math.round(mm / 10);
 const metres = (mm: number) => `${(mm / 1000).toFixed(2)} מ׳`;
 
-/** THE BAR'S "…" — one on every bar, holding what a selection CAN be asked but seldom is, in the
- *  same sections in the same order wherever it appears: how it is drawn (flip, the floor stack),
- *  ways to build a selection from it, its catalog row (edit it; save the selection as an item), and
- *  what it can be made into or taken apart to. Each section is its own group of rows.
+/** THE BAR'S "⋯" — one on every quick bar (QuickTail's), holding what a selection CAN be asked but
+ *  seldom is, in the same sections in the same order wherever it appears: the clipboard, how it is
+ *  drawn (flip, the floor stack), ways to build a selection from it, its catalog row (edit it; save
+ *  the selection as an item), what it can be made into or taken apart to, and the lock. Each section
+ *  is its own group of rows: this flattens them into one list, a hairline before every section after
+ *  the first.
  *
  *  It replaced three icon menus (היפוך, סדר בערימה, בחירה) and four loose icons (the catalog's
  *  pencil, the composite save, "הפיכה לבמה", "פירוק לפלטות") that stood among the subjects a bar is
  *  ABOUT — a dressed table's bar ran to nineteen controls, and the rare ones sat between the common
  *  ones in no order a hand could learn. */
-function MoreMenu({ label, sections }: { label: string; sections: MenuItem[][] }) {
-  const items = flatSections(sections);
-  if (items.length === 0) return null;
-  return <Menu label={label} side="top" items={items} />;
-}
-
-/** The "…"'s sections as one list of rows, a hairline before every section after the first — what
- *  MoreMenu shows, and what a quick bar's ⋯ (QuickTail) is handed. */
 function flatSections(sections: MenuItem[][]): MenuItem[] {
   const items: MenuItem[] = [];
   for (const section of sections) section.forEach((it, i) => items.push(i === 0 && items.length > 0 ? { ...it, separated: true } : it));
@@ -3543,7 +3607,6 @@ function BreachList({ breaches }: { breaches: { other: string; distance: number;
   );
 }
 
-/** Set the air between the selected things. The first one picked stays put. */
 /** "ללא מספור" — a table (or a block) the numbering passes by: a cocktail table, the gift table. */
 function UnnumberedSwitch({ checked, onChange }: { checked: boolean; onChange: (unnumbered: boolean) => void }) {
   return (
@@ -3566,35 +3629,190 @@ function DuplicateNumber() {
   );
 }
 
-function SpacingPopover({ spacing, onSpace }: { spacing: Spacing; onSpace: (gapMm: number, mode: "x" | "y" | "direct") => void }) {
-  const [mode, setMode] = useState<"x" | "y" | "direct">(spacing.axis);
-  const current = mode === "direct" ? spacing.direct : spacing[mode];
-  const [gapCm, setGapCm] = useState(() => Math.max(0, cm(current ?? 1000)));
-  const shown = current === null ? "—" : current < 0 ? "חופפים" : metres(current);
-  const options: (readonly ["x" | "y" | "direct", string])[] = [
-    ["x", "אופקי"],
-    ["y", "אנכי"],
-    ...(spacing.count === 2 ? ([["direct", "ישיר"]] as const) : []),
+/** Which way several things' spacing is measured: along the plan's width, its depth, or — a pair —
+ *  straight across between them. */
+type SpacingAxis = "x" | "y" | "direct";
+const SPACING_AXIS_LABEL: Record<SpacingAxis, string> = { x: "אופקי", y: "אנכי", direct: "ישיר" };
+
+// The axis chosen for the selection now — ONE choice for the quick bar's number and the ״מרווח״
+// group's Segmented, which are two renders of Inspector that share no state. Kept for one selection
+// (Spacing.key) and for this page's life only: a new selection starts on the axis it spans more.
+let spacingChoice: { key: string; axis: SpacingAxis } | null = null;
+const spacingListeners = new Set<() => void>();
+function subscribeSpacing(listener: () => void) {
+  spacingListeners.add(listener);
+  return () => {
+    spacingListeners.delete(listener);
+  };
+}
+
+function useSpacingAxis(spacing: Spacing | null): [SpacingAxis, (axis: SpacingAxis) => void] {
+  const key = spacing?.key ?? "";
+  const chosen = useSyncExternalStore(
+    subscribeSpacing,
+    () => (spacingChoice?.key === key ? spacingChoice.axis : null),
+    () => null,
+  );
+  const choose = useCallback(
+    (axis: SpacingAxis) => {
+      spacingChoice = { key, axis };
+      spacingListeners.forEach((l) => l());
+    },
+    [key],
+  );
+  const fallback = spacing?.axis ?? "x";
+  // "Straight across" is a pair's; a selection that grew past two goes back to its own axis.
+  return [chosen === null || (chosen === "direct" && spacing?.count !== 2) ? fallback : chosen, choose];
+}
+
+/** The air there is now along an axis — null when the gaps differ (no one number), negative when
+ *  they overlap on it. */
+function spacingGap(spacing: Spacing, axis: SpacingAxis): number | null {
+  return axis === "direct" ? spacing.direct : spacing[axis];
+}
+
+function spacingWords(gap: number | null): string {
+  return gap === null ? "—" : gap < 0 ? "חופפים" : metres(gap);
+}
+
+/** ״מרווח״ — the air between the selected things: the axis it is measured along (the quick bar's
+ *  number reads the same), what it is now, a gap typed and applied. The first one picked stays put. */
+function SpacingFields({
+  spacing,
+  axis,
+  onAxis,
+  onSpace,
+}: {
+  spacing: Spacing;
+  axis: SpacingAxis;
+  onAxis: (axis: SpacingAxis) => void;
+  onSpace: (gapMm: number, mode: SpacingAxis) => void;
+}) {
+  const current = spacingGap(spacing, axis);
+  // The field reads the gap there is now — the bar's number — until something is typed into it; a
+  // new reading (another axis, a gap applied from the bar, a drag) puts the field back on it. With
+  // no one gap to read, it offers a metre.
+  const seed = Math.max(0, cm(current ?? 1000));
+  const [gapCm, setGapCm] = useState(seed);
+  const [seededFrom, setSeededFrom] = useState(seed);
+  if (seed !== seededFrom) {
+    setSeededFrom(seed);
+    setGapCm(seed);
+  }
+  const options: (readonly [SpacingAxis, string])[] = [
+    ["x", SPACING_AXIS_LABEL.x],
+    ["y", SPACING_AXIS_LABEL.y],
+    ...(spacing.count === 2 ? ([["direct", SPACING_AXIS_LABEL.direct]] as const) : []),
   ];
   return (
-    <Popover label="מרווח בין הפריטים" icon={MoveHorizontal} value={shown} panelClassName="w-72">
-      <Segmented label="נמדד" value={mode} options={options} onChange={setMode} />
+    <>
+      <Segmented label="נמדד" value={axis} options={options} onChange={onAxis} />
       <p className="mt-2 text-xs text-muted">
-        עכשיו: <span className="nums font-medium text-ink">{shown}</span>
+        עכשיו: <span className="nums font-medium text-ink">{spacingWords(current)}</span>
       </p>
       <PanelRow label="מרווח (ס״מ)" htmlFor="spacing-gap">
         <NumberField id="spacing-gap" decimals={0} min={0} value={gapCm} onChange={setGapCm} className="w-24" />
       </PanelRow>
-      <Button size="sm" className="mt-2 w-full" onClick={() => onSpace(gapCm * 10, mode)}>
+      <Button size="sm" className="mt-2 w-full" onClick={() => onSpace(gapCm * 10, axis)}>
         <MoveHorizontal className="h-3.5 w-3.5" strokeWidth={2} />
         החלת המרווח
       </Button>
       <Note>
         {spacing.first} נשאר במקומו
         {spacing.count === 2 ? " והשני זז." : " והשאר מסתדרים בשורה ממנו."}{" "}
-        {mode === "direct" ? "נמדד מקצה לקצה, לאורך הקו בין המרכזים." : "נמדד בין קצוות הפריטים, לאורך הציר."} שולחן נמדד מקצה השולחן עצמו — בלי הכיסאות.
+        {axis === "direct" ? "נמדד מקצה לקצה, לאורך הקו בין המרכזים." : "נמדד בין קצוות הפריטים, לאורך הציר."} שולחן נמדד מקצה השולחן עצמו — בלי הכיסאות.
+        המרווח שבסרגל נמדד לאורך אותו ציר.
       </Note>
-    </Popover>
+    </>
+  );
+}
+
+const SPIN_LABEL: Record<SpinMode, string> = { together: "סביב מרכז משותף", each: "כל אחד סביב עצמו" };
+
+/** ״סיבוב״ for several things: what the canvas's rotate handle does with them. The angle in the
+ *  quick bar is another question — it stands each of them at the angle typed. */
+function SpinFields({ spin, onSpin }: { spin: SpinMode; onSpin: (mode: SpinMode) => void }) {
+  return (
+    <>
+      <Segmented
+        label="ידית הסיבוב"
+        value={spin}
+        options={[
+          ["together", SPIN_LABEL.together],
+          ["each", SPIN_LABEL.each],
+        ] as const}
+        onChange={onSpin}
+      />
+      <Note>
+        הידית שעל התוכנית מסובבת את כולם יחד סביב המרכז המשותף (בלוק שמכוונים לחדר), או כל אחד במקומו (שולחנות פזורים באולם, שאחרת היו
+        מסתובבים סביב אמצע החדר). הזווית שבסרגל מעמידה כל אחד על הזווית שנכתבה.
+      </Note>
+    </>
+  );
+}
+
+/** ״ישיבה״ for several tables: one chair count and one chair over all of them. Writes only — the
+ *  tables may seat different numbers and stand round different chairs, so the fields read blank. */
+function BulkSeatsFields({ count, onSeats, onChair }: { count: number; onSeats: (seats: number) => void; onChair?: (variantId: string | null) => void }) {
+  return (
+    <>
+      <PanelRow label={`כסאות לכל שולחן — ${count} שולחנות`} htmlFor="bulk-seats">
+        {/* Blank rather than 0: this field REPORTS nothing and only WRITES. A resting 0 would read as a
+            claim that they all seat nobody. */}
+        <NumberField id="bulk-seats" aria-label="כסאות לכל שולחן" decimals={0} min={0} value={0} hideZero placeholder="—" onChange={onSeats} className="w-20" />
+      </PanelRow>
+      {/* Which chair, over the lot — the head table's armchairs set in one go. */}
+      {onChair && chairOptions().length > 0 && (
+        <PanelRow label="כיסא" stack>
+          <Select
+            aria-label="סוג הכיסא לשולחנות שנבחרו"
+            value=""
+            options={[{ value: "", label: "—" }, { value: "__default", label: defaultChairLabel() }, ...chairOptions()]}
+            onChange={(v) => v && onChair(v === "__default" ? null : v)}
+          />
+        </PanelRow>
+      )}
+      <Note>מה שנכתב כאן חל על כל השולחנות שנבחרו (בלוק נספר כשולחן אחד). התפוסה נשארת של כל שולחן.</Note>
+    </>
+  );
+}
+
+/** ״העתקת עיצוב״ — the copied table's dressing worn by the selected tables: added to what is on them,
+ *  or in its place, which asks first (the cloths and items on them are taken off). */
+function CopyDressingFields({ count, onApply }: { count: number; onApply: (mode: "add" | "replace") => void }) {
+  const [mode, setMode] = useState<"add" | "replace">("add");
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <>
+      <Segmented
+        label="אופן ההחלה"
+        value={mode}
+        options={[
+          ["add", "הוספה"],
+          ["replace", "החלפה"],
+        ] as const}
+        onChange={setMode}
+      />
+      <Button size="sm" className="mt-3 w-full" onClick={() => (mode === "replace" ? setConfirming(true) : onApply("add"))}>
+        <Copy className="h-3.5 w-3.5" strokeWidth={2} />
+        החל על הנבחרים
+      </Button>
+      <Note>
+        {mode === "replace" ? "המפה והפריטים שעל השולחנות שנבחרו יוסרו, ובמקומם העיצוב שהועתק." : "העיצוב שהועתק מתווסף למה שכבר על השולחנות שנבחרו."} השולחן
+        שהועתק (Ctrl+C) לא נספר.
+      </Note>
+      <ConfirmDialog
+        open={confirming}
+        title={`להחליף את העיצוב של ${count} שולחנות?`}
+        body="המפה והפריטים הקיימים על השולחנות שנבחרו יוסרו ויוחלפו בעיצוב שהועתק."
+        confirmLabel="החלפה"
+        onConfirm={() => {
+          setConfirming(false);
+          onApply("replace");
+        }}
+        onClose={() => setConfirming(false)}
+      />
+    </>
   );
 }
 

@@ -119,30 +119,6 @@ export function Rotation({ value, onChange }: { value: number | null; onChange: 
   );
 }
 
-/** The two verbs every selection has, held at the far end of the subjects row: another one of these,
- *  and remove these. A venue feature has neither — it belongs to the property, not to tonight — so
- *  its bar simply doesn't render this. The hairline is what keeps the destructive one from sitting
- *  flush against the last subject under a moving cursor. */
-export function Actions({
-  onDuplicate,
-  duplicateLabel,
-  onDelete,
-  deleteLabel,
-}: {
-  onDuplicate: () => void;
-  duplicateLabel: string;
-  onDelete: () => void;
-  deleteLabel: string;
-}) {
-  return (
-    <div className="ms-auto flex items-center gap-1">
-      <InspectorDivider />
-      <BarButton icon={Copy} label={`${duplicateLabel} · Ctrl+C · Ctrl+V`} onClick={onDuplicate} />
-      <BarButton icon={Trash2} label={`${deleteLabel} · Delete`} onClick={onDelete} tone="danger" />
-    </div>
-  );
-}
-
 // ── The QUICK BAR's second row (2026-11-09, the user's "Studio + Halls" board) ────────────────────
 // Every selection's bar reads in one order: at most three numbers typed in place → one mode verb
 // (an outline pill) → copy · delete · ⋯, always last. Everything else about the selection is a
@@ -233,15 +209,33 @@ export function QuickTurn({ value, onChange, label = "זווית במעלות" }
 }
 
 /** The selection's ONE mode verb — הלבשה, עריכת הקווים, עריכת האזור — as an outline pill, the
- *  product form's "עריכת המראה" look. `active` while the mode it enters is on. */
-export function ModeVerb({ icon: Icon, label, onClick, active }: { icon: LucideIcon; label: string; onClick: () => void; active?: boolean }) {
+ *  product form's "עריכת המראה" look. `active` while the mode it enters is on; `disabled` while
+ *  there is nothing for it to do (a venue feature that stands where the venue has it), `title` then
+ *  saying why. */
+export function ModeVerb({
+  icon: Icon,
+  label,
+  onClick,
+  active,
+  disabled,
+  title,
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick: () => void;
+  active?: boolean;
+  disabled?: boolean;
+  title?: string;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={active}
+      disabled={disabled}
+      title={title}
       className={
-        "inline-flex h-[30px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-pill border-[1.5px] border-accent-line px-3 text-[13px] font-bold text-accent transition-colors hover:bg-accent-tint " +
+        "inline-flex h-[30px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-pill border-[1.5px] border-accent-line px-3 text-[13px] font-bold text-accent transition-colors hover:bg-accent-tint disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-surface " +
         (active ? "bg-accent-wash" : "bg-surface")
       }
     >
@@ -252,8 +246,9 @@ export function ModeVerb({ icon: Icon, label, onClick, active }: { icon: LucideI
 }
 
 /** The bar's last word: copy · delete · ⋯, in that order and always last, behind a hairline. A
- *  wall has no copy; a venue feature in a sketch has no delete; the ⋯ holds the rare verbs (cut,
- *  select similar, stacking, lock, mirror, save as composite) in the sections the caller gives. */
+ *  wall has no copy, nor a venue feature in a sketch (its delete takes it out of this event only);
+ *  the ⋯ holds the rare verbs (cut, select similar, stacking, lock, mirror, save as composite) in
+ *  the sections the caller gives. */
 export function QuickTail({
   onCopy,
   copyLabel = "שכפול · Ctrl+D",
