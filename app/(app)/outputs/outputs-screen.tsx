@@ -1,13 +1,34 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ClipboardList, Map, Printer, ReceiptText, RotateCw, Share2, Truck, type LucideIcon } from "lucide-react";
+import Link from "next/link";
+import {
+  BookOpen,
+  CalendarDays,
+  ClipboardList,
+  File as FileIcon,
+  Flower2,
+  Layers,
+  Link2,
+  Map as MapIcon,
+  MapPin,
+  Package,
+  PackagePlus,
+  PencilLine,
+  Printer,
+  ReceiptText,
+  RotateCw,
+  Share2,
+  Truck,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { loadScratch } from "@/lib/studio/storage";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
-import { recordExport, type ExportType } from "@/lib/outputs/actions";
+import { recordExport, type ExportType, type Spares } from "@/lib/outputs/actions";
 import { PLAN_SHEETS, sheetHasContent } from "@/lib/outputs/sheets";
 import { resolve } from "@/lib/studio/catalog-resolver";
 import { vesselOf } from "@/lib/catalog/vessel";
@@ -15,25 +36,39 @@ import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { loadProducts } from "@/lib/catalog/storage";
 import type { Product } from "@/lib/catalog/types";
+import { chairOf, defaultChair } from "@/lib/catalog/chairs";
 import { zoneSheets } from "@/lib/outputs/zone-sheets";
 import { kitLetters, seatingSummary, tableKits, tablesPhrase } from "@/lib/outputs/table-kits";
-import { itemLookup } from "@/lib/outputs/lookup";
+import { itemLookup, measureContext } from "@/lib/outputs/lookup";
+import { packingList } from "@/lib/outputs/aggregate";
 import { numberedUnits } from "@/lib/design-document/groups";
 import type { StagePlacement } from "@/lib/design-document/stage";
 import { nearestWall } from "@/lib/studio/anchor";
 import { fetchSettings, fetchStageRules } from "@/lib/settings/actions";
+import { fetchIssuedQuote } from "@/lib/quotes/actions";
+import type { LoadInFacts } from "@/lib/production/actions";
 import { zonesLabelOf } from "@/lib/events/types";
 import { Button } from "@/components/button";
 import { Skeleton } from "@/components/skeleton";
+import { Segmented } from "@/components/segmented";
+import { SwitchRow } from "@/components/toggle";
+import { EndPanel, PanelGroups, PanelGroupsHeader, panelGroup as G } from "@/components/end-panel";
+import { CheckRow, CollapsedAction, PanelFoot, PanelSkeleton } from "@/components/doc-shell";
 import { PackingList } from "./packing-list";
 import { LoadInSheet } from "./load-in-sheet";
 import { KitSchedule, PlacementMap, StageSchedule, mapWorld } from "./placement-map";
 import { TableDetail, detailWorld } from "./table-detail";
 import { sheetScale } from "./sheet-frame";
 import { SetCover, type SetEntry } from "./set-cover";
+import { CrewFooter, CrewHeader } from "./crew-doc";
+import { docTheme } from "@/lib/documents/theme";
+import type { DocStyleSetting } from "@/lib/documents/style";
 import { VenueAccessNotice } from "@/components/venue-access-notice";
-import { Quote } from "./quote";
+import { Quote, statusOf } from "./quote";
 import { buildQuotePdf, quoteFileName, shareFile } from "./quote-pdf";
+import { DocRail, type RailDoc } from "./doc-rail";
+import { SheetStage } from "./sheet-stage";
+import type { DocParts } from "./doc-parts";
 
 import { TITLES, type View } from "./views";
 export type { View } from "./views";
@@ -43,7 +78,7 @@ export type { View } from "./views";
  *  the folder, made once the rest of it exists. */
 const VIEWS: { id: View; icon: LucideIcon }[] = [
   { id: "quote", icon: ReceiptText },
-  { id: "map", icon: Map },
+  { id: "map", icon: MapIcon },
   { id: "packing", icon: ClipboardList },
   { id: "loadin", icon: Truck },
 ];
@@ -98,13 +133,23 @@ export function OutputsScreen({
   const [railingAboveMm, setRailingAboveMm] = useState<number | null>(null);
   // The studio's name, for the title block and the cover — it used to print an empty "סטודיו" cell.
   const [studioName, setStudioName] = useState("");
+  const [studioPhone, setStudioPhone] = useState("");
+  // The studio's document direction (settings → מסמכים): the crew sheets take its type and
+  // structure, in ink. Null until read — `docTheme` then answers the default, stationery.
+  const [docStyle, setDocStyle] = useState<DocStyleSetting | null>(null);
+  const crewTheme = useMemo(() => docTheme(docStyle, { ink: true }), [docStyle]);
   useEffect(() => {
     let live = true;
     fetchStageRules()
       .then((r) => live && setRailingAboveMm(r.railingAboveMm))
       .catch(() => {});
     fetchSettings()
-      .then((r) => live && setStudioName(r.businessName))
+      .then((r) => {
+        if (!live) return;
+        setStudioName(r.businessName);
+        setStudioPhone(r.phone);
+        setDocStyle(r.docStyle);
+      })
       .catch(() => {});
     return () => {
       live = false;
@@ -198,7 +243,6 @@ export function OutputsScreen({
   const detailOn = (k: (typeof kits)[number]) => detailPick[k.key] ?? k.recommended;
   const [withCover, setWithCover] = useState(true);
   const [withKits, setWithKits] = useState(true);
-  const [openSection, setOpenSection] = useState<"layers" | "zones" | "details" | "book" | null>("layers");
   const stages = doc.placements.filter((p): p is StagePlacement => !!p.stage);
   const kitted = new Set(kits.flatMap((k) => k.units.map((u) => u.id)));
   const undressed = numberedUnits(doc).filter((u) => !kitted.has(u.id));
@@ -330,380 +374,476 @@ export function OutputsScreen({
   // so they are the two views that need this generic stamp above them.
   const stamped = view === "packing" || view === "loadin";
 
-  return (
-    <div className="flex h-full min-h-0 print:block print:h-auto">
-      {/* F-6.1: page setup applies when printing.
-          A PLAN SHEET OWNS ITS OWN MARGIN. sheet-frame.tsx draws the border, the title block and
-          the scale bar inside a full-trim page (210x297 for A4), so globals.css's
-          `@page { margin: 16mm }` would shrink the printable box to 178x265 and the sheet would be
-          clipped sideways — browsers do not paginate horizontally — and split down the page, putting
-          the title block alone on a second sheet. Three ticked sheets printed six pages. This block
-          cascades after globals.css and so wins. The packing list and the quote keep the 16mm page
-          margin, which is the only margin they have. */}
-      {/* Named pages carry each drawing sheet's own orientation into the PDF; the default page is
-          the text pages' (and the quote's and packing list's). */}
-      <style>{`@media print { @page { size: ${view === "quote" ? "A4 portrait" : `${paper} ${textOrient}`}; ${view === "map" || view === "quote" ? "margin: 0;" : ""} } @page sheet-portrait { size: ${paper} portrait; margin: 0; } @page sheet-landscape { size: ${paper} landscape; margin: 0; } }`}</style>
+  // ── What the rail says under each document, read whichever is open ────────────────────────────
+  const [quoteMeta, setQuoteMeta] = useState<{ meta: string; warn: boolean } | null>(null);
+  // Until the quote has been opened once, its line is read from the issued record alone.
+  const eventId = event?.id;
+  const docVersion = workspace?.document?.version ?? null;
+  useEffect(() => {
+    if (!eventId) return;
+    let live = true;
+    fetchIssuedQuote(eventId)
+      .then((q) => {
+        if (!live) return;
+        const on = q ? new Date(q.issuedAt).toLocaleDateString("he-IL") : "";
+        const s = statusOf(!!q, !!q && docVersion !== null && q.documentVersion !== docVersion, false, on);
+        setQuoteMeta((prev) => prev ?? { meta: s.rail, warn: s.warn });
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [eventId, docVersion]);
+  const packGroups = useMemo(
+    () => (loading ? [] : packingList(doc, itemLookup, measureContext(plan.structure, doc), (t) => chairOf(t, defaultChair()))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [loading, doc, plan.structure, catalog.products],
+  );
+  const [spares, setSpares] = useState<Spares>({});
+  const packItems = packGroups.reduce((s, g) => s + g.rows.reduce((n, r) => (r.unit === "unit" ? n + r.quantity + (spares[r.variantId] ?? 0) : n), 0), 0);
+  const [loadFacts, setLoadFacts] = useState<LoadInFacts | null>(null);
 
-      {/* THE SHAPE IS THE STUDIO'S, deliberately: a rail of things to work on down the start edge,
-          the work itself filling the rest. This used to be one horizontal strip doing four unrelated
-          jobs at once — which document, which plan sheets, what paper, and print — and at that
-          density the document you were choosing read as the same kind of control as the paper size.
-          The rail separates them by position instead of by punctuation: WHAT prints up top, HOW it
-          prints under the rule beneath.
+  const railDocs: RailDoc<View>[] = VIEWS.filter(({ id }) => !meeting || id !== "loadin").map(({ id, icon }) => ({
+    id,
+    icon,
+    title: TITLES[id],
+    audience: id === "quote" ? "client" : "crew",
+    meta:
+      loading ? "…"
+      : id === "quote" ? (quoteMeta?.meta ?? "טיוטה")
+      : id === "map" ? `חוברת · ${setPages.length} ${setPages.length === 1 ? "עמוד" : "עמודים"}`
+      : id === "packing" ? `${packItems} פריטים · ${packGroups.length} קטגוריות`
+      : "עמוד אחד לראש הצוות",
+    warn: !loading && id === "quote" && !!quoteMeta?.warn,
+  }));
 
-          It is narrower than the studio's catalog rail (212px against 256) and its two halves are
-          stacked tight rather than pushed apart with `mt-auto`. The rail holds three short rows and
-          two switches — given a full column's height to spread across, the page setup ended up
-          marooned at the bottom of the screen and each of its rows read as a label at one end of
-          the panel and a control at the other.
+  // ── THE CLIENT VIEW: both drawers put away, the pages alone (and the quote without its tools).
+  // The meeting opens on it — the client sits beside the designer there. ──
+  const [client, setClient] = useState(meeting);
+  const leaveClient = useMemo(() => ({ onOpen: () => setClient(false) }), []);
 
-          `no-print` on the whole rail. What is left when it goes is the sheet column, which is the
-          deliverable. */}
-      <aside className="no-print flex w-[212px] shrink-0 flex-col border-e border-border bg-surface">
-        <nav className="flex min-h-0 shrink flex-col gap-[3px] overflow-y-auto p-2.5" aria-label="מסמכי האירוע">
-          {/* The load-in sheet is crew paper — names and phone numbers — and the meeting frame is
-              rendered with the client in the room, so it is offered on /outputs alone. */}
-          {VIEWS.filter(({ id }) => !meeting || id !== "loadin").map(({ id, icon: Icon }) => (
-            <div key={id}>
-              {/* The app's own active-nav treatment, because that is what these are — the sidebar's
-                  geometry and inks (CLAUDE.md § Design System Guidelines), not a second vocabulary
-                  invented for this screen. */}
-              <button
-                type="button"
-                onClick={() => setView(id)}
-                aria-current={view === id ? "page" : undefined}
-                className={
-                  "flex w-full items-center gap-3 rounded-md px-3.5 py-[11px] text-sm transition-colors " +
-                  (view === id
-                    ? "bg-accent-tint font-bold text-accent"
-                    : "font-semibold text-muted hover:bg-accent-tint hover:text-accent-hover")
-                }
-              >
-                <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={1.4} />
-                {TITLES[id]}
-              </button>
+  // ── The page setup, one group for every crew document ──
+  const orientLabel = { auto: "אוטו׳", portrait: "לאורך", landscape: "לרוחב" } as const;
+  const paperGroup = G(
+    "paper",
+    FileIcon,
+    "דף",
+    <span dir="rtl">{view === "map" ? `${paper} · ${orientLabel[orient]} · ${mono ? "שחור-לבן" : "צבעוני"}` : `${paper} · ${orientLabel[textOrient]}`}</span>,
+    <div className="flex flex-col gap-3">
+      <Segmented<Paper> label="גודל" value={paper} options={[["A4", "A4"], ["A3", "A3"]]} onChange={setPaper} />
+      <Segmented<Orient>
+        label="כיוון"
+        value={view === "map" ? orient : textOrient}
+        // "Auto" only means something where a booklet mixes sheets; elsewhere it is portrait.
+        options={view === "map" ? [["auto", "אוטו׳"], ["portrait", "לאורך"], ["landscape", "לרוחב"]] : [["portrait", "לאורך"], ["landscape", "לרוחב"]]}
+        onChange={setOrient}
+      />
+      {view === "map" && <Segmented<"color" | "mono"> label="צבע" value={mono ? "mono" : "color"} options={[["color", "צבעוני"], ["mono", "שחור-לבן"]]} onChange={(v) => setMono(v === "mono")} />}
+    </div>,
+  );
+  const printAction = (label: string) => ({ label, icon: Printer, onClick: () => void print(), disabled: loading });
 
-              {/* THE SET'S CONTENTS, nested under the map while it is the open document. Four sections,
-                  one open at a time, each closed one summarised on its own line — the rail used to
-                  show all four lists at once, and on a real event (seven layers, two zones, a dozen
-                  kits) the print button ended up below the fold. */}
-              {id === "map" && view === "map" && (
-                <div className="mt-1 flex flex-col gap-0.5 ps-3">
-                  <RailSection
-                    title="שכבות"
-                    summary={selectedSheets.length === 1 ? selectedSheets[0].label : `${selectedSheets.length} שכבות`}
-                    open={openSection === "layers"}
-                    onToggle={() => setOpenSection((o) => (o === "layers" ? null : "layers"))}
-                  >
-                    {PLAN_SHEETS.map((sheet) => {
-                      const empty = !hasContent(sheet);
+  // ── The crew documents' parts (the quote builds its own, ./quote.tsx) ──────────────────────────
+  const crewParts = (): DocParts => {
+    if (view === "map") {
+      const sheets = selectedSheets.length * shownZones.length;
+      return {
+        pages: (
+          <>
+            {plan.access === "denied" && <VenueAccessNotice tone="plan" className="no-print" />}
+            {mapPages()}
+          </>
+        ),
+        groups: [
+          G(
+            "layers",
+            Layers,
+            "שכבות",
+            <span className="nums">{`${selectedSheets.length} ${selectedSheets.length === 1 ? "שכבה" : "שכבות"} · ${sheets} ${sheets === 1 ? "גיליון" : "גיליונות"}`}</span>,
+            <div className="-mx-1.5 flex flex-col gap-px">
+              {PLAN_SHEETS.map((sheet) => {
+                const empty = !hasContent(sheet);
+                const on = !empty && sheetIds.includes(sheet.id);
+                return (
+                  <CheckRow key={sheet.id} on={on} disabled={empty} chip={empty ? "ריק" : undefined} meta={on ? `${shownZones.length} גיל׳` : undefined} onClick={() => toggleSheet(sheet.id)}>
+                    {sheet.label}
+                  </CheckRow>
+                );
+              })}
+            </div>,
+          ),
+          // Only when the event spans more than one zone with something in it. Each zone is its own
+          // page of every ticked layer.
+          ...(zonePlans.length > 1
+            ? [
+                G(
+                  "zones",
+                  MapPin,
+                  "אזורים",
+                  <span className="nums">{`${shownZones.length} מתוך ${zonePlans.length}`}</span>,
+                  <div className="-mx-1.5 flex flex-col gap-px">
+                    {zonePlans.map(({ zone }) => {
+                      if (!zone) return null;
+                      const on = !hiddenZones.includes(zone.zone.id);
                       return (
-                        <RailToggle key={sheet.id} on={!empty && sheetIds.includes(sheet.id)} disabled={empty} hint={empty ? "ריק" : undefined} onClick={() => toggleSheet(sheet.id)}>
-                          {sheet.label}
-                        </RailToggle>
+                        <CheckRow key={zone.zone.id} on={on} meta={on ? `${selectedSheets.length} גיל׳` : undefined} onClick={() => toggleZone(zone.zone.id)}>
+                          {zone.zone.name || "אזור ללא שם"}
+                        </CheckRow>
                       );
                     })}
-                  </RailSection>
+                  </div>,
+                ),
+              ]
+            : []),
+          // One detail per KIT, not per table — the suggested ones (a head table, a block, anything
+          // with a real arrangement on it) start lit.
+          ...(kits.length > 0
+            ? [
+                G(
+                  "kits",
+                  Flower2,
+                  "פרטי שולחן",
+                  <span className="nums">{`${kits.filter(detailOn).length} מתוך ${kits.length}`}</span>,
+                  <div className="-mx-1.5 flex flex-col gap-px">
+                    {kits.map((k) => (
+                      <CheckRow key={k.key} on={detailOn(k)} chip={k.recommended ? "מומלץ" : undefined} onClick={() => setDetailPick((m) => ({ ...m, [k.key]: !detailOn(k) }))}>
+                        <span className="font-bold">ערכה {k.letter}</span>
+                        <span className="nums font-normal"> · {k.units.length === 1 ? tablesPhrase(k.units) : `${k.units.length} שולחנות`}</span>
+                      </CheckRow>
+                    ))}
+                  </div>,
+                ),
+              ]
+            : []),
+          G(
+            "book",
+            BookOpen,
+            "בחוברת",
+            [withCover && "שער", withKits && "טבלת ערכות"].filter(Boolean).join(" · ") || "שרטוטים בלבד",
+            <div className="flex flex-col gap-2.5">
+              <SwitchRow checked={withCover} onChange={setWithCover} label="שער ותוכן עניינים" />
+              <SwitchRow checked={withKits} onChange={setWithKits} label="טבלת ערכות" />
+            </div>,
+          ),
+          paperGroup,
+        ],
+        foot: {
+          info: sharing ? "מכין PDF…" : (shareNote ?? `${setPages.length} ${setPages.length === 1 ? "עמוד" : "עמודים"} · ${sheetTotal} ${sheetTotal === 1 ? "גיליון" : "גיליונות"}`),
+          side: `גרסה ${version}`,
+          action: printAction("הפקת חוברת PDF"),
+          // eslint-disable-next-line react-hooks/refs -- a handler for the press, never read while rendering
+          extras: [{ label: "שיתוף החוברת", icon: Share2, onClick: () => void share(), disabled: loading || sharing || setPages.length === 0 }],
+        },
+        defaultOpen: ["layers"],
+      };
+    }
 
-                  {/* Only when the event spans more than one zone with something in it. Each zone is
-                      its own page of every ticked layer. */}
-                  {zonePlans.length > 1 && (
-                    <RailSection
-                      title="אזורים"
-                      summary={`${shownZones.length} מתוך ${zonePlans.length}`}
-                      open={openSection === "zones"}
-                      onToggle={() => setOpenSection((o) => (o === "zones" ? null : "zones"))}
-                    >
-                      {zonePlans.map(({ zone }) =>
-                        zone ? (
-                          <RailToggle key={zone.zone.id} on={!hiddenZones.includes(zone.zone.id)} onClick={() => toggleZone(zone.zone.id)}>
-                            {zone.zone.name || "אזור ללא שם"}
-                          </RailToggle>
-                        ) : null,
-                      )}
-                    </RailSection>
-                  )}
-
-                  {/* One detail per KIT, not per table — the suggested ones (a head table, a block,
-                      anything with a real arrangement on it) start lit. */}
-                  {kits.length > 0 && (
-                    <RailSection
-                      title="פרטי שולחן"
-                      summary={`${kits.filter(detailOn).length} מתוך ${kits.length}`}
-                      open={openSection === "details"}
-                      onToggle={() => setOpenSection((o) => (o === "details" ? null : "details"))}
-                    >
-                      {kits.map((k) => (
-                        <RailToggle
-                          key={k.key}
-                          on={detailOn(k)}
-                          onClick={() => setDetailPick((m) => ({ ...m, [k.key]: !detailOn(k) }))}
-                          hint={k.recommended ? "מומלץ" : undefined}
-                        >
-                          <span className="font-bold">ערכה {k.letter}</span>
-                          <span className="nums ms-1.5 font-normal">
-                            · {k.units.length === 1 ? tablesPhrase(k.units) : `${k.units.length} שולחנות`}
-                          </span>
-                        </RailToggle>
-                      ))}
-                    </RailSection>
-                  )}
-
-                  <RailSection
-                    title="בחוברת"
-                    summary={[withCover && "שער", withKits && "טבלת ערכות"].filter(Boolean).join(" · ") || "שרטוטים בלבד"}
-                    open={openSection === "book"}
-                    onToggle={() => setOpenSection((o) => (o === "book" ? null : "book"))}
-                  >
-                    <RailToggle on={withCover} onClick={() => setWithCover((v) => !v)}>
-                      שער ותוכן עניינים
-                    </RailToggle>
-                    <RailToggle on={withKits} onClick={() => setWithKits((v) => !v)}>
-                      טבלת ערכות
-                    </RailToggle>
-                  </RailSection>
-                </div>
-              )}
-            </div>
-          ))}
-        </nav>
-
-        {/* Page setup and the print itself, under the rule — you touch these once, after you have
-            decided what you are printing. F-6.1. */}
-        {/* The quote carries its own actions (share, download, print) above its pages, and is
-            always A4 portrait — a client's document, not a sheet set. */}
-        {view !== "quote" && (
-        <div className="flex shrink-0 flex-col gap-2.5 border-t border-border p-2.5">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-caption text-muted">גיליון</span>
-            <Seg>
-              {(["A4", "A3"] as Paper[]).map((pp) => (
-                <SegItem key={pp} active={paper === pp} onClick={() => setPaper(pp)} small>
-                  <span className="nums" dir="ltr">
-                    {pp}
-                  </span>
-                </SegItem>
-              ))}
-            </Seg>
-          </div>
-
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-caption text-muted">כיוון</span>
-            <Seg>
-              {/* "Auto" only means something where a booklet mixes sheets; elsewhere it is portrait. */}
-              {view === "map" && (
-                <SegItem active={orient === "auto"} onClick={() => setOrient("auto")} small>
-                  אוטו׳
-                </SegItem>
-              )}
-              <SegItem active={orient === "portrait" || (orient === "auto" && view !== "map")} onClick={() => setOrient("portrait")} small>
-                לאורך
-              </SegItem>
-              <SegItem active={orient === "landscape"} onClick={() => setOrient("landscape")} small>
-                לרוחב
-              </SegItem>
-            </Seg>
-          </div>
-
-          {view === "map" && (
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-caption text-muted">צבע</span>
-              <Seg>
-                <SegItem active={!mono} onClick={() => setMono(false)} small>
-                  צבעוני
-                </SegItem>
-                <SegItem active={mono} onClick={() => setMono(true)} small>
-                  שחור-לבן
-                </SegItem>
-              </Seg>
-            </div>
-          )}
-
-          <Button onClick={print} disabled={loading} className="w-full">
-            <Printer className="h-4 w-4" strokeWidth={2} />
-            {view === "map" ? "הפקת חוברת PDF" : "הדפסה / PDF"}
-          </Button>
-          {view === "map" && (
-            <Button variant="outline" onClick={share} disabled={loading || sharing || setPages.length === 0} className="w-full">
-              <Share2 className="h-4 w-4" strokeWidth={2} />
-              {sharing ? "מכין PDF…" : "שיתוף החוברת"}
-            </Button>
-          )}
-          {view === "map" && shareNote && <p role="status" className="text-center text-caption text-muted">{shareNote}</p>}
-          {view === "map" && (
-            <p className="nums text-center text-caption text-muted">
-              {setPages.length} {setPages.length === 1 ? "עמוד" : "עמודים"} · {sheetTotal} {sheetTotal === 1 ? "גיליון" : "גיליונות"}
-            </p>
+    const sheet = (
+      <article className="sheet flex flex-col bg-canvas shadow-lifted" style={{ width: `${w}mm`, minHeight: `${h}mm`, padding: `${MARGIN_MM}mm` }}>
+        {/* F-6.4: date + version stamp — on screen and in print, in the studio's document direction.
+            The load-in sheet is not an export of its own, so it carries no version. */}
+        {stamped && (
+          <CrewHeader
+            t={crewTheme}
+            title={TITLES[view]}
+            kicker={studioName || undefined}
+            meta={[
+              ...(event ? [{ label: "אירוע", value: event.clientName || "—" }, { label: "מקום", value: zonesLabelOf(event) || "—" }] : []),
+              { label: "תאריך", value: today },
+              ...(view === "loadin" ? [] : [{ label: "גרסה", value: String(version) }]),
+            ]}
+          />
+        )}
+        <div className="flex-1">
+          {view === "loadin" ? (
+            <LoadInSheet theme={crewTheme} event={event} doc={doc} entries={entries} meeting={meeting} onFacts={setLoadFacts} />
+          ) : (
+            <PackingList theme={crewTheme} doc={doc} eventId={event?.id ?? null} meeting={meeting} onSpares={setSpares} />
           )}
         </div>
+        {stamped && (
+          <CrewFooter
+            t={crewTheme}
+            printed={today}
+            studio={[studioName, crewTheme.style.footer === "contact" ? studioPhone : ""].filter(Boolean).join(" · ") || undefined}
+            className="mt-8"
+          />
         )}
-      </aside>
+      </article>
+    );
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-bg print:block">
-      {/* The light table: the sheet floats on the app's own lavender plane at its true trim size,
-          so this IS the preview. Scrolling lives here rather than on <main>, which keeps the
-          toolbar pinned while a long document runs past it. */}
-        <div className="min-h-0 flex-1 overflow-auto print:overflow-visible">
-          <div ref={sheetsRef} className="flex flex-col items-center gap-4 p-5 print:block print:p-0">
-          {/* `no-print` on purpose — this explains the sheet to whoever is producing it; it is not
-              part of what a client or a crew receives. The list and the quote carry their own
-              notice, because both are rendered straight from the meeting flow too, where this
-              screen is nowhere in the tree. */}
-          {view === "map" && plan.access === "denied" && (
-            <VenueAccessNotice tone="plan" className="no-print w-full max-w-3xl" />
-          )}
+    if (view === "packing") {
+      // The reserves are typed on the sheet itself, beside each row; the panel reads them back so
+      // they are checked before printing.
+      const label = new Map(packGroups.flatMap((g) => g.rows.map((r) => [r.variantId, r.label] as const)));
+      const rows = Object.entries(spares)
+        .filter(([id, n]) => n > 0 && label.has(id))
+        .map(([id, n]) => ({ id, label: label.get(id)!, n }))
+        .sort((a, b) => b.n - a.n);
+      const sum = rows.reduce((s, r) => s + r.n, 0);
+      return {
+        pages: sheet,
+        groups: [
+          G(
+            "spares",
+            PackagePlus,
+            "רזרבה",
+            rows.length ? <span className="nums">{`${sum} פריטים ב־${rows.length} ${rows.length === 1 ? "שורה" : "שורות"}`}</span> : "אין רזרבה",
+            <div className="flex flex-col gap-0.5">
+              {rows.map((r) => (
+                <div key={r.id} className="flex min-h-[30px] items-center justify-between gap-2 text-[13px] text-ink">
+                  <span className="min-w-0 truncate">{r.label}</span>
+                  <span className="nums shrink-0 font-semibold text-ink-soft" dir="ltr">
+                    +{r.n}
+                  </span>
+                </div>
+              ))}
+              <p className="mt-1.5 text-xs leading-relaxed text-muted">רזרבה מזינים בעמודת ״רזרבה״ שבגיליון — היא נשמרת עם האירוע ונכללת בסה״כ.</p>
+            </div>,
+          ),
+          paperGroup,
+        ],
+        foot: { info: `${packItems} פריטים · כולל רזרבה`, side: `גרסה ${version}`, action: printAction("הדפסה / PDF") },
+        defaultOpen: ["spares"],
+      };
+    }
 
+    // The load-in sheet: assembled from elsewhere — the panel says from where, and what is left to
+    // write by hand.
+    const edit = (href: string, text: string) => (meeting ? undefined : <Link href={href} className="hover:text-accent-hover">{text}</Link>);
+    const crew = loadFacts?.crew.length ?? 0;
+    const suppliers = loadFacts?.deliveries.length ?? 0;
+    const sources: { icon: LucideIcon; label: string; value: string; link?: React.ReactNode }[] = [
+      { icon: CalendarDays, label: "פרטי האירוע", value: "תאריך, מקום, אנשי קשר", link: event ? edit(`/dashboard?event=${event.id}`, "עריכה") : undefined },
+      { icon: Users, label: "צוות הקמה", value: !loadFacts ? "…" : crew ? `${crew} ${crew === 1 ? "איש" : "אנשים"}` : "לא שובץ צוות", link: event ? edit(`/dashboard?event=${event.id}`, "עריכה") : undefined },
+      { icon: Package, label: "אספקות מספקים", value: !loadFacts ? "…" : suppliers ? `${suppliers} ${suppliers === 1 ? "ספק" : "ספקים"}` : "אין אספקות ביום הזה", link: edit("/suppliers", "להזמנות") },
+      {
+        icon: MapIcon,
+        label: "חוברת המפות",
+        value: `${setPages.length} ${setPages.length === 1 ? "עמוד" : "עמודים"}`,
+        link: (
+          <button type="button" onClick={() => setView("map")} className="hover:text-accent-hover">
+            פתיחה
+          </button>
+        ),
+      },
+    ];
+    return {
+      pages: sheet,
+      groups: [
+        G(
+          "manual",
+          PencilLine,
+          "ימולא ביד",
+          "2 שדות",
+          <div className="flex flex-col gap-1.5">
+            {["שעת הגעה לאולם", "איש קשר באולם"].map((f) => (
+              <div key={f} className="flex items-center gap-2 text-[13px] text-ink">
+                <PencilLine className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
+                {f}
+              </div>
+            ))}
+            <p className="mt-1 text-xs leading-relaxed text-muted">האפליקציה לא שומרת אותם עדיין — הדף משאיר להם שורה ריקה לכתיבה ביד.</p>
+          </div>,
+          true,
+        ),
+        G(
+          "sources",
+          Link2,
+          "מאיפה הדף נבנה",
+          `${sources.length} מקורות`,
+          <div className="-mx-1.5 flex flex-col gap-px">
+            {sources.map((s) => (
+              <div key={s.label} className="flex min-h-[38px] items-center gap-2 rounded-sm px-1.5">
+                <span className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-sm bg-inset text-muted">
+                  <s.icon className="h-3.5 w-3.5" strokeWidth={1.75} />
+                </span>
+                <span className="min-w-0 flex-1 leading-tight">
+                  <span className="block text-[13px] font-semibold text-ink">{s.label}</span>
+                  <span className="nums block text-xs text-muted">{s.value}</span>
+                </span>
+                {s.link && <span className="shrink-0 text-xs font-semibold text-accent">{s.link}</span>}
+              </div>
+            ))}
+          </div>,
+        ),
+        paperGroup,
+      ],
+      foot: { info: "עמוד אחד · לא נרשם ביומן הייצוא", side: today, action: printAction("הדפסה / PDF") },
+      defaultOpen: ["manual", "sources"],
+    };
+  };
+
+  // One <article className="sheet"> per page of the set — each is its own printed page (globals.css:
+  // .sheet breaks after itself), each drawing carrying its OWN drafting title block (sheet-frame.tsx).
+  const mapPages = () =>
+    setPages.map((pg) => {
+      const paperOf = (o: "portrait" | "landscape") => {
+        const [pw, ph] = sizeOf(o);
+        return { widthMm: pw, heightMm: ph };
+      };
+      const frame = {
+        subtitle: event?.clientName,
+        studio: studioName || undefined,
+        sheetCount: sheetTotal,
+        version,
+        date: today,
+        marginMm: MARGIN_MM,
+        theme: crewTheme,
+      };
+      const pageOf = (o: "portrait" | "landscape") => ({ page: o === "portrait" ? "sheet-portrait" : "sheet-landscape" });
+      // A text page of the set (cover, schedules): the page's own margin, because the map view
+      // prints at `@page { margin: 0 }` — the drawing sheets own theirs inside the SVG. `sheet-text`
+      // keeps that padding ON PAPER: print CSS strips every sheet's padding and gives it back to
+      // this class alone (globals.css).
+      const textPage = (key: string, body: React.ReactNode, fixed = false) => (
+        <article
+          key={key}
+          className={`sheet sheet-text bg-canvas shadow-lifted${mono ? " grayscale" : ""}`}
+          style={{ ...pageOf(textOrient), width: `${w}mm`, [fixed ? "height" : "minHeight"]: `${h}mm`, padding: `${MARGIN_MM}mm` }}
+        >
+          {body}
+        </article>
+      );
+      if (pg.kind === "cover")
+        return textPage(
+          "cover",
+          <SetCover
+            theme={crewTheme}
+            studio={studioName || undefined}
+            client={event?.clientName ?? ""}
+            eventDate={event?.date ? new Date(event.date).toLocaleDateString("he-IL", { day: "numeric", month: "long", year: "numeric" }) : undefined}
+            zones={event ? zonesLabelOf(event) : ""}
+            guests={event?.guests}
+            summary={seatingSummary(doc)}
+            kits={kits.length}
+            version={version}
+            printed={today}
+            entries={entries}
+          />,
+          true,
+        );
+      if (pg.kind === "stages")
+        return textPage(
+          "stages",
+          <StageSchedule stages={stages} railingAboveMm={railingAboveMm} wallDistance={(pt) => nearestWall(plan.structure, pt)?.distanceMm ?? Infinity} doc={doc} />,
+        );
+      if (pg.kind === "kits")
+        return textPage(
+          "kits",
+          <KitSchedule kits={kits} undressed={undressed} lookup={itemLookup} details={new Set(kits.filter(detailOn).map((k) => k.key))} meeting={meeting} />,
+        );
+      if (pg.kind === "detail")
+        return (
+          <article key={`detail-${pg.kit.key}`} className={`sheet bg-canvas shadow-lifted${mono ? " grayscale" : ""}`} style={pageOf(pg.o)}>
+            <TableDetail kit={pg.kit} doc={doc} lookup={itemLookup} mono={mono} title={event ? zonesLabelOf(event) : ""} sheetNumber={pg.n} paper={paperOf(pg.o)} {...frame} />
+          </article>
+        );
+      const { sheet, z } = pg;
+      return (
+        <article key={`${sheet.id}-${z.zone?.zone.id ?? "all"}`} className={`sheet bg-canvas shadow-lifted${mono ? " grayscale" : ""}`} style={pageOf(pg.o)}>
+          <PlacementMap
+            doc={z.doc}
+            plan={{ ...plan, zones: z.zone ? [z.zone] : plan.zones, bounds: z.bounds }}
+            sheet={sheet}
+            title={z.zone?.zone.name || (event ? zonesLabelOf(event) : "")}
+            sheetNumber={pg.n}
+            railingAboveMm={railingAboveMm}
+            letters={sheet.tables === "full" ? letters : undefined}
+            summary={sheet.tables === "full" ? seatingSummary(z.doc) || undefined : undefined}
+            mono={mono}
+            // Colour = every element filled by its kind, named in the sheet's legend (KEY in
+            // placement-map.tsx); B&W = the same by grey.
+            keyed={!mono}
+            paper={paperOf(pg.o)}
+            {...frame}
+          />
+        </article>
+      );
+    });
+
+  const HEADS: Record<View, { title: string; sub: string }> = {
+    quote: { title: "הצעת מחיר", sub: "ללקוח · נבנית מהעיצוב" },
+    map: { title: "מפת הצבה", sub: "חוברת הפקה לצוות" },
+    packing: { title: "רשימת ציוד", sub: "לצוות · כמויות בלבד, בלי מחירים" },
+    loadin: { title: "דף הקמה", sub: "לצוות · מסכם את כל השאר" },
+  };
+
+  // THE SHELL (the "Outputs and 3D Drawers" board, turn 2): WHICH document on the start rail, the
+  // pages on the light table between, HOW it prints in the end panel — its groups, and the one
+  // outward action pinned at the panel's foot. The same EndPanel and FoldRow groups as the studio,
+  // so the three event screens share one drawer. Neither drawer prints; what is left is the pages.
+  const shell = (parts: DocParts | null) => {
+    const head = HEADS[view];
+    const failed = !loading && catalog.error;
+    return (
+      <div className="flex h-full min-h-0 print:block print:h-auto">
+        {/* F-6.1: page setup applies when printing. A PLAN SHEET OWNS ITS OWN MARGIN (sheet-frame.tsx
+            draws the border and title block inside a full-trim page), so the map and the quote print
+            at `margin: 0`; named pages carry each drawing sheet's own orientation into the PDF. */}
+        <style>{`@media print { @page { size: ${view === "quote" ? "A4 portrait" : `${paper} ${textOrient}`}; ${view === "map" || view === "quote" ? "margin: 0;" : ""} } @page sheet-portrait { size: ${paper} portrait; margin: 0; } @page sheet-landscape { size: ${paper} landscape; margin: 0; } }`}</style>
+
+        <DocRail docs={railDocs} active={view} onSelect={setView} forcedClosed={client ? leaveClient : undefined} />
+
+        <SheetStage pageSelector={view === "quote" ? "[data-quote-page]" : "article.sheet"} client={client} onClient={setClient} contentRef={sheetsRef} resetKey={view}>
           {loading ? (
             <SheetLoading widthMm={view === "quote" ? TRIM.A4[0] : w} heightMm={view === "quote" ? TRIM.A4[1] : h} />
-          ) : catalog.error ? (
+          ) : failed ? (
             // A catalog that failed to load would print every sheet empty — say so instead.
-            <div role="alert" className="no-print mx-auto flex max-w-md flex-col items-center gap-3 py-20 text-center">
+            <div role="alert" className="no-print flex flex-col items-center gap-3 bg-canvas px-10 py-20 text-center shadow-lifted" style={{ width: `${TRIM.A4[0]}mm` }}>
               <p className="text-sm text-ink-soft">לא ניתן לטעון את הקטלוג, ולכן אי אפשר להציג את פריטי העיצוב.</p>
               <Button variant="outline" size="sm" onClick={() => void catalog.reload()}>
                 <RotateCw className="h-4 w-4" strokeWidth={2} />
                 נסו שוב
               </Button>
             </div>
-          ) : view === "map" ? (
-            // One <article className="sheet"> per ticked sheet — each is its own printed page
-            // (globals.css: .sheet breaks after itself), each carries its OWN drafting title block
-            // (sheet-frame.tsx: venue/client, sheet name, "n / total", scale, date, version) instead
-            // of the generic header above, so `stamped` is never used here.
-            setPages.map((pg) => {
-              const paperOf = (o: "portrait" | "landscape") => {
-                const [pw, ph] = sizeOf(o);
-                return { widthMm: pw, heightMm: ph };
-              };
-              const frame = {
-                subtitle: event?.clientName,
-                studio: studioName || undefined,
-                sheetCount: sheetTotal,
-                version,
-                date: today,
-                marginMm: MARGIN_MM,
-              };
-              const pageOf = (o: "portrait" | "landscape") => ({ page: o === "portrait" ? "sheet-portrait" : "sheet-landscape" });
-              // A text page of the set (cover, schedules): the page's own margin, because the map
-              // view prints at `@page { margin: 0 }` — the drawing sheets own theirs inside the SVG.
-              // `sheet-text` is what keeps that padding ON PAPER: print CSS strips every sheet's
-              // padding (the drawing sheets frame themselves inside the SVG) and gives it back to
-              // this class alone (globals.css) — without it the cover and the schedules printed
-              // flush to the paper's edge, and the printer's unprintable strip cut their sides.
-              const textPage = (key: string, body: React.ReactNode, fixed = false) => (
-                <article
-                  key={key}
-                  className={`sheet sheet-text bg-canvas shadow-lifted${mono ? " grayscale" : ""}`}
-                  style={{ ...pageOf(textOrient), width: `${w}mm`, [fixed ? "height" : "minHeight"]: `${h}mm`, padding: `${MARGIN_MM}mm` }}
-                >
-                  {body}
-                </article>
-              );
-              if (pg.kind === "cover")
-                return textPage(
-                  "cover",
-                  <SetCover
-                    studio={studioName || undefined}
-                    client={event?.clientName ?? ""}
-                    eventDate={event?.date ? new Date(event.date).toLocaleDateString("he-IL", { day: "numeric", month: "long", year: "numeric" }) : undefined}
-                    zones={event ? zonesLabelOf(event) : ""}
-                    guests={event?.guests}
-                    summary={seatingSummary(doc)}
-                    kits={kits.length}
-                    version={version}
-                    printed={today}
-                    entries={entries}
-                  />,
-                  true,
-                );
-              if (pg.kind === "stages")
-                return textPage(
-                  "stages",
-                  <StageSchedule
-                    stages={stages}
-                    railingAboveMm={railingAboveMm}
-                    wallDistance={(pt) => nearestWall(plan.structure, pt)?.distanceMm ?? Infinity}
-                    doc={doc}
-                  />,
-                );
-              if (pg.kind === "kits")
-                return textPage(
-                  "kits",
-                  <KitSchedule kits={kits} undressed={undressed} lookup={itemLookup} details={new Set(kits.filter(detailOn).map((k) => k.key))} meeting={meeting} />,
-                );
-              if (pg.kind === "detail")
-                return (
-                  <article key={`detail-${pg.kit.key}`} className={`sheet bg-canvas shadow-lifted${mono ? " grayscale" : ""}`} style={pageOf(pg.o)}>
-                    <TableDetail kit={pg.kit} doc={doc} lookup={itemLookup} mono={mono} title={event ? zonesLabelOf(event) : ""} sheetNumber={pg.n} paper={paperOf(pg.o)} {...frame} />
-                  </article>
-                );
-              const { sheet, z } = pg;
-              return (
-                <article key={`${sheet.id}-${z.zone?.zone.id ?? "all"}`} className={`sheet bg-canvas shadow-lifted${mono ? " grayscale" : ""}`} style={pageOf(pg.o)}>
-                  <PlacementMap
-                    doc={z.doc}
-                    plan={{ ...plan, zones: z.zone ? [z.zone] : plan.zones, bounds: z.bounds }}
-                    sheet={sheet}
-                    title={z.zone?.zone.name || (event ? zonesLabelOf(event) : "")}
-                    sheetNumber={pg.n}
-                    railingAboveMm={railingAboveMm}
-                    letters={sheet.tables === "full" ? letters : undefined}
-                    summary={sheet.tables === "full" ? seatingSummary(z.doc) || undefined : undefined}
-                    mono={mono}
-                    // Colour = every element filled by its kind, named in the sheet's legend (KEY in
-                    // placement-map.tsx); B&W = the same by grey.
-                    keyed={!mono}
-                    paper={paperOf(pg.o)}
-                    {...frame}
-                  />
-                </article>
-              );
-            })
-          ) : view === "quote" ? (
-            // The quote is its own A4 pages (./quote-document.tsx) — the same boxes the PDF is
-            // built from — so it does not sit inside a sheet of this screen's.
-            <Quote
-              doc={doc}
-              meeting={meeting}
-              event={event}
-              plan={plan}
-              zonePlans={zonePlans}
-              documentVersion={workspace?.document?.version ?? null}
-            />
           ) : (
-            <article
-              className="sheet w-full bg-canvas shadow-lifted"
-              style={{ maxWidth: `${w}mm`, minHeight: `${h}mm`, padding: `${MARGIN_MM}mm` }}
-            >
-              {stamped && (
-                <header className="mb-6 flex items-baseline justify-between gap-4 border-b border-ink pb-3">
-                  <div className="min-w-0">
-                    <h2 className="font-display text-h2 text-ink">{TITLES[view]}</h2>
-                    {event && (
-                      <p className="mt-0.5 text-caption text-muted">
-                        {event.clientName} · {zonesLabelOf(event)}
-                      </p>
-                    )}
-                  </div>
-                  {/* F-6.4: date + version stamp — on screen and in print. The load-in sheet is
-                      not an export of its own, so it carries the date alone. */}
-                  <p className="nums shrink-0 text-caption text-muted">
-                    {view === "loadin" ? today : `${today} · גרסה ${version}`}
-                  </p>
-                </header>
-              )}
+            parts?.pages
+          )}
+        </SheetStage>
 
-              {view === "loadin" ? (
-                <LoadInSheet event={event} doc={doc} entries={entries} meeting={meeting} />
-              ) : (
-                <PackingList doc={doc} eventId={event?.id ?? null} meeting={meeting} />
-              )}
-            </article>
-            )}
-          </div>
-        </div>
+        <EndPanel
+          screen="outputs"
+          collapsible
+          forcedClosed={client ? leaveClient : undefined}
+          foot={parts ? <PanelFoot {...parts.foot} /> : <PanelFoot info={loading ? "טוען…" : "אין מה להפיק"} action={{ label: view === "quote" ? "שיתוף PDF" : "הדפסה / PDF", icon: view === "quote" ? Share2 : Printer, disabled: true }} />}
+          collapsedFoot={parts?.foot.action ? <CollapsedAction action={parts.foot.action} /> : undefined}
+        >
+          {parts ? (
+            <>
+              <PanelGroups kind={`outputs:${view}`} title={head.title} sub={head.sub} groups={parts.groups} lead={parts.lead} defaultOpen={parts.defaultOpen} first />
+              {parts.after}
+            </>
+          ) : (
+            <>
+              <PanelGroupsHeader title={head.title} sub={head.sub} />
+              {loading && <PanelSkeleton />}
+            </>
+          )}
+        </EndPanel>
       </div>
-    </div>
-  );
+    );
+  };
+
+  if (loading || catalog.error) return shell(null);
+  if (view === "quote")
+    return (
+      // The quote is its own A4 pages (./quote-document.tsx) — the same boxes the PDF is built from —
+      // and it owns its state, so it hands the shell its parts.
+      <Quote
+        doc={doc}
+        meeting={meeting}
+        event={event}
+        plan={plan}
+        zonePlans={zonePlans}
+        documentVersion={workspace?.document?.version ?? null}
+        client={client}
+        onStatus={setQuoteMeta}
+      >
+        {shell}
+      </Quote>
+    );
+  return shell(crewParts());
 }
 
 /** The sheet before its data lands: the page at its own trim size with a few bars on it, pulsing —
@@ -713,7 +853,7 @@ function SheetLoading({ widthMm, heightMm }: { widthMm: number; heightMm: number
     <div
       role="status"
       aria-label="טוען את האירוע"
-      className="no-print flex max-w-full flex-col gap-3 bg-canvas shadow-lifted"
+      className="no-print flex flex-col gap-3 bg-canvas shadow-lifted"
       style={{ width: `${widthMm}mm`, height: `${heightMm}mm`, padding: `${MARGIN_MM}mm` }}
     >
       <Skeleton className="h-6 w-1/3" />
@@ -723,108 +863,5 @@ function SheetLoading({ widthMm, heightMm }: { widthMm: number; heightMm: number
       <Skeleton className="h-3.5 w-5/6" />
       <Skeleton className="h-3.5 w-2/3" />
     </div>
-  );
-}
-
-/** A segmented control: hairline tray, one filled thumb. The same vocabulary as the discount
- *  switch on the quote, so the screen has one kind of switch rather than two. */
-function Seg({ children }: { children: React.ReactNode }) {
-  return <div className="flex items-center gap-0.5 rounded-md border border-border p-0.5">{children}</div>;
-}
-
-function SegItem({
-  active,
-  onClick,
-  small,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  small?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={
-        "rounded-sm transition-colors " +
-        (small ? "px-2.5 py-1 text-caption " : "px-3.5 py-1.5 text-sm ") +
-        (active ? "bg-accent-tint font-semibold text-accent" : "text-muted hover:bg-accent-tint hover:text-accent-hover")
-      }
-    >
-      {children}
-    </button>
-  );
-}
-
-/** A collapsible section of the set: its title and a one-line summary of what is in it while closed,
- *  the toggles when open. */
-function RailSection({
-  title,
-  summary,
-  open,
-  onToggle,
-  children,
-}: {
-  title: string;
-  summary: string;
-  open: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className={"rounded-sm " + (open ? "bg-inset pb-1.5" : "")}>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className="flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-start transition-colors hover:bg-accent-tint"
-      >
-        <span className="min-w-0 flex-1">
-          <span className="block text-caption font-semibold text-ink-soft">{title}</span>
-          {!open && <span className="block truncate text-[11px] text-muted">{summary}</span>}
-        </span>
-        <ChevronDown className={"h-3.5 w-3.5 shrink-0 text-muted transition-transform " + (open ? "rotate-180" : "")} strokeWidth={1.6} />
-      </button>
-      {open && <ul className="flex flex-col gap-[2px] px-1">{children}</ul>}
-    </div>
-  );
-}
-
-/** One switchable row of the set: a check that fills when it is in, the label, and an optional
- *  muted hint at the end ("מומלץ"). A square check rather than the old dot, because every group
- *  here is multi-select and a dot reads as a radio button. */
-function RailToggle({ on, onClick, hint, disabled, children }: { on: boolean; onClick: () => void; hint?: string; disabled?: boolean; children: React.ReactNode }) {
-  return (
-    <li>
-      <button
-        type="button"
-        onClick={onClick}
-        disabled={disabled}
-        aria-pressed={on}
-        className={
-          "flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-start text-caption transition-colors " +
-          (disabled ? "cursor-default text-muted/60 " : "hover:bg-accent-tint ") +
-          (on ? "font-semibold text-accent" : disabled ? "" : "text-muted hover:text-ink-soft")
-        }
-      >
-        <span
-          aria-hidden
-          className={
-            "flex h-3 w-3 shrink-0 items-center justify-center rounded-[3px] border " + (on ? "border-accent bg-accent" : "border-border bg-surface")
-          }
-        >
-          {on && (
-            <svg viewBox="0 0 10 10" className="h-2 w-2 text-white" fill="none" stroke="currentColor" strokeWidth={1.8}>
-              <path d="M2 5.2 4.1 7.2 8 3" />
-            </svg>
-          )}
-        </span>
-        <span className="min-w-0 flex-1 truncate">{children}</span>
-        {hint && <span className="shrink-0 text-[10px] font-medium text-muted">{hint}</span>}
-      </button>
-    </li>
   );
 }

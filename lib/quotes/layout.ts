@@ -36,6 +36,12 @@ export const DEFAULT_CLOSING = "בברכת מזל טוב ובהצלחה,";
 
 export const MAX_SECTION_PHOTOS = 3;
 
+/** The photo-map keys of the pages that are not sections. Never a section key (those are
+ *  "zone:…", "kit:…", "ceiling"…). */
+export const COVER_PHOTO = "page:cover";
+export const CONCEPT_PHOTO = "page:concept";
+export const CLOSING_PHOTO = "page:closing";
+
 export interface QuoteLayout {
   priceMode: PriceMode;
   /** The price agreed, in the studio's price basis (VAT included when the studio quotes so).
@@ -58,6 +64,11 @@ export interface QuoteLayout {
   order: string[];
   /** One sentence under the palette, in the client's words: "כל הפרחים בגווני שמנת-לבן…". */
   paletteNote: string;
+  /** The idea, in a paragraph — the concept page's text (the Documents board, 2026-11-10). Empty =
+   *  the page shows the palette alone, or is left out when there is no palette either. Its photo is
+   *  `photos[CONCEPT_PHOTO]`, the cover's `photos[COVER_PHOTO]`, the last page's
+   *  `photos[CLOSING_PHOTO]`. */
+  concept: string;
   /** Lines the drawing cannot know (QuoteExtra). */
   extras: QuoteExtra[];
   /** Print the floor-plan sketch page. */
@@ -77,6 +88,7 @@ export const DEFAULT_LAYOUT: QuoteLayout = {
   photos: {},
   order: [],
   paletteNote: "",
+  concept: "",
   extras: [],
   sketch: true,
   closing: "",
@@ -123,6 +135,7 @@ export function normalizeLayout(value: unknown): QuoteLayout {
     photos: strMap(v.photos, 200, (x) => (Array.isArray(x) ? strList(x, MAX_SECTION_PHOTOS) : undefined)),
     order: strList(v.order, 200),
     paletteNote: str(v.paletteNote, 400),
+    concept: str(v.concept, 1200),
     extras,
     sketch: v.sketch !== false,
     closing: str(v.closing, 200),
@@ -260,6 +273,7 @@ export function layoutSignature(layout: QuoteLayout): string {
     sorted(l.photos),
     l.order,
     l.paletteNote,
+    l.concept,
     l.extras.map((e) => [e.id, e.label, e.price]),
     l.sketch,
     l.closing,

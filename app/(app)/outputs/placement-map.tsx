@@ -264,6 +264,7 @@ export function PlacementMap({
   letters,
   summary,
   bare,
+  theme,
   colour = false,
   mono = false,
   keyed = false,
@@ -670,6 +671,7 @@ export function PlacementMap({
         paper={paper}
         marginMm={marginMm}
         bare={bare}
+        theme={theme}
       >
         {/* A function of the fitted scale, so every figure below is sized in PRINTED millimetres
             (`den * mm`) — the crew reads the page, and a number authored in room millimetres is a

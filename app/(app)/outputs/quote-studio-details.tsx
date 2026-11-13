@@ -1,10 +1,8 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Building2 } from "lucide-react";
 import { saveSettings } from "@/lib/settings/actions";
 import type { BusinessSettings } from "@/lib/settings/types";
-import { Popover } from "@/components/popover";
 import { TextField } from "@/components/text-field";
 import { ImageField } from "@/components/image-field";
 import { SwitchRow } from "@/components/toggle";
@@ -27,6 +25,8 @@ export function missingDetails(s: BusinessSettings | null): string[] {
   ].filter((x): x is string => !!x);
 }
 
+/** The fields, as the end panel's "פרטי הסטודיו" group draws them (2026-11-11 — they were a
+ *  popover off the quote's edit card, which is gone): one column, the panel is 264px inside. */
 export function QuoteStudioDetails({ settings, onChange }: { settings: BusinessSettings; onChange: (next: BusinessSettings) => void }) {
   // Debounced like the settings screen: every field here autosaves (lib/settings/actions.ts).
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -48,31 +48,19 @@ export function QuoteStudioDetails({ settings, onChange }: { settings: BusinessS
       void saveSettings(next);
     }, 600);
   };
-  const missing = missingDetails(settings);
 
   return (
-    <Popover
-      label="פרטי הסטודיו בהצעה"
-      icon={Building2}
-      value={missing.length ? `חסרים ${missing.length}` : "מלאים"}
-      tone={missing.length ? "warn" : "default"}
-      side="bottom"
-      panelClassName="w-[420px]"
-    >
-      <div className="space-y-3">
-        <p className="text-[13px] text-muted">נשמרים בהגדרות הסטודיו ומופיעים בכל הצעה: הלוגו בראש, פרטי הקשר בתחתית כל עמוד, החתימה בסוף.</p>
-        <div className="grid grid-cols-2 gap-3">
-          <TextField label="טלפון" type="tel" dir="ltr" value={settings.phone} onChange={(phone) => patch({ phone })} className="text-end" />
-          <TextField label="דוא״ל" type="email" dir="ltr" value={settings.email} onChange={(email) => patch({ email })} className="text-end" />
-          <TextField label="אינסטגרם" dir="ltr" value={settings.instagram} onChange={(instagram) => patch({ instagram })} placeholder="iritdesign" className="text-end" />
-          <TextField label="שם לחתימה" value={settings.ownerName} onChange={(ownerName) => patch({ ownerName })} />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <ImageField label="לוגו" value={settings.logoUrl} onChange={(logoUrl) => patch({ logoUrl })} kind="logo" className="h-20 w-36" />
-          <ImageField label="חתימה" value={settings.signatureUrl} onChange={(signatureUrl) => patch({ signatureUrl })} kind="signature" className="h-20 w-36" />
-        </div>
-        <SwitchRow checked={settings.showBsd} onChange={(showBsd) => patch({ showBsd })} label="בס״ד בראש כל עמוד" />
+    <div className="space-y-3">
+      <p className="text-xs leading-relaxed text-muted">נשמרים בהגדרות הסטודיו ומופיעים בכל הצעה: הלוגו בראש, פרטי הקשר בתחתית כל עמוד, החתימה בסוף.</p>
+      <TextField label="טלפון" type="tel" dir="ltr" value={settings.phone} onChange={(phone) => patch({ phone })} className="text-end" />
+      <TextField label="דוא״ל" type="email" dir="ltr" value={settings.email} onChange={(email) => patch({ email })} className="text-end" />
+      <TextField label="אינסטגרם" dir="ltr" value={settings.instagram} onChange={(instagram) => patch({ instagram })} placeholder="iritdesign" className="text-end" />
+      <TextField label="שם לחתימה" value={settings.ownerName} onChange={(ownerName) => patch({ ownerName })} />
+      <div className="grid grid-cols-2 gap-3">
+        <ImageField label="לוגו" value={settings.logoUrl} onChange={(logoUrl) => patch({ logoUrl })} kind="logo" className="h-20 w-full" />
+        <ImageField label="חתימה" value={settings.signatureUrl} onChange={(signatureUrl) => patch({ signatureUrl })} kind="signature" className="h-20 w-full" />
       </div>
-    </Popover>
+      <SwitchRow checked={settings.showBsd} onChange={(showBsd) => patch({ showBsd })} label="בס״ד בראש כל עמוד" />
+    </div>
   );
 }

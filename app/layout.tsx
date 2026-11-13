@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Assistant, Urbanist, Space_Grotesk } from "next/font/google";
+import { docFontVariables } from "./doc-fonts";
 import "./globals.css";
 
 // Assistant carries every Hebrew surface — body, UI and display weights alike.
@@ -39,7 +40,7 @@ export default function RootLayout({
     <html
       lang="he"
       dir="rtl"
-      className={`${assistant.variable} ${urbanist.variable} ${grotesk.variable} h-full antialiased`}
+      className={`${assistant.variable} ${urbanist.variable} ${grotesk.variable} ${docFontVariables} h-full antialiased`}
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col" suppressHydrationWarning>

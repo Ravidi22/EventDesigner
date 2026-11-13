@@ -3,6 +3,7 @@
 // Studio-level, not venue-level: a designer working three properties still has one VAT rate and one
 // letterhead. What varies per property lives in the מתחמים ושיתוף section.
 import type { VatStatus } from "@/lib/billing/types";
+import { DEFAULT_DOC_STYLE, type DocStyleSetting } from "@/lib/documents/style";
 
 export interface BusinessSettings {
   businessName: string;
@@ -34,6 +35,9 @@ export interface BusinessSettings {
   vatStatus: VatStatus;
   /** Bank, branch, account — printed on a payment request so the client can transfer. */
   bankDetails: string;
+  /** How the quote and the crew sheets look (lib/documents/style.ts). Saved on its own
+   *  (saveDocStyle) — saveSettings never writes it, so the letterhead form cannot reset it. */
+  docStyle: DocStyleSetting;
 }
 
 /**
@@ -81,4 +85,5 @@ export const DEFAULT_SETTINGS: BusinessSettings = {
   quoteTerms: "",
   vatStatus: "licensed",
   bankDetails: "",
+  docStyle: DEFAULT_DOC_STYLE,
 };

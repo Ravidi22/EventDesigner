@@ -680,6 +680,7 @@ async function verifySettings() {
     vatStatus: "licensed",
     bankDetails: "",
     quoteTerms: "תשלום: 50% במעמד האישור.\nביטול עד 30 יום.",
+    docStyle: original.docStyle, // never written by saveSettings (saveDocStyle owns it)
   });
 
   check("settings round-trip", written.businessName === "בדיקה — סטודיו" && written.ownerName === "בדיקה");

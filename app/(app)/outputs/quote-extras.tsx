@@ -8,7 +8,6 @@ import { NumberField } from "@/components/number-field";
 import { IconButton } from "@/components/icon-button";
 import { Button } from "@/components/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { fieldLabelClassName } from "@/components/control";
 
 // "תוספות" — the lines the drawing cannot know about: transport, set-up and strike, a lighting
 // rental. Both studios' own quotes carry them (הובלה 4,800 · פיזור ואיסוף 3,800), and a quote that
@@ -19,6 +18,8 @@ const SUGGESTIONS = ["הובלה", "פיזור ואיסוף ציוד", "הקמה
 
 const newId = () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID().slice(0, 8) : String(Date.now()));
 
+/** Drawn inside the end panel's "תוספות" group (2026-11-11): the group's title is the label, and the
+ *  price field is narrow enough for the panel's 264px. */
 export function QuoteExtras({ extras, onChange }: { extras: QuoteExtra[]; onChange: (extras: QuoteExtra[]) => void }) {
   const [removing, setRemoving] = useState<QuoteExtra | null>(null);
   const set = (id: string, patch: Partial<QuoteExtra>) => onChange(extras.map((e) => (e.id === id ? { ...e, ...patch } : e)));
@@ -28,12 +29,12 @@ export function QuoteExtras({ extras, onChange }: { extras: QuoteExtra[]; onChan
 
   return (
     <div>
-      <span className={fieldLabelClassName}>תוספות (שאינן בשרטוט)</span>
+      <span className="mb-2 block text-xs text-muted">שורות שאינן בשרטוט — הובלה, פיזור, השכרת תאורה.</span>
       <div className="space-y-2">
         {extras.map((e) => (
           <div key={e.id} className="flex items-center gap-2">
             <TextField value={e.label} onChange={(label) => set(e.id, { label })} placeholder="למשל: הובלה" aria-label="תיאור התוספת" wrapperClassName="min-w-0 flex-1" />
-            <NumberField value={e.price} onChange={(price) => set(e.id, { price })} min={0} decimals={0} hideZero placeholder="מחיר" aria-label="מחיר התוספת" className="w-28" />
+            <NumberField value={e.price} onChange={(price) => set(e.id, { price })} min={0} decimals={0} hideZero placeholder="מחיר" aria-label="מחיר התוספת" className="w-20" />
             <IconButton label={`הסרת "${e.label || "שורה"}"`} onClick={() => remove(e)}>
               <Trash2 className="h-4 w-4" strokeWidth={1.8} />
             </IconButton>

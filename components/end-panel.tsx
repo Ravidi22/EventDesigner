@@ -54,13 +54,42 @@ function setPanelOpen(screen: string, open: boolean) {
   window.dispatchEvent(new Event(CHANGE_EVENT));
 }
 
+/** A put-away preference of this device, as the end panel keeps its own — for another drawer of the
+ *  same shell (/outputs' document rail). Open until the device says otherwise. */
+export function useStoredOpen(key: string): [boolean, (open: boolean) => void] {
+  const stored = useSyncExternalStore(subscribePanel, () => loadEndPanelOpen(key), () => true);
+  return [stored !== false, (open: boolean) => setPanelOpen(key, open)];
+}
+
 /** Bring a screen's end panel back if it was put away — for a verb elsewhere that opens a group in
  *  it. */
 export function openEndPanel(screen: string) {
   setPanelOpen(screen, true);
 }
 
-export function EndPanel({ screen, collapsible = false, children }: { screen: "studio" | "halls" | "editor"; collapsible?: boolean; children: ReactNode }) {
+export function EndPanel({
+  screen,
+  collapsible = false,
+  foot,
+  collapsedTools,
+  collapsedFoot,
+  forcedClosed,
+  children,
+}: {
+  screen: "studio" | "halls" | "editor" | "outputs" | "scene";
+  collapsible?: boolean;
+  /** Pinned under the scrolling groups, never scrolled away (the outputs and 3D board, 2026-11-11:
+   *  "the foot never scrolls") — the screen's one outward action and its count. */
+  foot?: ReactNode;
+  /** Put away: what the 48px column keeps under its button (the 3D view's three moods). */
+  collapsedTools?: ReactNode;
+  /** Put away: the foot's action as one round button at the column's foot. */
+  collapsedFoot?: ReactNode;
+  /** Shown put away whatever the device remembers, without storing it — the client view. Its
+   *  expand button leaves that view (`onOpen`) instead of flipping the stored preference. */
+  forcedClosed?: { onOpen: () => void };
+  children: ReactNode;
+}) {
   // Open on the server and on the hydrating render (the server snapshot), so the two agree and a
   // stored "closed" folds it a frame later rather than flashing it open.
   const stored = useSyncExternalStore(
@@ -68,8 +97,8 @@ export function EndPanel({ screen, collapsible = false, children }: { screen: "s
     () => (collapsible ? loadEndPanelOpen(screen) : true),
     () => true,
   );
-  const open = !collapsible || stored !== false;
-  const toggle = () => setPanelOpen(screen, !open);
+  const open = !forcedClosed && (!collapsible || stored !== false);
+  const toggle = () => (forcedClosed ? forcedClosed.onOpen() : setPanelOpen(screen, !open));
   // Put away, it is a 48px column with a full-size button at its top (2026-11-09, the user: folded
   // to nothing it was a sliver with half a puck — "the compact is too much"). The column is the
   // button's well, so the canvas never loses the panel's edge.
@@ -77,7 +106,7 @@ export function EndPanel({ screen, collapsible = false, children }: { screen: "s
     <aside
       data-end-panel
       className={
-        "group/panel relative flex min-h-0 shrink-0 flex-col border-s border-border bg-surface transition-[width] duration-200 ease-fluid " +
+        "no-print group/panel relative flex min-h-0 shrink-0 flex-col border-s border-border bg-surface transition-[width] duration-200 ease-fluid " +
         (open ? "w-[296px]" : "w-12 overflow-hidden")
       }
     >
@@ -94,8 +123,8 @@ export function EndPanel({ screen, collapsible = false, children }: { screen: "s
           <ChevronsLeft className="h-4 w-4" strokeWidth={2} />
         </button>
       )}
-      {collapsible && !open && (
-        <div className="flex flex-col items-center pt-3">
+      {(collapsible || forcedClosed) && !open && (
+        <div className="flex min-h-0 flex-1 flex-col items-center gap-1 py-3">
           <button
             type="button"
             onClick={toggle}
@@ -106,9 +135,17 @@ export function EndPanel({ screen, collapsible = false, children }: { screen: "s
           >
             <PanelLeftOpen className="h-[18px] w-[18px]" strokeWidth={1.6} />
           </button>
+          {collapsedTools && (
+            <>
+              <div className="my-1 h-px w-6 bg-border" aria-hidden />
+              {collapsedTools}
+            </>
+          )}
+          {collapsedFoot && <div className="mt-auto">{collapsedFoot}</div>}
         </div>
       )}
       <div className={"scroll-slim min-h-0 flex-1 overflow-y-auto " + (open ? "" : "hidden")}>{children}</div>
+      {open && foot && <div className="shrink-0 border-t border-border bg-surface px-4 pb-4 pt-3">{foot}</div>}
     </aside>
   );
 }
@@ -325,6 +362,7 @@ export function PanelGroups({
   groups,
   defaultOpen,
   first = false,
+  lead,
 }: {
   kind: string;
   title: string;
@@ -334,6 +372,8 @@ export function PanelGroups({
   defaultOpen?: readonly string[];
   /** At the top of the panel: no hairline over it (the studio's sketch groups, above the list). */
   first?: boolean;
+  /** A line under the heading, before the groups — the quote's "changes not sent yet". */
+  lead?: ReactNode;
 }) {
   const open = useSyncExternalStore(
     groupMemory.subscribe,
@@ -344,6 +384,7 @@ export function PanelGroups({
     <div>
       {!first && <div className="h-px bg-border" aria-hidden />}
       <PanelGroupsHeader title={title} sub={sub} note={note} />
+      {lead}
       {orderGroups(groups).map((g) => (
         <div key={g.key} data-group={g.key}>
           <FoldRow

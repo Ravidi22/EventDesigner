@@ -25,6 +25,7 @@ import {
 } from "@/lib/production/runway";
 import { DEFAULT_SETTINGS, type BusinessSettings } from "./types";
 import type { VatStatus } from "@/lib/billing/types";
+import { normalizeDocStyle, type DocStyleSetting } from "@/lib/documents/style";
 import type { Point, StageTemplate } from "@/lib/design-document/types";
 
 /** Postgres `numeric` arrives as a string — arbitrary precision, so the driver will not silently
@@ -69,6 +70,7 @@ export async function fetchSettings(): Promise<BusinessSettings> {
     quoteTerms: row.quoteTerms,
     vatStatus: row.vatStatus,
     bankDetails: row.bankDetails,
+    docStyle: normalizeDocStyle(row.docStyle),
   };
 }
 
@@ -152,6 +154,22 @@ export async function saveSettings(input: BusinessSettings): Promise<BusinessSet
 
   revalidateSettings();
   return fetchSettings();
+}
+
+/**
+ * How the studio's documents look (Settings → מיתוג מסמכים). Its own write, not a field of
+ * saveSettings: the letterhead form autosaves the whole BusinessSettings it holds, and a stale copy
+ * of the style riding along would undo a change made on the branding screen a second earlier.
+ */
+export async function saveDocStyle(input: unknown): Promise<DocStyleSetting> {
+  const organizationId = await currentOrg();
+  const docStyle = normalizeDocStyle(input);
+  await db()
+    .insert(studioSettings)
+    .values({ organizationId, docStyle, updatedAt: new Date() })
+    .onConflictDoUpdate({ target: studioSettings.organizationId, set: { docStyle, updatedAt: new Date() } });
+  revalidateSettings();
+  return docStyle;
 }
 
 /**
