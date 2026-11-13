@@ -55,6 +55,7 @@ import {
   isWindow,
   nodeMap,
   plantSpecies,
+  setWallHeight,
   surfaceMaterial as featureSurface,
   wallPoints,
   windowHeights,
@@ -66,6 +67,7 @@ import {
 } from "@/lib/venues/structure";
 import type { ResolvedZone } from "@/lib/venues/zone";
 import { buildingFromBoundary, featureWorldOutline, followsWalls } from "@/lib/venues/face-surfaces";
+import { insideOutlines, rimOf } from "@/lib/venues/rim";
 import { eventPlan } from "@/lib/events/plan";
 import { emptyDocument } from "@/lib/design-document/types";
 import { isMain } from "../self-check";
@@ -80,6 +82,7 @@ import { offsetOutline } from "./tables";
 import { hedgeParts, palmParts, plantTurn, potParts, shrubParts, treeParts } from "./plants";
 import { readStructures, shaftTopOf, type BeamReading, type ColumnReading } from "./structures";
 import { elevationOf } from "./elevation";
+import { pergolaOf } from "@/lib/venues/pergola";
 import {
   DEFAULT_SETTINGS,
   DOOR_HEIGHT_MM,
@@ -276,16 +279,26 @@ export function borderingBuildings(poly: readonly Point[], buildings: readonly B
   return buildings.filter((b) => probes.some((p) => pointInPolygon(p, b.boundary)));
 }
 
-/** How high a wall stands: an `edge` kind is a kerb; a `wall` is as tall as the tallest ROOFED
- *  zone (ceilingHeightMm > 0) or BUILDING it borders, and a garden wall when it borders none —
- *  both faces open sky, or outside every zone. */
-export function wallHeightMm(wall: Pick<Wall, "kind">, poly: readonly Point[], zones: readonly ResolvedZone[], buildings: readonly Building[] = []): number {
+/** How high a wall stands: its own typed height first (Wall.heightMm — a half wall, a parapet, a
+ *  fence on an edge; it wins over the room either way, and a wall lower than its zone's ceiling just
+ *  stops under the roof), else derived: an `edge` kind is a kerb; a `wall` is as tall as the tallest
+ *  ROOFED zone (ceilingHeightMm > 0) or BUILDING it borders, and a garden wall when it borders
+ *  none — both faces open sky, or outside every zone. */
+export function wallHeightMm(wall: Pick<Wall, "kind" | "heightMm">, poly: readonly Point[], zones: readonly ResolvedZone[], buildings: readonly Building[] = []): number {
+  if (wall.heightMm !== undefined && wall.heightMm > 0) return wall.heightMm;
   if (wall.kind === "edge") return KERB_MM;
   let tallest = 0;
   for (const z of borderingZones(poly, zones)) tallest = Math.max(tallest, z.zone.ceilingHeightMm || 0);
   for (const b of borderingBuildings(poly, buildings)) tallest = Math.max(tallest, b.heightMm);
   return tallest > 0 ? tallest : GARDEN_WALL_MM;
 }
+
+/** An `edge` with a typed height is a fence or a low garden wall this thick (spec 2026-11-07 §2:
+ *  half a wall — a kerb's 100 reads as a curb, not a fence). */
+export const FENCE_THICK_MM = WALL_THICK_MM / 2;
+
+/** Whether a wall carries a typed height of its own (Wall.heightMm). */
+const fenceHeight = (wall: Pick<Wall, "heightMm">): boolean => wall.heightMm !== undefined && wall.heightMm > 0;
 
 /** Which side of a wall, at `p`, is INSIDE: +1 for the `n` side, −1 for the other. The side whose
  *  probe (one wall-thickness off the wall) lands in a roofed zone or a building wins; failing that,
@@ -441,7 +454,10 @@ function wallBodies(structure: VenueStructure, wall: Wall, entrances: readonly S
   const along = polylineLength(poly);
   if (chord < 1 || along < 1) return;
   const h = wallHeightMm(wall, poly, zones, buildings);
-  const thick = wall.kind === "edge" ? KERB_THICK_MM : WALL_THICK_MM;
+  // An edge given a height of its own is a FENCE — a thin wall, in the wall's tone — not a kerb
+  // stretched tall (spec 2026-11-07 §2); left untyped it is the kerb it always was.
+  const fence = wall.kind === "edge" && fenceHeight(wall);
+  const thick = fence ? FENCE_THICK_MM : wall.kind === "edge" ? KERB_THICK_MM : WALL_THICK_MM;
   const openings = wallOpenings(entrances, chord, h).map((o) => ({ ...o, startMm: (o.startMm * along) / chord, endMm: (o.endMm * along) / chord }));
   const windows = new Set(entrances.filter(isWindow).map((e) => e.id));
   const solids: Part[] = [];
@@ -464,7 +480,7 @@ function wallBodies(structure: VenueStructure, wall: Wall, entrances: readonly S
     for (const g of pieces.panes) collect(panes, g.id, g.part);
     from += len;
   }
-  out.body(`wall:${wall.id}`, { type: "wall", id: wall.id }, wall.kind === "edge" ? KERB_MATERIAL : WALL_MATERIAL, solids, [here()]);
+  out.body(`wall:${wall.id}`, { type: "wall", id: wall.id }, wall.kind === "edge" && !fence ? KERB_MATERIAL : WALL_MATERIAL, solids, [here()]);
   for (const [id, parts] of lintels) out.body(`door:${id}`, { type: windows.has(id) ? "window" : "door", id }, WALL_MATERIAL, parts, [here()]);
   // The glass: a pane per chord, casting no shadow — a glazed front lights the hall behind it.
   for (const [id, parts] of panes) out.body(`window:${id}`, { type: "window", id }, GLASS_MATERIAL, parts, [here()], { castShadow: false });
@@ -508,7 +524,11 @@ function waterWells(structure: VenueStructure, floorOf: FloorOf): Well[] {
     // A basin raised on a platform cuts nothing: the floor under the platform is out of sight.
     if (!isWell(f) || floorOfFeature(f, floorOf) > 0) continue;
     const frame = featureFrame(f);
-    wells.push({ id: f.id, centre: { x: f.x, y: f.y }, room: footprintOutlines(featureFootprint(f)).map((o) => carryOutline(o, frame)) });
+    // The WATER's edge (lib/venues/rim.ts insideOutlines): a pool's rim is floor, so the floor is cut
+    // only where the water is — its whole footprint when it has no rim, nothing when it is all rim.
+    const water = insideOutlines(f);
+    if (!water.length) continue;
+    wells.push({ id: f.id, centre: { x: f.x, y: f.y }, room: water.map((o) => carryOutline(o, frame)) });
   }
   return wells;
 }
@@ -529,7 +549,8 @@ function holesIn(polygon: readonly Point[], wells: readonly Well[], into: Transf
  *  outline) and floor, the water plane at the top of the recess, and a coping kerb — COPING_MM
  *  wide, COPING_HIGH_MM high — standing on the floor round the rim (the rim itself is its hole, so
  *  it covers the seam between the floor's cut edge and the well's wall). */
-function waterWell(f: StructureFeature, outlines: readonly BuiltOutline[], out: SceneCollector, floorZ = 0): void {
+function waterWell(f: StructureFeature, outlines: readonly BuiltOutline[], out: SceneCollector, floorZ = 0, coping = true): void {
+  if (!outlines.length) return; // all rim, no water (lib/venues/rim.ts)
   const bottom = -(WATER_DEPTH_MM + WELL_BELOW_MM);
   const tint = hexOf(f.style?.fill);
   const water: MaterialRef = tint ? { ...surfaceMaterial("water", tint), opacity: 0.8 } : waterMaterial();
@@ -549,9 +570,28 @@ function waterWell(f: StructureFeature, outlines: readonly BuiltOutline[], out: 
     parts.push({ shape: "ribbon", path: closedPolyline(o), h: WATER_DEPTH_MM + WELL_BELOW_MM, at: vec3(0, 0, bottom) });
     parts.push({ shape: "plane", outline: o, at: vec3(0, 0, bottom) });
     parts.push({ shape: "plane", outline: o, at: vec3(0, 0, -WATER_DEPTH_MM), material: water });
-    parts.push({ shape: "extrude", outline: { outline: offsetOutline(o, COPING_MM) }, holes: [o], h: COPING_HIGH_MM, at: vec3(0, 0, 0), material: COPING_MATERIAL });
+    // A pool with a rim of its own is edged by it (rimBody): no second kerb outside the band.
+    if (coping) parts.push({ shape: "extrude", outline: { outline: offsetOutline(o, COPING_MM) }, holes: [o], h: COPING_HIGH_MM, at: vec3(0, 0, 0), material: COPING_MATERIAL });
   }
   out.body(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, WELL_MATERIAL, parts, [featureFrame(f)], { castShadow: false });
+}
+
+/** The band round a pool's water or round a surface (StructureFeature.rim, lib/venues/rim.ts): a
+ *  slab in its own material between the feature's outline and what lies inside it — `raisedMm` high
+ *  off the floor it stands on (a lawn's kerb at 100), or FLUSH: a plane at `flushZ`, over whatever
+ *  ground lies under it. The water's well is cut to the inside (waterWells), so the band is floor. */
+function rimBody(f: StructureFeature, out: SceneCollector, floorZ: number, flushZ: number): void {
+  const r = rimOf(f);
+  if (!r) return;
+  const material = surfaceMaterial(r.rim.material, hexOf(r.rim.style?.fill));
+  const raised = Math.max(0, r.rim.raisedMm ?? 0);
+  const parts: Part[] = r.outer.map((outline) => {
+    const poly = closedPolyline(outline);
+    const holes = r.inner.filter((o) => o.outline.length > 0 && pointInPolygon(o.outline[0], poly));
+    const cut = holes.length ? { holes } : {};
+    return raised > 0 ? { shape: "extrude", outline, ...cut, h: raised, at: vec3(0, 0, 0) } : { shape: "plane", outline, ...cut, at: vec3(0, 0, flushZ) };
+  });
+  out.body(`rim:${f.id}`, { type: "feature", id: f.id, label: f.label }, material, parts, [{ ...featureFrame(f), at: vec3(f.x, f.y, floorZ) }], { castShadow: raised > 0 });
 }
 
 // --- features -------------------------------------------------------------------------------------
@@ -612,6 +652,26 @@ function fountainBody(f: StructureFeature, wells: readonly Well[], out: SceneCol
   const inPool = floorZ === 0 && wells.some((w) => w.id !== f.id && w.room.some((o) => pointInPolygon({ x: f.x, y: f.y }, closedPolyline(o))));
   const z = inPool ? -WATER_DEPTH_MM : floorZ;
   out.item(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, floorKindBody("fountain", ctx), roomTransform({ position: { x: f.x, y: f.y }, rotation: f.rotationDeg ?? 0 }, z));
+}
+
+/** The venue's own pergola (FeatureKind "pergola", lib/venues/pergola.ts): the catalog's pergola
+ *  body (./floor-kinds.ts pergolaBody — one function for both) from the feature's footprint as drawn,
+ *  its height, its spec and its tint, standing on the floor under it (a pergola built on a terrace
+ *  stands on the terrace). */
+function pergolaFeatureBody(f: StructureFeature, out: SceneCollector, floorZ: number): void {
+  const ctx: ItemContext = {
+    product: undefined,
+    resolved: undefined,
+    footprint: featureFootprint(f),
+    widthMm: f.widthMm,
+    depthMm: f.depthMm,
+    heightMm: f.heightMm > 0 ? f.heightMm : 2600,
+    tone: hexOf(f.style?.fill) ?? DEFAULT_TONE.pergola.toLowerCase(),
+    count: 1,
+    author: false,
+    pergola: pergolaOf(f),
+  };
+  out.item(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, floorKindBody("pergola", ctx), roomTransform({ position: { x: f.x, y: f.y }, rotation: f.rotationDeg ?? 0 }, floorZ));
 }
 
 /** A column (./structures.ts — the venue's own, or read off nested footprints): the PLINTH (its
@@ -827,18 +887,27 @@ function featureBodies(structure: VenueStructure, wells: readonly Well[], out: S
     return z;
   };
   const beamFloor = (b: BeamReading): number => Math.max(0, ...b.columns.map(floorOfColumn));
+  // A pool's flush rim lies over every ground plane (the k-th surface at 1 + k): one above the lot.
+  const overGround = 2 + structure.features.filter((f) => f.kind === "surface").length;
   for (const f of structure.features) {
     switch (f.kind) {
       case "surface": {
-        const outlines = footprintOutlines(featureFootprint(f));
-        if (featureSurface(f) === "water") waterWell(f, outlines, out);
-        else surfacePlane(f, outlines, surfaces, wells, out);
+        // Inside its rim, if it has one (lib/venues/rim.ts) — else its whole footprint, as before.
+        const outlines = insideOutlines(f);
+        const rimmed = !!rimOf(f);
+        if (featureSurface(f) === "water") waterWell(f, outlines, out, 0, !rimmed);
+        else if (outlines.length) surfacePlane(f, outlines, surfaces, wells, out);
+        if (rimmed) rimBody(f, out, 0, 1 + surfaces);
         surfaces++;
         break;
       }
-      case "pool":
-        waterWell(f, footprintOutlines(featureFootprint(f)), out, floorOfFeature(f, floorOf));
+      case "pool": {
+        const z = floorOfFeature(f, floorOf);
+        const rimmed = !!rimOf(f);
+        waterWell(f, insideOutlines(f), out, z, !rimmed);
+        if (rimmed) rimBody(f, out, z, z > 0 ? 2 : overGround);
         break;
+      }
       case "column":
       case "structure":
       case "other": {
@@ -869,6 +938,9 @@ function featureBodies(structure: VenueStructure, wells: readonly Well[], out: S
         break;
       case "fountain":
         fountainBody(f, wells, out, floorOfFeature(f, floorOf));
+        break;
+      case "pergola":
+        pergolaFeatureBody(f, out, floorOfFeature(f, floorOf));
         break;
       case "plant":
         plantInstance(f, out, floorOf);
@@ -1220,6 +1292,110 @@ if (isMain(import.meta.url)) {
       assert(c.parts.some((q) => q.shape === "lathe") && c.parts.some((q) => q.shape === "torus"), "…a round shaft over a base ring");
       const palms = rb.find((n) => n.id.startsWith("i:plant:palm:"))!;
       assert(palms.instances[0].at.z === 0, "a palm whose trunk is off the platform stands on the ground, whatever its crown overhangs");
+    }
+
+    // TYPED WALL HEIGHTS (Wall.heightMm, spec 2026-11-07 §2): a typed height wins over the room —
+    // lower than the hall's 4 m ceiling, the wall stops under the roof, which does not move; on an
+    // edge, a fence of that height in the wall's tone; a wall nobody typed reads exactly as before.
+    {
+      let typed = setWallHeight(structure, "w-top-a", 1200);
+      typed = setWallHeight(typed, "w-bot-b", 2000); // the terrace's kerb, made a 2 m fence
+      typed = setWallHeight(typed, "w-left", 1800); // the hall's door wall, lower than the 2.1 m door
+      typed = setWallHeight(typed, "w-bot-a", 1500); // the window wall, under the window's 2.1 m head
+      const tPlan = eventPlan({ venueId: "v", zoneIds: ["z-hall"] }, {
+        structure: typed,
+        zones: [zone("z-hall", "אולם", "hall", { x: 3000, y: 2000 }, 4000), zone("z-terrace", "מרפסת", "open", { x: 8000, y: 2000 }, 0)],
+        mmPerUnit: 1,
+        access: "granted",
+      });
+      const t = new SceneCollector();
+      const tRoof = envelopeNodes({ doc: emptyDocument(), plan: tPlan, structure: typed, settings: DEFAULT_SETTINGS, author: true }, t).roofedMm;
+      const tb = t.nodes().filter((n): n is Extract<typeof n, { kind: "body" }> => n.kind === "body");
+      const tById = (id: string) => tb.find((b) => b.id === id);
+      const heights = (id: string) => [...new Set(tById(id)!.parts.map((p) => (p.shape === "box" ? p.h : NaN)))];
+      assert(heights("wall:w-top-a").join() === "1200", `a wall typed 1.2 m stands 1.2 m inside a 4 m hall (got ${heights("wall:w-top-a").join()})`);
+      const tCeil = tb.find((b) => b.id === "ceiling:z-hall")!.parts[0];
+      assert(tRoof === 4000 && tCeil.shape === "plane" && tCeil.at.z === 4000, "…and the hall's roof stays at 4 m over it");
+      assert(heights("wall:w-shared").join() === "4000", "a wall nobody typed is derived exactly as before");
+      const fence = tById("wall:w-bot-b")!;
+      assert(heights("wall:w-bot-b").join() === "2000" && fence.parts.every((p) => p.shape === "box" && p.d === FENCE_THICK_MM), "an edge typed 2 m is a 2 m fence, half a wall thick — no kerb");
+      assert(fence.material.colour === ENVELOPE.wall, "…in the wall's tone, not the kerb's");
+      assert(!tById("door:door-1"), "a door in a wall lower than the door has no lintel: the opening is cut to the wall's top");
+      assert(heights("wall:w-left").join() === "1800" && tById("door-frame:door-1")!.parts.every((p) => p.shape === "box" && p.h === 1800), "…the jambs and the frame stop at the wall's 1.8 m");
+      assert(tById("door-leaf:door-1")!.parts.every((p) => p.shape === "box" && p.h === 1800), "…and so does the leaf");
+      const tPane = tById("window:win-1")!.parts[0];
+      assert(tPane.shape === "box" && tPane.at.z === 900 && tPane.h === 600 && !tById("door:win-1"), "a window's head is held under its wall's typed 1.5 m: glass from 900 to 1500, nothing over it");
+    }
+
+    // A POOL'S RIM (StructureFeature.rim, lib/venues/rim.ts, spec 2026-11-07 §9): the floor is cut to
+    // the WATER (the rim is floor), the water is the inner outline, the band a slab in its material,
+    // flush over the ground or raised, and no coping kerb outside it. A surface's edging the same.
+    {
+      const withRims: VenueStructure = {
+        ...structure,
+        features: structure.features.map((f) =>
+          f.id === "pool-1" ? { ...f, rim: { widthMm: 200, material: "tile" as const } } : f.id === "lawn-1" ? { ...f, rim: { widthMm: 200, material: "paving" as const, raisedMm: 100 } } : f,
+        ),
+      };
+      const rPlan = eventPlan({ venueId: "v", zoneIds: ["z-hall"] }, {
+        structure: withRims,
+        zones: [zone("z-hall", "אולם", "hall", { x: 3000, y: 2000 }, 4000), zone("z-terrace", "מרפסת", "open", { x: 8000, y: 2000 }, 0)],
+        mmPerUnit: 1,
+        access: "granted",
+      });
+      const r = new SceneCollector();
+      envelopeNodes({ doc: emptyDocument(), plan: rPlan, structure: withRims, settings: DEFAULT_SETTINGS, author: true }, r);
+      const rb = r.nodes().filter((n): n is Extract<typeof n, { kind: "body" }> => n.kind === "body");
+      const rById = (id: string) => rb.find((b) => b.id === id);
+      const spanOf = (o: BuiltOutline) => {
+        const poly = closedPolyline(o);
+        const xs = poly.map((p) => p.x);
+        const ys = poly.map((p) => p.y);
+        return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+      };
+      const floorHole = (rById("floor:z-terrace")!.parts[0] as Extract<Part, { shape: "plane" }>).holes?.[0];
+      assert(!!floorHole && near(spanOf(floorHole).w, 1200, 1) && near(spanOf(floorHole).h, 600, 1), "the floor is cut to the WATER: a 1.6 × 1.0 pool with a 20 cm rim leaves a 1.2 × 0.6 hole");
+      const rPool = rById("feature:pool-1")!;
+      const rWater = rPool.parts.find((p): p is Extract<Part, { shape: "plane" }> => p.shape === "plane" && p.material?.kind === "water")!;
+      assert(!!rWater && near(spanOf(rWater.outline).w, 1200, 1) && near(spanOf(rWater.outline).h, 600, 1), "…the water is the inner outline");
+      assert(!rPool.parts.some((p) => p.material?.colour === COPING_MATERIAL.colour), "…and no coping kerb stands outside a rimmed pool");
+      const band = rById("rim:pool-1")!;
+      const bandPart = band?.parts[0];
+      assert(!!band && band.parts.length === 1 && bandPart.shape === "plane" && bandPart.holes?.length === 1 && near(spanOf(bandPart.outline).w, 1600, 1), "the rim is a band over the pool's whole outline, the water cut out of it");
+      assert(bandPart.shape === "plane" && bandPart.at.z === 3 && band.material.texture === "tile", "…flush: a plane over every ground plane (one surface on the plan → z 3), in its own material");
+      const kerb = rById("rim:lawn-1")!;
+      const kerbPart = kerb?.parts[0];
+      assert(!!kerb && kerbPart.shape === "extrude" && kerbPart.h === 100 && kerbPart.holes?.length === 1 && kerb.material.texture === "paving", "a lawn's raised edging is a 10 cm slab in its material, the lawn inside it");
+      const lawnIn = rById("feature:lawn-1")!.parts[0] as Extract<Part, { shape: "plane" }>;
+      assert(near(spanOf(lawnIn.outline).w, 1600, 1) && near(spanOf(lawnIn.outline).h, 1600, 1), "…the grass laid inside the edging, 1.6 m of a 2 m lawn");
+      // All rim: a band as deep as the pool leaves no water, cuts nothing, and is one solid slab.
+      const allRim: VenueStructure = { ...structure, features: structure.features.map((f) => (f.id === "pool-1" ? { ...f, rim: { widthMm: 900, material: "paving" as const } } : f)) };
+      const a = new SceneCollector();
+      envelopeNodes({ doc: emptyDocument(), plan: eventPlan({ venueId: "v", zoneIds: ["z-hall"] }, { structure: allRim, zones: [zone("z-hall", "אולם", "hall", { x: 3000, y: 2000 }, 4000), zone("z-terrace", "מרפסת", "open", { x: 8000, y: 2000 }, 0)], mmPerUnit: 1, access: "granted" }), structure: allRim, settings: DEFAULT_SETTINGS, author: true }, a);
+      const ab = a.nodes().filter((n): n is Extract<typeof n, { kind: "body" }> => n.kind === "body");
+      assert(!ab.some((b) => b.id === "feature:pool-1") && !(ab.find((b) => b.id === "floor:z-terrace")!.parts[0] as Extract<Part, { shape: "plane" }>).holes, "a rim deeper than the pool leaves no water and no hole in the floor");
+      const solid = ab.find((b) => b.id === "rim:pool-1")!.parts[0];
+      assert(solid.shape === "plane" && !solid.holes, "…the band is the whole outline");
+    }
+
+    // A PERGOLA (lib/venues/pergola.ts): the catalog's own body (./floor-kinds.ts pergolaBody), turned
+    // with the feature, its four posts up from the floor under it to the beams, its slats ending at
+    // its height, a lattice on its closed side — and on a raised floor it stands on that floor.
+    {
+      const perg: StructureFeature = { id: "perg-1", kind: "pergola", label: "פרגולה", x: 8000, y: 2000, widthMm: 3000, depthMm: 2000, heightMm: 2600, shape: "rect", rotationDeg: 30, pergola: { postMm: 150, roof: "slats", closedSides: [1] } };
+      const withPergola: VenueStructure = { ...structure, features: [...structure.features, perg] };
+      const built = (floorOf?: FloorOf) => {
+        const c = new SceneCollector();
+        envelopeNodes({ doc: emptyDocument(), plan, structure: withPergola, settings: DEFAULT_SETTINGS, author: true }, c, floorOf);
+        return c.nodes().find((n): n is Extract<typeof n, { kind: "body" }> => n.kind === "body" && n.id === "feature:perg-1");
+      };
+      const pb = built();
+      const tops = (pb?.parts ?? []).map((p) => (p.shape === "box" ? p.at.z + p.h : p.shape === "extrude" ? p.at.z + p.h : p.at.z));
+      assert(!!pb && pb.parts.filter((p) => p.shape === "box" && p.w === 150 && p.d === 150).length === 4, "a venue pergola stands on its four posts");
+      assert(near(Math.max(...tops), 2600) && pb!.instances[0].at.z === 0 && near(pb!.instances[0].rotationDeg, 30), "…its top at its height, on the floor, turned with it");
+      assert(pb!.parts.filter((p) => p.shape === "box" && p.w === 30).length > 10, "…its closed side a lattice of battens");
+      const raised = built((_, id) => (id === "feature:perg-1" ? 600 : 0));
+      assert(!!raised && raised.instances[0].at.z === 600, "…and built on a 60 cm terrace it stands on the terrace");
     }
 
     const total = out.stats();

@@ -20,6 +20,7 @@ import type { Clip } from "../studio/clipboard";
 import type { Composition, CompositionLine, Product } from "./types";
 import { anchorOf } from "./categories";
 import { catalogBox } from "../studio/footprint";
+import { detachCover } from "../studio/cover";
 import { isMain } from "../self-check";
 
 /** The category every composite row is filed under (lib/catalog/categories.ts). */
@@ -79,7 +80,10 @@ export function fromSelection(clip: Clip, box: Box): Composition {
         // in the room, and moves with the origin.
         position: p.tableId === undefined ? { x: p.position.x - cx, y: p.position.y - cy } : p.position,
       };
-    });
+    })
+    // A carpet laid over a stage that is in the item stays laid over it; over anything else (a venue
+    // surface — no venue goes into a catalog row) it is kept as the shape it was laid in.
+    .map((p) => (p.cover && !(p.cover.stageId && placementIds.has(p.cover.stageId)) ? detachCover(p) : p));
   const grouped = new Set([...tables, ...placements].map((x) => x.groupId).filter((g): g is string => !!g));
   const groups: DesignGroup[] = clip.groups.filter((g) => grouped.has(g.id)).map((g) => ({ id: g.id, ...(g.number !== undefined ? { number: g.number } : {}) }));
   return { tables, placements, groups };
@@ -430,6 +434,8 @@ if (isMain(import.meta.url)) {
       { id: "p2", variantId: "candle", layer: "table", quantity: 1, tableId: "elsewhere", position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
       { id: "p3", variantId: "chandelier", layer: "ceiling", quantity: 1, over: "elsewhere", position: { x: 5500, y: 3000 }, rotation: 0, scale: 1 },
       { id: "p4", variantId: "sofa", layer: "floor", quantity: 1, position: { x: 5000, y: 4500 }, rotation: 0, scale: 1 },
+      { id: "p5", variantId: "cloth", layer: "table", quantity: 1, tableId: "t1", position: { x: 0, y: 0 }, rotation: 0, scale: 1, border: { widthMm: 40, colour: "#c9a24a" } },
+      { id: "p6", variantId: "rug", layer: "floor", quantity: 1, position: { x: 5000, y: 3000 }, rotation: 0, scale: 1, border: null },
     ],
     groups: [{ id: "g1", number: 4 }, { id: "unused" }],
   };
@@ -442,6 +448,9 @@ if (isMain(import.meta.url)) {
   assert(!!freed && freed.over === undefined && freed.position.x === 500, "a pendant over a table left behind hangs free, moved with the rest");
   assert(saved.placements.find((p) => p.id === "p4")!.position.y === 750, "a floor item moves with the origin");
   assert(saved.groups.length === 1 && saved.groups[0].id === "g1", "only the groups something still belongs to");
+  // A contour on this plan (Placement.border, lib/catalog/border.ts) is part of what the item looks
+  // like, so it goes into the item — a hemmed cloth stays hemmed, a rug with none here stays without.
+  assert(saved.placements.find((p) => p.id === "p5")?.border?.colour === "#c9a24a" && saved.placements.find((p) => p.id === "p6")?.border === null, "a contour, and none, are kept");
 
   const counted = compositionCounts(hc);
   assert(counted.lines[0].table && counted.lines[0].quantity === 2 && counted.seats === 24, "counted: two tables first, 24 seats");

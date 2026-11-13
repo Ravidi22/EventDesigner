@@ -36,11 +36,15 @@ import { type ItemContext, fallbackBody } from "./item-context";
 import { polygonAreaMm2 } from "@/lib/studio/geometry";
 import { floorKindBody } from "./floor-kinds";
 import { overheadKindBody } from "./overhead";
+import { screenBody } from "./led";
+import { danceFloorBody } from "./dance-floor";
 
 export { type ItemContext, fallbackBody } from "./item-context";
 import { flowerBuild } from "./flowers";
 import { applyTransform, compose, turn } from "./frame";
 import { ENVELOPE, clothMaterial, glassMaterial, glossMaterial, metalMaterial } from "./materials";
+import { hexOf } from "./materials";
+import { borderBands } from "@/lib/catalog/border";
 import { type MaterialRef, type NodeTag, type Part, type Transform, type Vec3, transform, vec3 } from "./types";
 
 // ── the constants the plan draws with ───────────────────────────────────────────────────────────
@@ -61,6 +65,8 @@ const CHIAVARI_LEG_R_MM = 12;
 const ARM_MM = 10;
 const PLATE_MM = 20;
 const RUNNER_MM = 8;
+/** A runner's contour band (lib/catalog/border.ts), laid on its top. */
+const RUNNER_BAND_MM = 1;
 const FLAME_R_MM = 25;
 const FLAME = 0.4;
 const FIRE = 0.5;
@@ -246,9 +252,16 @@ export function itemBody(kind: SymbolKind | null, ctx: ItemContext): ItemBuild {
     case "chuppah":
     case "stairs":
     case "ramp":
+    case "pergola":
       return floorKindBody(kind, ctx);
     case "chandelier":
       return overheadKindBody(kind, ctx);
+    // An LED screen: its dark box and the face that glows (./led.ts).
+    case "screen":
+      return screenBody(ctx);
+    // A dance floor: a gloss slab of panels (./dance-floor.ts) — laid by build.ts as a rug is.
+    case "dance-floor":
+      return danceFloorBody(ctx);
     default:
       return fallbackBody(ctx);
   }
@@ -785,8 +798,18 @@ function runnerBody(ctx: ItemContext): ItemBuild {
     const point: Point[] = [{ x: -tip / 2, y: -D / 2 }, { x: tip / 2, y: 0 }, { x: -tip / 2, y: D / 2 }];
     b.parts.push(extrude(point, RUNNER_MM, vec3(L / 2 - tip / 2, 0, 0)));
     b.parts.push(extrude(point, RUNNER_MM, vec3(-L / 2 + tip / 2, 0, 0), undefined, 180));
+    // Its contour (lib/catalog/border.ts), as the plan draws it: each band a flat ring on top of the
+    // strip and its points, in its colour; the tassels kept unless it says no fringe, in the fringe's.
+    const border = ctx.border;
+    if (border) {
+      const strip: Point[] = [{ x: -L / 2 + tip, y: -D / 2 }, { x: L / 2 - tip, y: -D / 2 }, { x: L / 2, y: 0 }, { x: L / 2 - tip, y: D / 2 }, { x: -L / 2 + tip, y: D / 2 }, { x: -L / 2, y: 0 }];
+      for (const band of borderBands({ outline: strip }, border)) {
+        b.parts.push({ shape: "extrude", outline: band.outer, ...(band.inner ? { holes: [band.inner] } : {}), h: RUNNER_BAND_MM, at: vec3(0, 0, RUNNER_MM), material: clothMaterial(hexOf(band.colour) ?? ctx.tone) });
+      }
+    }
     const tassel = Math.max(10, D * 0.05);
-    for (const sx of [-1, 1]) b.parts.push(sphere(tassel, vec3(sx * (L / 2 + 14), 0, tassel)));
+    const knot = border ? clothMaterial(hexOf(border.fringeColour ?? border.colour) ?? ctx.tone) : undefined;
+    if (border?.fringe ?? true) for (const sx of [-1, 1]) b.parts.push(sphere(tassel, vec3(sx * (L / 2 + 14), 0, tassel), knot));
     return b;
   });
 }
@@ -902,6 +925,12 @@ if (isMain(import.meta.url)) {
   assert(itemBody("vase", ctxOf({ kind: "circle", diameterMm: 200 }, 300, { tone: "#c9a24a" })).material.kind === "gloss", "a gold one is glazed");
   const runner = itemBody("runner", ctxOf({ kind: "rect", widthMm: 400, depthMm: 2400 }, 8, { tone: DEFAULT_TONE.runner }));
   assert(runner.parts.filter((p) => p.shape === "extrude").length === 2 && runner.parts.some((p) => p.shape === "box" && p.rotDeg === 90 && p.w === 2400 - 240), "a runner stored deep runs along y with a point at each end");
+  // …with a contour (lib/catalog/border.ts): a ring on its top in the band's colour, no tassels when
+  // it says no fringe.
+  const hemmed = itemBody("runner", ctxOf({ kind: "rect", widthMm: 400, depthMm: 2400 }, 8, { tone: DEFAULT_TONE.runner, border: { widthMm: 30, colour: "#c9a24a", fringe: false } }));
+  const runnerRings = hemmed.parts.filter((p) => p.shape === "extrude" && p.at.z === 8);
+  assert(runnerRings.length === 1 && runnerRings[0].shape === "extrude" && runnerRings[0].holes?.length === 1 && runnerRings[0].material?.colour === "#c9a24a", "a hemmed runner wears its band on top");
+  assert(!hemmed.parts.some((p) => p.shape === "sphere"), "…and no tassels when the contour says no fringe");
 
   // A centrepiece stands its flowers on a plate; an arrangement has none.
   const centre = itemBody("centerpiece", ctxOf({ kind: "circle", diameterMm: 400 }, 350, { tone: DEFAULT_TONE.centerpiece }));

@@ -4,6 +4,7 @@ import type { DesignGroup, DesignTable, Layer, Placement, Point } from "../desig
 import type { EdgeCurve } from "../studio/hall";
 import type { Texture, TextureImage } from "./textures";
 import type { ElementStyle } from "../element-style";
+import type { Border } from "./border";
 
 export type { Layer };
 
@@ -264,6 +265,10 @@ export interface MapAppearance {
    *  `texture`. Like `texture`, it surfaces the BASE shape; each part carries its own. */
   textureImage?: TextureImage;
   style?: ElementStyle; // free-form footprint look (fill/stroke/dash); absent = the renderer's default
+  /** A RUG's or a CLOTH's contour (lib/catalog/border.ts): a coloured band inside its edge, a second
+   *  one inside a gap, the fringe in a colour of its own. The row's; a placement may override it
+   *  (Placement.border). Absent = the drawing it always had. Ignored on every other category. */
+  border?: Border;
   /** On an "arc": its sweep and band; absent = a half ring (ARC_SWEEP.default) with a default band.
    *  On a "circle": only `sweepDeg` is read — how much of the circle (כמה מהעיגול), a solid slice;
    *  absent = the whole circle. Hollowed with its radii open, a slice is the arc. */
@@ -451,6 +456,11 @@ export interface Product {
    *  organisation. Provenance only — this row is the studio's. Absent on everything else. */
   sourceProductId?: string;
   sourceOrgId?: string;
+  /** The base-library key when this row is one of the studio's BUILT-INS (lib/catalog/built-in.ts;
+   *  spec 2026-11-07): never deleted or duplicated, pinned on the sketch's rail. DERIVED on read by
+   *  the server — the row's id is the built-in's id for this organisation (lib/catalog/standard/
+   *  built-ins.ts) — never stored and never trusted from a request. Absent on every other row. */
+  builtIn?: string;
   /** Absent = a thing of one size (see ResizeSpec). */
   resize?: ResizeSpec;
   /** SAFETY DISTANCE — the clear floor this item needs around it, in mm, and the one number the

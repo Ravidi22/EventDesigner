@@ -47,7 +47,10 @@ export interface Transform {
 /** `leaves` is a crown's leaf cards: a sprite of a leaf cluster cut out by its own alpha, two-sided,
  *  casting no shadow of its own (the clumps under it do). `petal` is a flower's: two-sided (a petal
  *  is a thin sheet seen from both faces) and shaded by its geometry's vertex colours. */
-export type MaterialKind = "matte" | "fabric" | "gloss" | "glass" | "metal" | "water" | "foliage" | "leaves" | "petal" | "emissive";
+export type MaterialKind = "matte" | "fabric" | "gloss" | "glass" | "metal" | "water" | "foliage" | "leaves" | "petal" | "emissive" | "glow";
+// `glow` is a surface that is its own light — an LED strip's face, a screen's (spec 2026-11-07 §7):
+// emissive, its strength set by the MOOD (faint by day, full at night; the viewer's GLOW_BY_MOOD),
+// and never a point light — the viewer's light pool stays the size it is (CLAUDE.md, 2026-10-27).
 
 /** A flower head's family of petals (./flowers.ts bloomMesh): a rose's spiral, a peony's ruffled
  *  layers, a tulip's cup, a lily's star, a gerbera's ring round its disc, an orchid's five. */
@@ -93,7 +96,20 @@ export type Part =
   /** A cloth hanging from a closed RIM (`outline`, the cloth's edge where it leaves the table, a
    *  flattened polygon about `at`) down `h` to the floor: folds every `foldPitchMm` that deepen to
    *  `foldDepthMm` at the hem, the hem flaring `flareMm` out. Smooth-shaded — fabric, not facets. */
-  | { shape: "drape"; outline: Point[]; h: number; at: Vec3; foldPitchMm?: number; foldDepthMm?: number; flareMm?: number; material?: MaterialRef }
+  | {
+      shape: "drape";
+      outline: Point[];
+      h: number;
+      at: Vec3;
+      foldPitchMm?: number;
+      foldDepthMm?: number;
+      flareMm?: number;
+      /** Only the stretch of the fall between these heights above its foot (mm), laid a hair proud
+       *  of the whole fall's surface — a cloth's coloured hem band (lib/catalog/border.ts) over the
+       *  same folds. Absent = the whole fall. */
+      band?: [number, number];
+      material?: MaterialRef;
+    }
   /** An organic mass — a canopy's clump, a shrub, a hydrangea's mophead: a ball `r` across its
    *  middle whose surface seeded lumps push in and out (`lumps` round its girth, `rough` of r deep,
    *  ./organic.ts lumpField), `squash` its height over its width. `at` is its CENTRE, as a sphere's;
@@ -112,7 +128,12 @@ export type Part =
   /** A flower head of real petals (./flowers.ts bloomMesh), opening up +z, `r` across its widest
    *  ring as the plan draws it. `at` is its CENTRE, as a sphere's; `seed` varies its petals; a face
    *  has `petals` round a `disc` (#rrggbb) of its own colour — a sunflower's brown. */
-  | { shape: "bloom"; form: BloomForm; r: number; at: Vec3; seed: number; disc?: string; petals?: number; material?: MaterialRef };
+  | { shape: "bloom"; form: BloomForm; r: number; at: Vec3; seed: number; disc?: string; petals?: number; material?: MaterialRef }
+  /** A cloth stretched in the air — a sail, a swag across a ceiling (./overhead.ts sailBody,
+   *  ceilingDrapeBody): a GRID of points, rows × columns (every row the same length), in the part's
+   *  frame about `at`. The builder works out every point's sag; the viewer only stitches the grid into
+   *  a smooth surface seen from both faces. */
+  | { shape: "sheet"; rows: Vec3[][]; at: Vec3; material?: MaterialRef };
 
 /** One leaf card: `size` across, centred at (x, y, z), turned `yawDeg` on the plan and tipped
  *  `pitchDeg` back from upright (0 = a vertical card, 90 = lying flat), showing atlas `tile` (0–3)

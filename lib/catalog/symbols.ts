@@ -19,6 +19,7 @@
 import type { Product } from "./types";
 import { isRunner } from "./categories";
 import type { Footprint } from "@/lib/studio/footprint";
+import { PERGOLA_ROOF_HINT, PERGOLA_ROOF_LABEL, PERGOLA_ROOFS, type PergolaRoof } from "@/lib/venues/pergola";
 
 export type SymbolKind =
   | "candlestick"
@@ -39,7 +40,27 @@ export type SymbolKind =
   | "ramp"
   | "bench"
   | "lamp"
-  | "gate";
+  | "gate"
+  /** An LED strip (spec 2026-11-07 §7.1) — a line of light: the card's and the drag image's short
+   *  glowing line. On the plan a strip is drawn along its RAIL (components/led-glyph.tsx), not in a
+   *  footprint. */
+  | "led"
+  /** An LED screen (§7.2) — a thick dark bar with a fine pixel grid, its front (+y) marked. */
+  | "screen"
+  | "pergola"
+  /** A curtain's cloth — never a picture of its own (a drape is drawn along its rail, not in a
+   *  footprint, so no category maps here); the key its versions (SYMBOL_STYLES.curtain) hang on. */
+  | "curtain"
+  /** A sail (מפרש) and a ceiling drape (בד תקרה) as a CARD or a drag image draws them — a quad of
+   *  cloth on its ties, a scalloped band. On the plan each is drawn along its rail
+   *  (lib/studio/ceiling-cloth.ts), never in a footprint. */
+  | "sail"
+  | "ceiling-drape"
+  /** A dance floor (lib/catalog/dance-floor.ts) — its panels, every other one a shade off, a seam
+   *  between each, an edge trim round it. On the plan it is laid as a rug is (CarpetNode, the printed
+   *  map's stretch path), which draws the same panels by its category; this is the card's and the
+   *  drag image's. */
+  | "dance-floor";
 
 /** The categories that have a picture, and which one. A category not here draws as it always did. */
 export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
@@ -63,6 +84,8 @@ export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
   arches: "arch",
   // Two columns joined overhead — a straight lintel or an arch — that guests walk through.
   gates: "gate",
+  // Posts, beams and a roof across them (lib/venues/pergola.ts) — the venue's own pergola too.
+  pergolas: "pergola",
   chuppahs: "chuppah",
   bars: "bar",
   // A flight or a ramp standing on its own (lib/studio/climb-item.ts): its step edges and the line
@@ -72,6 +95,14 @@ export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
   // A banquette standing on its own (lib/design-document/bench.ts): its top, the chairs along a
   // chairs side, the cushions of a sofa side. A stage's edge banquette is drawn by the stage itself.
   "stage-benches": "bench",
+  // A line of light, and the panel that lights (spec 2026-11-07 §7).
+  "led-strips": "led",
+  "led-screens": "screen",
+  // Cloth in the air (spec 2026-11-07 §6.3/§6.4): its card and its drag image.
+  sails: "sail",
+  "ceiling-drapes": "ceiling-drape",
+  // Panels clicked together (the built-in kit, spec 2026-11-07 §2).
+  "dance-floors": "dance-floor",
 };
 
 /** Whether the category has a picture at all — what the appearance editor's switch is offered for. */
@@ -92,6 +123,11 @@ export function symbolOf(product: Product | undefined, footprint: Footprint): Sy
   if (kind === "stairs" || kind === "ramp") return footprint.kind === "rect" ? kind : null;
   if (kind === "bench") return footprint.kind === "circle" ? null : kind;
   if (kind === "bar") return kind;
+  // A pergola is posts on its OUTLINE's corners and a roof clipped to it, so any outline will do —
+  // a hand-drawn one, bowed or rounded (lib/venues/pergola.ts).
+  if (kind === "pergola") return kind;
+  // A dance floor's panels are clipped to whatever outline it has (lib/catalog/dance-floor.ts).
+  if (kind === "dance-floor") return kind;
   return footprint.kind === "circle" || footprint.kind === "ellipse" || footprint.kind === "rect" ? kind : null;
 }
 
@@ -194,6 +230,17 @@ export type ArchStyle = "floral" | "corner" | "draped" | "bare";
 export type LampStyle = "empire" | "drum" | "mushroom" | "globe";
 /** A gate's ENTRANCE: square under a straight lintel, or round under an arch. */
 export type GateStyle = "square" | "arched";
+/** A pergola's roof (lib/venues/pergola.ts PergolaRoof) — slats, a solid deck, a stretched cloth, or
+ *  the beams alone. */
+export type PergolaStyle = PergolaRoof;
+/** How a curtain's cloth is gathered (spec 2026-11-07 §6.5 — the drawing and the 3D only; the quote
+ *  bills the rail's length whatever the style): waves (what every drape always drew), pinch (tight
+ *  regular pleats), sheer (a straight soft band), swag (scallops), ruffle (a dense fine wave). */
+export type CurtainStyle = "waves" | "pinch" | "sheer" | "swag" | "ruffle";
+export const CURTAIN_STYLES: readonly CurtainStyle[] = ["waves", "pinch", "sheer", "swag", "ruffle"];
+export function isCurtainStyle(s: unknown): s is CurtainStyle {
+  return typeof s === "string" && (CURTAIN_STYLES as readonly string[]).includes(s);
+}
 
 export type DrawStyle =
   | CandleStyle
@@ -206,7 +253,9 @@ export type DrawStyle =
   | FountainStyle
   | ArchStyle
   | LampStyle
-  | GateStyle;
+  | GateStyle
+  | PergolaStyle
+  | CurtainStyle;
 
 export interface SymbolStyleSet {
   /** The editor's heading over the tiles. */
@@ -400,7 +449,41 @@ export const SYMBOL_STYLES: Partial<Record<SymbolKind, SymbolStyleSet>> = {
     },
     sample: () => rect(3000, 650),
   },
+  // A pergola's roof: slats first — what a row with no style is drawn with, stored as none.
+  pergola: {
+    title: "גג הפרגולה",
+    styles: PERGOLA_ROOFS,
+    label: PERGOLA_ROOF_LABEL,
+    hint: PERGOLA_ROOF_HINT,
+    sample: () => rect(4000, 3000),
+  },
+  curtain: {
+    title: "סוג הווילון",
+    styles: CURTAIN_STYLES,
+    label: {
+      waves: "גלים",
+      pinch: "קפלים צפופים",
+      sheer: "וילון שקוף",
+      swag: "קשתות",
+      ruffle: "סלסול",
+    },
+    hint: {
+      waves: "גלים רכים לאורך המסילה — הווילון הרגיל",
+      pinch: "קפלים צרים וסדורים, תפורים למעלה",
+      sheer: "בד שקוף ונופל ישר, כמעט בלי גלים",
+      swag: "קשתות של בד בין נקודות התלייה",
+      ruffle: "גל צפוף ודק לכל האורך",
+    },
+    sample: () => rect(2400, 320),
+  },
 };
+
+/** A curtain row's style (SYMBOL_STYLES.curtain), from its appearance — a drape has no footprint
+ *  picture, so drawStyleOf's category lookup never reaches it. Undefined = waves. */
+export function curtainStyleOf(product: Product | undefined): CurtainStyle | undefined {
+  const s = product?.appearance?.symbolStyle;
+  return product?.category === "curtains" && isCurtainStyle(s) && s !== "waves" ? s : undefined;
+}
 
 /** The drawing style of any picture that has versions besides a chair's (chairStyleOf): a
  *  candlestick's, or one of SYMBOL_STYLES. Undefined = the category's default picture. */

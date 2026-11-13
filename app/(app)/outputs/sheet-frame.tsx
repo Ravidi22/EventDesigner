@@ -71,7 +71,11 @@ const OVERHEAD_SWATCH_DASH = OVERHEAD_DASH.split(" ")
   .map((n) => (n / 120) * 1.6)
   .join(" ");
 
-export type LegendSwatch = "hatch-diagonal" | "hatch-cross" | "dot-ghost" | "solid" | "outline" | "overhead" | "mark" | "fill";
+export type LegendSwatch = "hatch-diagonal" | "hatch-cross" | "dot-ghost" | "solid" | "outline" | "overhead" | "mark" | "fill" | "dash-dot";
+
+/** The "dash-dot" swatch — an LED strip's line on a crew sheet (placement-map LED_DASH), at the
+ *  legend box's size. */
+const LED_SWATCH_DASH = "1.4 0.45 0.3 0.45";
 
 export interface LegendRow {
   label: string;
@@ -538,6 +542,9 @@ function LegendSwatchGlyph({ swatch, mark, color, x, y, size = 5 }: { swatch: Le
   }
   if (swatch === "overhead") {
     return <line x1={x} y1={y + size / 2} x2={x + size} y2={y + size / 2} stroke={INK} strokeWidth={LINE_WEIGHTS.overhead} strokeDasharray={OVERHEAD_SWATCH_DASH} vectorEffect="non-scaling-stroke" />;
+  }
+  if (swatch === "dash-dot") {
+    return <line x1={x} y1={y + size / 2} x2={x + size} y2={y + size / 2} stroke={INK} strokeWidth={LINE_WEIGHTS.feature} strokeDasharray={LED_SWATCH_DASH} vectorEffect="non-scaling-stroke" />;
   }
   const fill =
     swatch === "solid" ? INK : swatch === "outline" ? "#ffffff" : swatch === "fill" ? (color ?? "#ffffff") : `url(#${swatch}-sw)`;

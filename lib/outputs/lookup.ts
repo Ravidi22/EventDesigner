@@ -11,6 +11,10 @@ import { nearestWall, wallTrack } from "@/lib/studio/anchor";
 import { climbKindOf } from "@/lib/studio/climb-item";
 import { vesselOf } from "@/lib/catalog/vessel";
 import type { MeasureContext } from "@/lib/design-document/measure";
+import type { DesignDocumentContent } from "@/lib/design-document/types";
+import { arrangedStructure } from "@/lib/design-document/features";
+import { railLengthMm, railOf, sketchRailContext } from "@/lib/studio/rail";
+import { clothAreaMm2 } from "@/lib/studio/ceiling-cloth";
 import type { ItemLookup } from "./aggregate";
 import type { QuoteLookup } from "./quote";
 
@@ -65,8 +69,27 @@ export const priceLookup: QuoteLookup = (variantId) => {
  *  run it covers, so the quote has to be able to ask how long that wall is — which means reaching
  *  the venue structure the document deliberately doesn't carry. Pass the event's structure; without
  *  one every item falls back to being counted, which is what a caller with no plan can honestly say. */
-export function measureContext(structure?: VenueStructure): MeasureContext {
+export function measureContext(structure?: VenueStructure, doc?: DesignDocumentContent): MeasureContext {
+  // A drape on a side or a rod (lib/studio/rail.ts) is measured against the WHOLE document — the
+  // thing a side rail hangs on may be in another quote section's subset — and the venue as this
+  // event arranged it.
+  const railCtx = structure && doc ? sketchRailContext(doc, structure, arrangedStructure(structure, doc), (v) => resolve(v)?.product) : null;
   return {
+    railLengthMm: railCtx ? (p) => {
+      const rail = railOf(p);
+      return rail ? railLengthMm(rail, railCtx) : undefined;
+    } : undefined,
+    // A sail's polygon as it hangs in the room (lib/studio/ceiling-cloth.ts) — a corner tied to a wall
+    // or a thing where that stands now.
+    railAreaMm2: railCtx ? (p) => {
+      const rail = railOf(p);
+      return rail ? clothAreaMm2(rail, railCtx) : undefined;
+    } : undefined,
+    // The rod a curtain on a free-standing rod is billed as: the studio's first rod row.
+    rodOf: () => {
+      const p = loadProducts().find((x) => x.category === "curtain-rods" && !x.archived);
+      return p ? (p.variants[0]?.id ?? p.id) : undefined;
+    },
     unitOf: (variantId) => resolve(variantId)?.product.priceUnit ?? "unit",
     // Along the wall — a drape round a bowed wall covers the arc, not the chord.
     wallLengthMm: structure ? (wallId) => wallTrack(structure, wallId)?.lengthMm : undefined,

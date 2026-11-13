@@ -38,6 +38,7 @@ import { acceptSourcePrice, fetchSourceStatus } from "@/lib/marketplace/actions"
 import type { SourceStatus } from "@/lib/marketplace/types";
 import { formatPrice } from "@/lib/catalog/format";
 import { useIsSupplier } from "@/components/org-kind-context";
+import { canDelete, offeredCategories } from "@/lib/catalog/built-in";
 import { Button } from "@/components/button";
 import { Drawer } from "@/components/drawer";
 import { TagToggle } from "@/components/tag-toggle";
@@ -98,6 +99,8 @@ export function blankProduct(c: CategoryDef = CATEGORIES[0]): Product {
     variants: [],
     // Seeded from the category, then owned by the product — see CategoryDef.defaultStock.
     stockKind: c.defaultStock,
+    // …and what it is priced per (CategoryDef.defaultPriceUnit): a sail by the m², a drape by the metre.
+    ...(c.defaultPriceUnit && c.defaultPriceUnit !== "unit" ? { priceUnit: c.defaultPriceUnit } : {}),
     // Written out rather than left absent, because both halves of it are a decision:
     //   shape   — it is what the measurements below it are measurements OF (see `asksFootprint`).
     //   content — EMPTY. On a true-scale plan the outline already says what the item is; the name
@@ -552,6 +555,11 @@ export function ProductDrawer({
         // Re-seeded with the layer and the category fields, for the same reason: the new category's
         // opinion is a better starting point than the old one's, and it stays editable.
         stockKind: c.defaultStock,
+        // A NEW product's price unit follows the category while it is still the old category's seed —
+        // the height's rule: a sail is sold by the m² until the designer says otherwise.
+        ...(!d.id && (d.priceUnit ?? "unit") === (CATEGORY_BY_ID[d.category]?.defaultPriceUnit ?? "unit")
+          ? { priceUnit: c.defaultPriceUnit && c.defaultPriceUnit !== "unit" ? c.defaultPriceUnit : undefined }
+          : {}),
         // The shape re-seeds with them — a centrepiece is round, a stage is a box — except when the
         // designer has drawn one by hand, which a category change must never throw away. Content is
         // carried across as whatever the plan already draws, so changing category cannot silently
@@ -691,7 +699,12 @@ export function ProductDrawer({
               value={draft.category}
               onChange={changeCategory}
               // A composite is made in its own form, never by re-filing an ordinary row.
-              options={categories.filter((c) => c.id !== COMPOSITE_CATEGORY).map((c) => ({ value: c.id, label: c.label }))}
+              // …and a studio never files a NEW row under a built-in-only category (lib/catalog/
+              // built-in.ts): its one built-in is that category. A row already in one keeps it; a
+              // built-in is offered its own alone.
+              options={offeredCategories(categories, { isSupplier: supplierOrg, product })
+                .filter((c) => c.id !== COMPOSITE_CATEGORY)
+                .map((c) => ({ value: c.id, label: c.label }))}
               className="w-full"
             />
           </div>
@@ -1269,7 +1282,7 @@ export function ProductDrawer({
           <Button variant="ghost" onClick={onClose}>
             ביטול
           </Button>
-          {isEdit && onDelete && (
+          {isEdit && onDelete && canDelete(product) && (
             <Button
               variant="danger"
               className="ms-auto"

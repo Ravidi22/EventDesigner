@@ -8,7 +8,7 @@
 // on a banquette shares its geometry with the chairs round the tables, a vase on a banquette stands
 // on its top, a chandelier hangs where its row says.
 import { isMain } from "../self-check";
-import { buildScene } from "./build";
+import { buildScene, wallCurtainTop } from "./build";
 import { fixtureInput, SECRET_PRICE } from "./fixture";
 import { DOOR_HEIGHT_MM, KERB_MM, type BodyNode } from "./types";
 
@@ -51,7 +51,7 @@ if (isMain(import.meta.url)) {
   const round = tops.find((b) => b.tag.id === "t1")!;
   assert(round.parts.some((q) => q.shape === "extrude" && near(q.at.z, 720)), "the round table's top is a 30 mm slab whose face is at 750");
   assert(near(round.instances[0].at.x, 5000) && near(round.instances[0].at.y, 5000), "…standing where the document puts it");
-  const cloth = byType("cloth");
+  const cloth = byType("cloth").filter((b) => !b.id.startsWith("cloth-hem:")); // a contour's hem bands are the cloth's too
   assert(cloth.length === 1 && minZ(cloth[0].parts) < 1, "the cloth falls to the floor");
   for (const id of ["p-ring", "p-cluster", "p-lamp"]) {
     const b = bodies.find((x) => x.tag.id === id && x.instances.length === 1);
@@ -101,6 +101,27 @@ if (isMain(import.meta.url)) {
   assert(ofId("p-sofa")[0].parts.length > 3, "the sofa is a sofa, not a box");
   const rug = ofId("p-rug")[0];
   assert(rug.parts[0].shape === "box" && (rug.parts[0] as { h: number }).h === 12, "the rug is a 12 mm slab");
+  // Its contour (lib/catalog/border.ts): two flat rings on the slab in their colours, the gold one at
+  // the edge, the cream one inside it — each its outer edge with its inner cut out.
+  const rings = rug.parts.filter((q): q is Extract<typeof q, { shape: "extrude" }> => q.shape === "extrude" && near(q.at.z, 12));
+  assert(rings.length === 2 && rings.every((q) => (q.holes?.length ?? 0) === 1), "the rug's contour is two rings on its top");
+  assert(rings[0].material?.colour === "#c9a24a" && rings[1].material?.colour === "#f5efe0", "…in the contour's colours, the edge band first");
+  // A carpet laid OVER the stage (lib/studio/cover.ts): its outline extruded, on the 600 deck.
+  const onStage = ofId("p-stage-rug")[0];
+  const slab = onStage?.parts[0];
+  assert(!!onStage && slab?.shape === "extrude" && slab.outline.outline.length === 4 && near(onStage.instances[0].at.z, 600), "the carpet over the stage is its outline, lying on the deck");
+  // The dance floor (lib/scene/dance-floor.ts): a gloss slab of its rounded outline, the other panels a
+  // hair proud of it in a lighter gloss, and the metal trim round its edge — lying on the floor.
+  const dance = ofId("p-dance")[0];
+  const danceSlab = dance?.parts[0];
+  assert(!!dance && dance.material.kind === "gloss" && dance.material.colour === "#1c1b20" && danceSlab?.shape === "extrude" && !!danceSlab.outline.edgeCurves?.some(Boolean) && near(dance.instances[0].at.z, 0), "the dance floor is a black gloss slab of its rounded outline, on the floor");
+  const panels = dance.parts.filter((q) => q.shape === "extrude" && near(q.at.z, 12) && q.material?.kind === "gloss");
+  assert(panels.length > 4 && panels.every((q) => q.material!.colour !== "#1c1b20"), `…its other panels a shade off on top (${panels.length})`);
+  assert(dance.parts.some((q) => q.shape === "extrude" && q.material?.kind === "metal" && (q.holes?.length ?? 0) === 1), "…and a metal trim round its edge");
+  // The cloth's hem: the bottom 80 of its fall, gold, over the same folds.
+  const hem = bodies.find((b) => b.id.startsWith("cloth-hem:p-cloth"));
+  const hemFall = hem?.parts[0];
+  assert(!!hem && hem.material.colour === "#c9a24a" && hemFall?.shape === "drape" && hemFall.band?.[0] === 0 && hemFall.band?.[1] === 80, "the cloth's contour is the bottom 80 of its fall, in gold");
   const chuppah = ofId("p-chuppah").find((b) => b.tag.type === "item")!;
   assert(chuppah.parts.filter((q) => q.shape === "cylinder" && near(topOf(q), 2600)).length === 4, "the chuppah stands on four poles to 2600");
   const chandelier = ofId("p-chandelier")[0];
@@ -111,6 +132,59 @@ if (isMain(import.meta.url)) {
   const ribbon = curtain.parts.find((q) => q.shape === "ribbon");
   assert(!!ribbon && near((ribbon as { h: number }).h, 4000), "the curtain falls the hall's full 4 m along its wall");
   assert(ribbon!.shape === "ribbon" && ribbon!.path.every((q) => q.x > 100), "…hung on the room's side of the wall, not inside it");
+  // 2026-11-07: a wall with a typed height lower than the room's ceiling caps the curtain on it.
+  const lowWall = fixtureInput(true);
+  const capped = buildScene({ ...lowWall, structure: { ...lowWall.structure, walls: lowWall.structure.walls.map((w) => (w.id === "w-left" ? { ...w, heightMm: 3200 } : w)) } });
+  const cappedRibbon = capped.nodes.filter((n): n is BodyNode => n.kind === "body" && n.tag.id === "p-curtain").flatMap((b) => b.parts).find((q) => q.shape === "ribbon");
+  assert(!!cappedRibbon && near((cappedRibbon as { h: number }).h, 3200), "a curtain hangs from the lower of the ceiling and its wall's own height");
+  assert(wallCurtainTop(4000, 3200) === 3200 && wallCurtainTop(0, 2800) === 2800 && wallCurtainTop(4000, undefined) === 4000 && wallCurtainTop(0, undefined) === undefined, "…the lower of the two; open sky and no height leaves it to the row");
+  // A curtain on a ROD (lib/studio/rail.ts): under the rod at its 2.4 m, a post at its start and its
+  // bend, none under the ר's arm.
+  const rodCurtain = ofId("p-rod-curtain")[0];
+  const rodCloth = rodCurtain?.parts.find((q) => q.shape === "ribbon");
+  assert(!!rodCloth && near((rodCloth as { h: number }).h, 2400), "a rod's curtain falls from the rod's 2.4 m");
+  const rodPosts = rodCurtain.parts.filter((q) => q.shape === "box");
+  assert(rodPosts.length === 2 && !rodPosts.some((q) => near(q.at.y, 9500)), `two posts, none under the cantilevered arm (got ${rodPosts.length})`);
+  // PERGOLAS (lib/venues/pergola.ts, 2026-11-07): the venue's on the terrace and a hired one in the
+  // hall are one body (./floor-kinds.ts pergolaBody) — posts, beams, a roof — at their heights.
+  const venuePergola = ofId("feature:f-pergola")[0];
+  const pergolaTop = (b: BodyNode) => Math.max(...b.parts.map((q) => topOf(q as { shape: string; at: { z: number }; h?: number })));
+  assert(!!venuePergola && venuePergola.parts.filter((q) => q.shape === "box" && q.w === 150 && q.d === 150).length === 4 && near(pergolaTop(venuePergola), 2600), "the terrace's pergola: four posts, its slats ending at 2.6 m");
+  const hiredPergola = ofId("p-pergola").find((b) => b.tag.type === "item")!;
+  assert(!!hiredPergola && hiredPergola.parts.filter((q) => q.shape === "box" && q.w === 120 && q.d === 120).length === 4 && hiredPergola.parts.some((q) => q.shape === "plane"), "the hired pergola: its row's 12cm posts, laid 4 × 3, under its cloth");
+  // What is overhead decides the chain (lib/venues/roofs.ts): under the terrace's pergola an
+  // arrangement hangs 1.2 m under its 2.6 m top and is chained to it — never to the hall's 4 m roof.
+  const hung = ofId("p-hung")[0];
+  assert(!!hung && near(hung.instances[0].at.z, 2600 - 1200) && hung.parts.some((q) => q.shape === "cylinder" && near(topOf(q) + hung.instances[0].at.z, 2600)), "an arrangement hung under the pergola is chained to the pergola");
+  // A curtain on the pergola's front side (a SIDE rail): from its 2.6 m, a hand outside it.
+  const pergolaCloth = ofId("p-pergola-curtain")[0]?.parts.find((q) => q.shape === "ribbon");
+  assert(!!pergolaCloth && pergolaCloth.shape === "ribbon" && near(pergolaCloth.h, 2600) && pergolaCloth.path.every((q) => q.y < 5600 - 1500), "a curtain on the pergola's side falls from its top, outside it");
+
+  // LED (spec 2026-11-07 §7, ./led.ts): a hired strip at the floor line of the hall's top wall, on its
+  // room face; the venue's strip along its pergola's beam, just under the top; a hired screen and the
+  // venue's — each glowing through its material alone (the emitter count below is unchanged).
+  const ledRib = ofId("p-led")[0]?.parts.find((q) => q.shape === "ribbon");
+  assert(!!ledRib && ledRib.shape === "ribbon" && ofId("p-led")[0].material.kind === "glow" && ofId("p-led")[0].material.colour === "#ffb347", "the hired strip is a glowing ribbon in its shade");
+  assert(!!ledRib && ledRib.shape === "ribbon" && ledRib.at.z < 100 && ledRib.path.every((q) => q.y > 0 && q.y < 200) && near(Math.abs(ledRib.path[ledRib.path.length - 1].x - ledRib.path[0].x), 10000), "…10 m of it at the floor line, on the hall's face of the wall");
+  const venueRib = ofId("feature:f-led:0")[0]?.parts.find((q) => q.shape === "ribbon");
+  assert(!!venueRib && venueRib.shape === "ribbon" && venueRib.at.z > 2400 && venueRib.at.z < 2600 && ofId("feature:f-led:0")[0].material.colour === "#7fd4ff", "the venue's strip runs the pergola's beam just under its 2.6 m top");
+  const screenFace = (b: BodyNode | undefined) => b?.parts.find((q) => q.material?.kind === "glow");
+  const hiredScreen = ofId("p-screen").find((b) => b.tag.type === "item");
+  assert(!!hiredScreen && hiredScreen.parts.some((q) => q.shape === "box" && q.h === 2500) && !!screenFace(hiredScreen), "the hired screen stands 2.5 m with a glowing face");
+  assert(!!screenFace(ofId("feature:f-screen")[0]), "…and so does the venue's own");
+  // ── cloth in the air (2026-11-07, lib/studio/ceiling-cloth.ts) ───────────────────────────────────
+  // The sail: tied twice to the north wall's line at 3.6 m, on two poles of its own at 2.8 m.
+  const sailBodies = ofId("p-sail");
+  const sailSheet = sailBodies.flatMap((b) => b.parts).find((q): q is Extract<typeof q, { shape: "sheet" }> => q.shape === "sheet");
+  assert(!!sailSheet && near(sailSheet.rows[0][0].y, 0) && near(sailSheet.rows[0][0].z, 3600) && near(sailSheet.rows[0][0].x, 6000), "the sail's corner hangs on the wall at its tie's 3.6 m");
+  assert(sailBodies[0]?.material.colour === "#e9dfc9", "…in its shade");
+  assert(sailBodies.flatMap((b) => b.parts).filter((q) => q.shape === "cylinder").length === 2, "…and stands on its two poles");
+  // The swag and the canopy: one sheet each run, sagging below their height.
+  const swagSheets = ofId("p-swag").flatMap((b) => b.parts).filter((q) => q.shape === "sheet");
+  assert(swagSheets.length === 1, "the swag is one cloth");
+  const canopySheets = ofId("p-canopy").flatMap((b) => b.parts).filter((q): q is Extract<typeof q, { shape: "sheet" }> => q.shape === "sheet");
+  assert(canopySheets.length === 2 && canopySheets.every((s) => s.rows.flat().every((q) => q.z <= 3600 + 1e-6) && s.rows.flat().some((q) => q.z < 3600 - 100)), "the canopy's 1.8 m at 1.2 m is two swags, hung at 3.6 m and sagging");
+  assert(!ofId("p-swag").some((b) => b.parts.some((q) => q.shape === "ribbon")), "…never a curtain's ribbon");
 
   // ── what glows ────────────────────────────────────────────────────────────────────────────────
   const emitters = scene.nodes.filter((n) => n.kind === "emitter");

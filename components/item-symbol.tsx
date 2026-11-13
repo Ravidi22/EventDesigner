@@ -1,5 +1,6 @@
 import { memo, type ReactNode } from "react";
 import { footprintOutlines, type Footprint } from "@/lib/studio/footprint";
+import { evenInset } from "@/lib/studio/footprint";
 import {
   CLOTH_DROP_MM,
   type ArchStyle,
@@ -24,12 +25,22 @@ import { benchLayoutFor, type BenchLayout } from "@/lib/design-document/bench";
 import { CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
 import { FootprintShape, sameDrawProps } from "./footprint-shape";
 import { ClimbGlyph } from "./climb-glyph";
+import { PergolaGlyph } from "./pergola-glyph";
+import { pergolaFromStyle } from "@/lib/venues/pergola";
+import { pleatsAlongD } from "./curtain-cloth";
+import { CeilingDrapeSymbol, SailSymbol } from "./ceiling-cloth";
+import type { CurtainStyle } from "@/lib/catalog/symbols";
 import { FlowerDrawing } from "./flower-symbol";
 import { SurfaceFill } from "./surface-fill";
 import { defaultMix, seedOf, type FlowerDrawSpec, type FlowerForm } from "@/lib/catalog/flower-draw";
 import { barDrawing, bottleRadiusMm, BOTTLE_PITCH_MM, counterShelfMm, counterTopMm, type Strip } from "@/lib/catalog/bar-draw";
 import { outlinePathD } from "@/lib/studio/geometry";
 import { rugFringe, rugInset, type RugShape } from "@/lib/studio/rug-shape";
+import { rugBorderBands } from "@/lib/studio/rug-shape";
+import { borderBands, clothHem, darkerShade, edgeFringe, footprintBorderBands, fringeOf, type Border, type BorderBand } from "@/lib/catalog/border";
+import { ledSymbol, screenSymbol, SCREEN_BODY } from "./led-glyph";
+import { LED_COLOUR } from "@/lib/venues/led";
+import { DanceFloorPattern } from "./dance-floor";
 
 // The category pictures (lib/catalog/symbols.ts says which item gets which, and why). Drawn in the
 // footprint's own frame — centred on (0,0), true scale in millimetres — so every surface that already
@@ -78,6 +89,18 @@ export const DEFAULT_TONE: Record<SymbolKind, string> = {
   lamp: "#FBF6EC",
   // Cast stone, which most gates hired for an event imitate.
   gate: "#F1ECE3",
+  // Weathered timber, which most pergolas are (a white metal one says so through its shade).
+  pergola: "#B89A74",
+  // Ivory voile — a drape's cloth when its shade says nothing (never drawn as a footprint picture).
+  curtain: "#F3EDE2",
+  // Warm white light; a screen's dark body (components/led-glyph.tsx).
+  led: LED_COLOUR,
+  screen: SCREEN_BODY,
+  // Sailcloth and the same voile overhead (components/ceiling-cloth.tsx).
+  sail: "#F4F1EA",
+  "ceiling-drape": "#F3EDE2",
+  // A white gloss dance floor, the one most halls hire (a black one says so through its shade).
+  "dance-floor": "#F5F3F8",
 };
 
 export interface ItemSymbolProps {
@@ -120,9 +143,29 @@ export interface ItemSymbolProps {
    *  chairs along its back. `chairs: false` leaves the chairs off (a sheet that hides every chair). */
   bench?: BenchLayout;
   chairs?: boolean;
+  /** For a pergola: its post's square in mm (the row's categoryFields.postMm, pergolaPostOf — lib/
+   *  venues/pergola.ts). Absent = a new pergola's. Its roof is `drawStyle`. */
+  postMm?: number;
+  /** For a runner: its contour (lib/catalog/border.ts) — bands along its edge in their colours, its
+   *  tassels in the fringe's. Absent = its stitched hem, as always. */
+  border?: Border;
+  /** What a picture that writes its name writes — an LED screen's row name (or the venue screen's
+   *  label). Absent = nothing written. */
+  label?: string;
 }
 
-function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, drawStyle, rise, turnDeg, mirrored, textMm, bench, chairs = true }: ItemSymbolProps) {
+function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, drawStyle, rise, turnDeg, mirrored, textMm, bench, chairs = true, border, postMm, label }: ItemSymbolProps) {
+  // A pergola — posts on its outline's corners, its roof across them — is the venue's own drawing
+  // (components/pergola-glyph.tsx), on ANY outline: a bowed or rounded one too (symbolOf lets it
+  // through), so it is drawn before the primitive-box rule below. On paper its posts are solid ink.
+  if (kind === "pergola") {
+    const wood = print ? tone || "#ffffff" : tone || DEFAULT_TONE.pergola;
+    return (
+      <g className="pointer-events-none">
+        <PergolaGlyph footprint={footprint} pergola={pergolaFromStyle(drawStyle, postMm)} stroke={ink} strokeOpacity={print ? 1 : 0.75} postFill={print ? ink : wood} fabric={wood} />
+      </g>
+    );
+  }
   const { w, h, round } = boxOf(footprint);
   // A bar of any shape — a ח, an oval ring, a horseshoe — is laid along its band (lib/catalog/
   // bar-draw.ts); every other picture is drawn in a box and needs a primitive one.
@@ -201,7 +244,7 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       body = shaped ? shapedBar(footprint, c, line) : round ? roundBar(w, h, c, line) : along(w, h, (L, D) => bar(L, D, c, line));
       break;
     case "runner":
-      body = along(w, h, (L, D) => runner(L, D, c, line));
+      body = along(w, h, (L, D) => runner(L, D, c, line, border));
       break;
     case "stairs":
     case "ramp":
@@ -225,6 +268,25 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       break;
     case "bench":
       body = benchSymbol(footprint, bench ?? benchLayoutFor(footprint), chairs, c, line);
+      break;
+    case "led":
+      // A strip's own picture is its RAIL's line (components/led-glyph.tsx); in a box — the card, the
+      // drag image — a short glowing line.
+      body = ledSymbol(w, h, tone, c.print, ink);
+      break;
+    case "screen":
+      body = screenSymbol(w, h, label, { tone, print: c.print, ink, textMm });
+      break;
+    // Cloth in the air, as a card or a drag image shows it (on the plan each is drawn along its rail).
+    case "sail":
+      body = <SailSymbol w={w} h={h} tone={t} ink={ink} print={c.print} />;
+      break;
+    case "ceiling-drape":
+      body = along(w, h, (L, D) => <CeilingDrapeSymbol L={L} D={D} tone={t} ink={ink} print={c.print} />);
+      break;
+    // Its panels over its own fill, clipped to whatever outline it was drawn at (components/dance-floor.tsx).
+    case "dance-floor":
+      body = <DanceFloorPattern w={w} h={h} footprint={footprint.kind === "rect" ? undefined : footprint} tone={t} ink={ink} print={c.print} base />;
       break;
   }
   return <g className="pointer-events-none">{body}</g>;
@@ -1915,8 +1977,12 @@ function shapedBar(f: Footprint, c: Colours, line: Line) {
  *  The growth is a round-joined stroke as wide as twice the drop — which is exactly the outline
  *  offset outward, for every shape, the same trick the safety halos use — so an arc, a ח or a
  *  serpentine wears its cloth as faithfully as a round does. */
-function ClothDrapeView({ footprint, colour, ink = "var(--color-ink)" }: { footprint: Footprint; colour: string; ink?: string }) {
+function ClothDrapeView({ footprint, colour, ink = "var(--color-ink)", border }: { footprint: Footprint; colour: string; ink?: string; border?: Border }) {
   const D = CLOTH_DROP_MM;
+  // Its contour (lib/catalog/border.ts): the bands laid in the strip of fabric past the table's edge,
+  // counted from the cloth's edge in (clothHem), and a tasselled edge only when it asks for one.
+  const hem = border ? clothHem(border, D) : [];
+  const tassels = border && fringeOf(border, "tablecloths").on ? edgeFringe(footprint, D + 7, 45) : [];
   const folds: ReactNode[] = [];
   // A crease is a shade of the fabric: darker on a light cloth, lighter on a dark one.
   const fold = isDark(colour)
@@ -1958,17 +2024,45 @@ function ClothDrapeView({ footprint, colour, ink = "var(--color-ink)" }: { footp
       {/* The hem: a hair wider than the fabric, in ink, so the cloth has an edge on a white plan. */}
       <FootprintShape footprint={footprint} fill={colour} stroke={ink} strokeOpacity={0.28} strokeWidth={D * 2 + 14} strokeLinejoin="round" />
       <FootprintShape footprint={footprint} fill={colour} stroke={colour} strokeWidth={D * 2} strokeLinejoin="round" />
+      {/* Each band is two more round-joined strokes: its colour out to where it ends, the cloth's
+          again up to where it starts (the table's top covers whatever lands inside the edge). */}
+      {hem.map((b, i) => (
+        <g key={`hem${i}`}>
+          <FootprintShape footprint={footprint} fill="none" stroke={b.colour} strokeWidth={b.toMm * 2} strokeLinejoin="round" />
+          {b.fromMm > 0 && <FootprintShape footprint={footprint} fill="none" stroke={colour} strokeWidth={b.fromMm * 2} strokeLinejoin="round" />}
+        </g>
+      ))}
       {folds}
+      {tassels.length > 0 && (
+        <path
+          d={tassels.map((t) => `M ${t.x} ${t.y} l ${t.nx * 28} ${t.ny * 28}`).join(" ")}
+          fill="none"
+          stroke={border?.fringeColour ?? border?.colour ?? ink}
+          strokeOpacity={0.9}
+          strokeWidth={1}
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
     </g>
   );
 }
 
 /** A table runner seen from above, along x: a strip of fabric with its hem stitched in from the edge,
  *  a soft fold down its length, and a point of tassel at each end where it falls over the table. */
-function runner(L: number, D: number, c: Colours, line: Line) {
+function runner(L: number, D: number, c: Colours, line: Line, border?: Border) {
   const faint = { ...line, strokeOpacity: line.strokeOpacity * 0.5 };
   const hem = Math.min(30, D * 0.08);
   const tip = Math.min(D * 0.45, 120);
+  // With a contour (lib/catalog/border.ts) its bands follow the strip and its points instead of the
+  // stitched hem; the tassels stay unless it says no fringe, in the fringe's colour. On paper the
+  // bands are a step darker than the runner's own grey.
+  const bands: BorderBand[] = border
+    ? borderBands(
+        { outline: [{ x: -L / 2 + tip, y: -D / 2 }, { x: L / 2 - tip, y: -D / 2 }, { x: L / 2, y: 0 }, { x: L / 2 - tip, y: D / 2 }, { x: -L / 2 + tip, y: D / 2 }, { x: -L / 2, y: 0 }] },
+        border,
+      )
+    : [];
+  const tasselFill = border && !c.print ? (border.fringeColour ?? border.colour) : c.tone;
   return (
     <>
       <path
@@ -1978,16 +2072,21 @@ function runner(L: number, D: number, c: Colours, line: Line) {
         {...line}
         strokeLinejoin="round"
       />
-      <path
-        d={`M ${-L / 2 + tip} ${-D / 2 + hem} L ${L / 2 - tip} ${-D / 2 + hem} M ${-L / 2 + tip} ${D / 2 - hem} L ${L / 2 - tip} ${D / 2 - hem}`}
-        fill="none"
-        {...faint}
-        strokeDasharray="6 5"
-      />
+      {border ? (
+        <BandPaths bands={bands} flat={c.print ? darkerShade(c.tone || "#ffffff") : undefined} />
+      ) : (
+        <path
+          d={`M ${-L / 2 + tip} ${-D / 2 + hem} L ${L / 2 - tip} ${-D / 2 + hem} M ${-L / 2 + tip} ${D / 2 - hem} L ${L / 2 - tip} ${D / 2 - hem}`}
+          fill="none"
+          {...faint}
+          strokeDasharray="6 5"
+        />
+      )}
       <line x1={-L / 2 + tip} y1={0} x2={L / 2 - tip} y2={0} stroke={c.shade} strokeOpacity={c.print ? 0 : c.shadeOpacity} strokeWidth={Math.max(5, D * 0.025)} />
-      {[-1, 1].map((sx) => (
-        <circle key={sx} cx={sx * (L / 2 + 14)} cy={0} r={Math.max(10, D * 0.05)} fill={c.tone} {...line} />
-      ))}
+      {(border?.fringe ?? true) &&
+        [-1, 1].map((sx) => (
+          <circle key={sx} cx={sx * (L / 2 + 14)} cy={0} r={Math.max(10, D * 0.05)} fill={tasselFill} {...line} />
+        ))}
     </>
   );
 }
@@ -1996,7 +2095,12 @@ function runner(L: number, D: number, c: Colours, line: Line) {
 
 /** The folds of a drape, in a frame where the drape runs along x, centred, `depthMm` thick: the wave
  *  of the fabric gathered on its rail, one pleat every 15cm or so. */
-function DrapePleatsView({ lengthMm, depthMm, ink = "var(--color-ink)", opacity = 0.35 }: { lengthMm: number; depthMm: number; ink?: string; opacity?: number }) {
+function DrapePleatsView({ lengthMm, depthMm, ink = "var(--color-ink)", opacity = 0.35, style }: { lengthMm: number; depthMm: number; ink?: string; opacity?: number; style?: CurtainStyle }) {
+  // Another curtain style (SYMBOL_STYLES.curtain) is drawn by the one walker every drape uses
+  // (components/curtain-cloth.tsx); waves stay this drawing, exactly as before.
+  if (style && style !== "waves") {
+    return <path d={pleatsAlongD([{ x: -lengthMm / 2, y: 0 }, { x: lengthMm / 2, y: 0 }], depthMm, style)} fill="none" stroke={ink} strokeOpacity={opacity} strokeWidth={1} vectorEffect="non-scaling-stroke" className="pointer-events-none" />;
+  }
   const pleat = 150;
   const n = Math.max(2, Math.round(lengthMm / pleat));
   const step = lengthMm / n;
@@ -2011,8 +2115,115 @@ function DrapePleatsView({ lengthMm, depthMm, ink = "var(--color-ink)", opacity 
   );
 }
 
-/** A rug, centred, `w`×`h`: the woven border inside its edge and the fringe off its two short ends. */
-function RugPatternView({ w, h, ink = "var(--color-ink)", opacity = 1, shape }: { w: number; h: number; ink?: string; opacity?: number; shape?: RugShape }) {
+/** A contour's bands (lib/catalog/border.ts), each its outer outline with its inner one cut out —
+ *  one even-odd path per band — in its colour, or all in `flat` (a printed sheet's grey). */
+function BandPaths({ bands, flat }: { bands: BorderBand[]; flat?: string }) {
+  return (
+    <>
+      {bands.map((b, i) => (
+        <path
+          key={i}
+          d={`${outlinePathD(b.outer.outline, b.outer.edgeCurves)}${b.inner ? ` ${outlinePathD(b.inner.outline, b.inner.edgeCurves)}` : ""}`}
+          fillRule="evenodd"
+          fill={flat ?? b.colour}
+          stroke="none"
+        />
+      ))}
+    </>
+  );
+}
+
+/** A contour (lib/catalog/border.ts) laid inside a footprint's own outline(s), in its centred frame —
+ *  a cloth drawn as itself (a drag image, a card), where there is no table for ClothDrape to fall
+ *  round. */
+export function FootprintBorder({ footprint, border, flat }: { footprint: Footprint; border: Border; flat?: string }) {
+  return (
+    <g className="pointer-events-none">
+      <BandPaths bands={footprintBorderBands(footprint, border)} flat={flat} />
+    </g>
+  );
+}
+
+/** A rug, centred, `w`×`h`: the woven border inside its edge and the fringe off its two short ends.
+ *
+ *  With a CONTOUR (`border`, lib/catalog/border.ts — the row's, or this plan's) the woven line gives
+ *  way to the contour's bands, FILLED along the rug's real outline (its bows and rounded corners —
+ *  rugBorderBands), and the fringe is the contour's: on or off, in its own colour. `rx` is the corner
+ *  the caller draws a plain rug's rectangle with, so a band does not poke past it. `flat` paints the
+ *  bands in one grey and the fringe in `ink` (a printed sheet). `opacity` is the woven lines' and the
+ *  fringe's — never the bands', which are the rug's own colours, not a drawing over it. */
+function RugPatternView({
+  w,
+  h,
+  ink = "var(--color-ink)",
+  opacity = 1,
+  shape,
+  border,
+  rx = 0,
+  flat,
+  footprint,
+}: {
+  w: number;
+  h: number;
+  ink?: string;
+  opacity?: number;
+  shape?: RugShape;
+  border?: Border;
+  rx?: number;
+  flat?: string;
+  /** A carpet laid to an OUTLINE (Placement.outline, lib/studio/cover.ts — over a surface or a stage),
+   *  centred: the border and the weave follow it instead of the w×h rectangle. No fringe — an
+   *  arbitrary outline has no short ends a rug is woven from. */
+  footprint?: Footprint;
+}) {
+  if (footprint) {
+    if (border) {
+      return (
+        <g className="pointer-events-none">
+          <BandPaths bands={footprintBorderBands(footprint, border)} flat={flat} />
+        </g>
+      );
+    }
+    // The weave: the same two lines a rectangle's border is drawn with, the outline pulled in.
+    const m = Math.min(w, h);
+    const b1 = Math.min(m * 0.07, 160);
+    const b2 = Math.min(m * 0.12, 260);
+    const line = { fill: "none", stroke: ink, vectorEffect: "non-scaling-stroke" as const, strokeWidth: 1 };
+    return (
+      <g className="pointer-events-none" opacity={opacity}>
+        {footprintOutlines(footprint).map((o, i) => {
+          const inner = evenInset(o, b1);
+          const outer = m > b2 * 3 ? evenInset(o, b2) : null;
+          return (
+            <g key={i}>
+              {inner && <path d={outlinePathD(inner.outline, inner.edgeCurves)} {...line} strokeOpacity={0.3} />}
+              {outer && <path d={outlinePathD(outer.outline, outer.edgeCurves)} {...line} strokeOpacity={0.18} strokeDasharray="3 3" />}
+            </g>
+          );
+        })}
+      </g>
+    );
+  }
+  if (border) {
+    const fr = fringeOf(border, "rugs");
+    const len = Math.min(70, Math.min(w, h) * 0.05);
+    const strands = fr.on ? rugFringe(w, h, shape, 45).map((t) => `M ${t.x} ${t.y} l ${t.nx * len} ${t.ny * len}`).join(" ") : "";
+    return (
+      <g className="pointer-events-none">
+        <BandPaths bands={rugBorderBands(w, h, shape, border, rx)} flat={flat} />
+        {strands && (
+          <path
+            d={strands}
+            fill="none"
+            stroke={flat ? ink : (fr.colour ?? ink)}
+            strokeOpacity={(flat ? 0.35 : 0.9) * opacity}
+            strokeWidth={flat ? 1 : 1.5}
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+      </g>
+    );
+  }
   const m = Math.min(w, h);
   const b1 = Math.min(m * 0.07, 160);
   const b2 = Math.min(m * 0.12, 260);

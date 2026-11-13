@@ -12,10 +12,15 @@ import type { Plane } from "@/lib/studio/planes";
 import { deckOf, resolve } from "@/lib/studio/catalog-resolver";
 import { catalogVersion } from "@/lib/catalog/storage";
 import { edgeItemShape, toRoom } from "@/lib/design-document/stage";
-import { resolveSpan } from "@/lib/studio/anchor";
+import { railClothLine, railLines, railOf, sketchRailContext } from "@/lib/studio/rail";
+import { clothPolygons, clothView, isCeilingClothCategory } from "@/lib/studio/ceiling-cloth";
 import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
 import { rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
+import { carpetPolygon, carpetShape } from "@/lib/studio/cover";
 import { featureFootprint, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
+import { obstacleFootprint } from "@/lib/venues/rim";
+import { isLedStrip } from "@/lib/venues/led";
+import { isPergolaRow, pergolaGeometry, pergolaOf, pergolaOfProduct, pergolaPostsInRoom } from "@/lib/venues/pergola";
 import { placementFootprint, tableFootprint } from "@/components/footprint-shape";
 import { tableLabel } from "@/lib/design-document/groups";
 import { bandPolygon, footprintPolygons, polysBox, type CentredBox, type ClearanceSubject, type Poly } from "@/lib/studio/proximity";
@@ -135,7 +140,9 @@ export function itemGeometry(doc: DesignDocumentContent, structure: VenueStructu
     const f = featureOf(structure, ref.id);
     if (!f) return null;
     return remembered(f, [], () => {
-      const fp = featureFootprint(f);
+      // A pool with a rim is its WATER: the rim is floor people stand on, so a table keeps clear of
+      // the water's edge and the tape measures to it (lib/venues/rim.ts).
+      const fp = f.kind === "pool" ? obstacleFootprint(f) : featureFootprint(f);
       const polysAt = (c: Point) => footprintPolygons(fp, c, f.rotationDeg ?? 0);
       const centre = { x: f.x, y: f.y };
       return {
@@ -155,14 +162,36 @@ export function itemGeometry(doc: DesignDocumentContent, structure: VenueStructu
   if (!p || p.tableId) return null;
   const r = resolve(p.variantId);
 
+  // A SAIL or a CEILING DRAPE (lib/studio/ceiling-cloth.ts): its sheet, its runs' bands, its canopy's
+  // area — what the tape measures to and the guides frame. Never moved by a drag of the plan's own
+  // (its grips are its own), and never an obstacle (clearanceSubjects leaves it out).
+  const clothRail = r?.anchor === "wall" ? railOf(p) : null;
+  const cloth = clothRail ? clothView(r?.product.category, clothRail, sketchRailContext(doc, property, structure, (v) => resolve(v)?.product)) : null;
+  if (cloth) {
+    const polys = clothPolygons(cloth);
+    if (!polys.length) return null;
+    return remembered(p, [catalogVersion, cloth], () => {
+      const box = boxOf(polys);
+      return { ref, label: r?.product.name ?? "", centre: { x: box.x, y: box.y }, polysAt: () => polys, box, clearanceMm: 0, groupId: p.groupId, movable: false };
+    });
+  }
+
   if (r?.anchor === "wall") {
-    const run = p.span ? resolveSpan(property, p.span) : null;
+    // Its RAIL (lib/studio/rail.ts) — a wall's stretch as always, a side of a thing, a rod — read
+    // against the property's walls and, for a side, the thing where this event stood it.
+    const rail = railOf(p);
+    const lines = rail ? railLines(rail, sketchRailContext(doc, property, structure, (v) => resolve(v)?.product)) : [];
+    const run = lines[0];
     if (!run) return null;
-    return remembered(p, [catalogVersion, property], () => {
+    return remembered(p, [catalogVersion, property, run], () => {
       // One band per stretch of the run, so a drape round a bowed wall is the curved strip it is
-      // (each piece convex), not a rectangle across the bow.
-      const band = run.path.slice(1).map((q, i) => bandPolygon(run.path[i], q, DRAPE_BAND_MM));
-      const centre = run.path.length > 2 ? run.path[Math.floor(run.path.length / 2)] : { x: (run.from.x + run.to.x) / 2, y: (run.from.y + run.to.y) / 2 };
+      // (each piece convex), not a rectangle across the bow — on its hang side when it has one.
+      const band = lines.flatMap((l) => {
+        const mid = railClothLine(l, DRAPE_BAND_MM);
+        return mid.slice(1).map((q, i) => bandPolygon(mid[i], q, DRAPE_BAND_MM));
+      });
+      const path = railClothLine(run, DRAPE_BAND_MM);
+      const centre = path.length > 2 ? path[Math.floor(path.length / 2)] : { x: (path[0].x + path[path.length - 1].x) / 2, y: (path[0].y + path[path.length - 1].y) / 2 };
       return { ref, label: r.product.name, centre, polysAt: () => band, box: boxOf(band), clearanceMm: r.product.clearanceMm ?? 0, groupId: p.groupId, movable: false };
     });
   }
@@ -181,8 +210,12 @@ export function itemGeometry(doc: DesignDocumentContent, structure: VenueStructu
       });
     // A rug with curved sides is measured along its curves; the rectangle it was is only its box.
     const bows = rugShapeOf(p);
+    // A carpet laid to an outline (lib/studio/cover.ts) is measured, hit and stacked by that outline.
+    const carpet = carpetShape(p);
     const polysAt =
-      r?.sizing === "stretch"
+      carpet
+        ? (c: Point): Poly[] => [carpetPolygon(carpet).map((q) => toRoom({ position: c, rotation: p.rotation }, q))]
+        : r?.sizing === "stretch"
         ? bows
           ? (c: Point): Poly[] => {
               const s = stretchSize(p);
@@ -199,7 +232,9 @@ export function itemGeometry(doc: DesignDocumentContent, structure: VenueStructu
       clearanceMm,
       groupId: p.groupId,
       solid: r?.solid,
-      movable: true,
+      // A carpet laid over a surface or a stage goes where that goes — never aligned, spaced or
+      // spread on its own.
+      movable: !p.cover,
     };
   });
 }
@@ -225,11 +260,22 @@ export function clearanceSubjects(
   for (const p of doc.placements) {
     if (p.tableId) continue;
     const r = resolve(p.variantId);
+    // An LED strip is a line of light on a wall or an edge — nobody needs room from it (spec §7).
+    if (isLedStrip(r?.product)) continue;
+    // A sail or a ceiling drape is over people's heads, as a chandelier is — no one's obstacle (spec §6.3).
+    if (r?.anchor === "wall" && isCeilingClothCategory(r.product.category)) continue;
     if (r?.anchor === "wall") {
       if (visible.ceiling) add({ kind: "placement", id: p.id });
       continue;
     }
     if (p.layer !== "floor" || r?.sizing === "stretch" || !visible.floor) continue;
+    // A PERGOLA is a roof (lib/venues/pergola.ts): tables are set UNDER it, so its posts are the only
+    // thing of it in anyone's way — never the floor its footprint covers.
+    if (r && isPergolaRow(r.product)) {
+      const g = pergolaGeometry(placementFootprint(p), pergolaOfProduct(r.product));
+      if (g) out.push({ key: `placement:${p.id}`, polys: pergolaPostsInRoom(g, p.position, p.rotation || 0, !!p.mirrored, p.scale || 1), clearanceMm: r.product.clearanceMm ?? 0, groupId: p.groupId, label: r.product.name });
+      continue;
+    }
     add({ kind: "placement", id: p.id });
   }
   // The venue's own furniture asks for nothing, but a table that asked for aisle room is as much in
@@ -237,6 +283,14 @@ export function clearanceSubjects(
   // Not the ground: a table is SET on a lawn, and one standing near a lawn's edge (or across it) was
   // reported as too close to it, as though the grass were a wall.
   // Nor a curtain: it is the wall's own face, and a table may stand as near it as near the wall.
-  if (visible.floor) for (const f of structure.features) if (f.kind !== "surface" && f.kind !== "curtain") add({ kind: "feature", id: f.id });
+  // Nor the venue's LED strip, for the same reason as a hired one.
+  // A venue's pergola, as a hired one: its posts alone.
+  if (visible.floor) for (const f of structure.features) if (f.kind !== "surface" && f.kind !== "curtain" && f.kind !== "pergola" && f.kind !== "led") add({ kind: "feature", id: f.id });
+  if (visible.floor)
+    for (const f of structure.features) {
+      if (f.kind !== "pergola") continue;
+      const g = pergolaGeometry(featureFootprint(f), pergolaOf(f));
+      if (g) out.push({ key: `feature:${f.id}`, polys: pergolaPostsInRoom(g, { x: f.x, y: f.y }, f.rotationDeg ?? 0), clearanceMm: 0, label: f.label });
+    }
   return out;
 }

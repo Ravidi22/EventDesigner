@@ -149,6 +149,16 @@ export const FIXTURE_PRODUCTS: Product[] = [
   { id: "curtain", name: "וילון", category: "curtains", layer: "ceiling", dimensions: { widthMm: 4000, depthMm: 220, heightMm: 4000 }, categoryFields: {}, styleTags: [], variants: [{ id: "v-curtain-ivory", name: "שנהב", swatch: "#f3ede2" }] },
   { id: "rug", name: "שטיח", category: "rugs", layer: "floor", dimensions: { widthMm: 3000, depthMm: 2000, heightMm: 0 }, categoryFields: {}, styleTags: [], variants: [{ id: "v-rug-plum", name: "סגול", swatch: "#4b3a6e" }] },
   { id: "sofa", name: "ספה", category: "sofas", layer: "floor", dimensions: { widthMm: 2000, depthMm: 900, heightMm: 800 }, categoryFields: {}, styleTags: [], variants: [] },
+  // 2026-11-07: a hired pergola (lib/venues/pergola.ts) — 12cm posts, a cloth roof.
+  { id: "pergola", name: "פרגולה 3×3", category: "pergolas", layer: "floor", dimensions: { widthMm: 3000, depthMm: 3000, heightMm: 2600 }, categoryFields: { postMm: 120 }, styleTags: [], appearance: { shape: "rect", content: "none", symbolStyle: "fabric" }, variants: [{ id: "v-pergola-white", name: "לבן", swatch: "#f4f1ea" }] },
+  // 2026-11-07 (spec §7): a hired LED strip (per metre, a rail) and a hired LED screen.
+  { id: "led-strip", name: "פס לד", category: "led-strips", layer: "ceiling", dimensions: { heightMm: 0 }, categoryFields: {}, styleTags: [], priceUnit: "m", variants: [{ id: "v-led-amber", name: "ענבר", swatch: "#ffb347" }] },
+  { id: "led-screen", name: "מסך לד 4×2.5", category: "led-screens", layer: "floor", dimensions: { widthMm: 4000, depthMm: 100, heightMm: 2500 }, categoryFields: {}, styleTags: [], variants: [] },
+  // 2026-11-07: cloth in the air (lib/studio/ceiling-cloth.ts) — a sail, and a ceiling drape.
+  { id: "sail", name: "מפרש", category: "sails", layer: "ceiling", dimensions: { heightMm: 0 }, categoryFields: {}, styleTags: [], priceUnit: "m2", variants: [{ id: "v-sail-sand", name: "חול", swatch: "#e9dfc9" }] },
+  { id: "ceiling-drape", name: "בד תקרה", category: "ceiling-drapes", layer: "ceiling", dimensions: { heightMm: 0 }, categoryFields: {}, styleTags: [], priceUnit: "m", variants: [{ id: "v-drape-ivory", name: "שנהב", swatch: "#f3ede2" }] },
+  // 2026-11-07 (built-in kit): the studio's dance floor, a black gloss one on this plan.
+  { id: "dance-floor", name: "רחבת ריקודים", category: "dance-floors", layer: "floor", dimensions: { widthMm: 6000, depthMm: 6000, heightMm: 20 }, categoryFields: {}, styleTags: [], priceUnit: "m2", variants: [{ id: "v-dance-black", name: "שחור", swatch: "#1c1b20" }] },
 ];
 
 export const FIXTURE_DOC: DesignDocumentContent = {
@@ -159,7 +169,7 @@ export const FIXTURE_DOC: DesignDocumentContent = {
     { id: "t3", type: "rectangle", number: 3, position: { x: 14400, y: 4000 }, rotation: 0, seats: 8, variantId: "table-rect", groupId: "g1" },
   ],
   placements: [
-    { id: "p-cloth", variantId: "v-cloth-plum", layer: "table", tableId: "t1", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
+    { id: "p-cloth", variantId: "v-cloth-plum", layer: "table", tableId: "t1", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, border: { widthMm: 80, colour: "#c9a24a" } },
     { id: "p-arr", variantId: "v-arr-blush", layer: "table", tableId: "t1", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
     { id: "p-ring", variantId: "v-candle-gold", layer: "table", tableId: "t1", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
     { id: "p-cluster", variantId: "candle-cluster", layer: "table", tableId: "t1", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 },
@@ -199,11 +209,66 @@ export const FIXTURE_DOC: DesignDocumentContent = {
     { id: "p-perched-vase", variantId: "vase", layer: "floor", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, perch: { stageId: "p-stage", itemId: "bench-1" } },
     { id: "p-bar", variantId: "bar-straight", layer: "floor", quantity: 1, position: { x: 17000, y: 1500 }, rotation: 0, scale: 1 },
     { id: "p-sofa", variantId: "sofa", layer: "floor", quantity: 1, position: { x: 2000, y: 10000 }, rotation: 90, scale: 1 },
-    { id: "p-rug", variantId: "v-rug-plum", layer: "floor", quantity: 1, position: { x: 2500, y: 2500 }, rotation: 0, scale: 1, sizeMm: { widthMm: 3000, depthMm: 2000 } },
+    // A contour of its own on this plan (lib/catalog/border.ts): a gold band, a second one inside it.
+    { id: "p-rug", variantId: "v-rug-plum", layer: "floor", quantity: 1, position: { x: 2500, y: 2500 }, rotation: 0, scale: 1, sizeMm: { widthMm: 3000, depthMm: 2000 }, border: { widthMm: 120, colour: "#c9a24a", inner: { widthMm: 40, gapMm: 60, colour: "#f5efe0" } } },
+    // A carpet laid OVER the stage, 20cm in from its edge (lib/studio/cover.ts) — stored as the settle
+    // writes it: the stage's 6×4 outline pulled in to 5.6×3.6, on the stage's middle.
+    {
+      id: "p-stage-rug",
+      variantId: "v-rug-plum",
+      layer: "floor",
+      quantity: 1,
+      position: { x: 10000, y: 9500 },
+      rotation: 0,
+      scale: 1,
+      sizeMm: { widthMm: 5600, depthMm: 3600 },
+      cover: { stageId: "p-stage", insetMm: 200 },
+      outline: [
+        { x: -2800, y: -1800 },
+        { x: 2800, y: -1800 },
+        { x: 2800, y: 1800 },
+        { x: -2800, y: 1800 },
+      ],
+    },
     { id: "p-rows", variantId: "v-chair-ivory", layer: "floor", quantity: 10, position: { x: 25000, y: 9500 }, rotation: 0, scale: 1, rows: { rows: 2, perRow: 5 } },
     { id: "p-chuppah", variantId: "v-chuppah-cream", layer: "floor", quantity: 1, position: { x: 25000, y: 6000 }, rotation: 0, scale: 1 },
     { id: "p-chandelier", variantId: "v-chand-gold", layer: "ceiling", quantity: 1, position: { x: 5000, y: 5000 }, rotation: 0, scale: 1, over: "t1" },
     { id: "p-curtain", variantId: "v-curtain-ivory", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, span: { wallId: "w-left", from: 0.2, to: 0.6 } },
+    // 2026-11-07: a curtain on a free-standing ROD on the terrace — a ר, its arm out past its last post.
+    { id: "p-rod-curtain", variantId: "v-curtain-ivory", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, rail: { type: "rod", points: [{ x: 21000, y: 8000 }, { x: 24000, y: 8000 }, { x: 24000, y: 9500 }], heightMm: 2400, cantilever: "end" } },
+    // 2026-11-07: a hired pergola in the hall, laid 4 × 3; on the terrace, an arrangement hung under
+    // the venue's own pergola (lib/venues/roofs.ts — its chain reaches the pergola, not the hall's
+    // roof) and a curtain on that pergola's front side (a side rail).
+    { id: "p-pergola", variantId: "v-pergola-white", layer: "floor", quantity: 1, position: { x: 16500, y: 8500 }, rotation: 0, scale: 1, sizeMm: { widthMm: 4000, depthMm: 3000 } },
+    { id: "p-hung", variantId: "v-arr-blush", layer: "ceiling", quantity: 1, position: { x: 21700, y: 5600 }, rotation: 0, scale: 1 },
+    { id: "p-pergola-curtain", variantId: "v-curtain-ivory", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, rail: { type: "side", featureId: "f-pergola", side: 0, from: 0, to: 1, out: 1 } },
+    // 2026-11-07 (spec §7): an amber strip along the hall's top wall at the floor line, and a screen.
+    { id: "p-led", variantId: "v-led-amber", layer: "ceiling", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, rail: { type: "wall", wallId: "w-top-a", from: 0.25, to: 0.75, side: 1, heightMm: 0 } },
+    { id: "p-screen", variantId: "led-screen", layer: "floor", quantity: 1, position: { x: 10000, y: 1000 }, rotation: 0, scale: 1 },
+    // 2026-11-07: a dance floor laid 3 × 2 m by the south wall, its corners rounded 40cm.
+    { id: "p-dance", variantId: "v-dance-black", layer: "floor", quantity: 1, position: { x: 4700, y: 10500 }, rotation: 0, scale: 1, sizeMm: { widthMm: 3000, depthMm: 2000 }, corners: [400, 400, 400, 400] },
+    // 2026-11-07: a SAIL tied to the hall's north wall twice and standing on two posts of its own; a
+    // ceiling drape swagged from A to B; a canopy of swags over a 4 × 1.8 m area.
+    {
+      id: "p-sail",
+      variantId: "v-sail-sand",
+      layer: "ceiling",
+      quantity: 1,
+      position: { x: 8000, y: 1750 },
+      rotation: 0,
+      scale: 1,
+      rail: {
+        type: "sail",
+        ties: [
+          { p: { x: 6000, y: 0 }, heightMm: 3600, to: { kind: "wall", wallId: "w-top-a", t: 0.3 } },
+          { p: { x: 10000, y: 0 }, heightMm: 3600, to: { kind: "wall", wallId: "w-top-a", t: 0.5 } },
+          { p: { x: 10000, y: 3500 }, heightMm: 2800, to: { kind: "post" } },
+          { p: { x: 6000, y: 3500 }, heightMm: 2800, to: { kind: "post" } },
+        ],
+      },
+    },
+    { id: "p-swag", variantId: "v-drape-ivory", layer: "ceiling", quantity: 1, position: { x: 5000, y: 8000 }, rotation: 0, scale: 1, rail: { type: "run", a: { x: 2000, y: 8000 }, b: { x: 8000, y: 8000 }, heightMm: 3500 } },
+    { id: "p-canopy", variantId: "v-drape-ivory", layer: "ceiling", quantity: 1, position: { x: 11000, y: 6900 }, rotation: 0, scale: 1, rail: { type: "canopy", outline: [{ x: 9000, y: 6000 }, { x: 13000, y: 6000 }, { x: 13000, y: 7800 }, { x: 9000, y: 7800 }], heightMm: 3600, directionDeg: 0, spacingMm: 1200 } },
   ],
   groups: [{ id: "g1", number: 2 }],
 };
@@ -235,6 +300,11 @@ export const FIXTURE_STRUCTURE: VenueStructure = {
     { id: "f-palm", kind: "plant", label: "דקל", x: 28500, y: 1500, widthMm: 4500, depthMm: 4500, heightMm: 6000, shape: "circle", rotationDeg: 0, plant: "palm" },
     { id: "f-pool", kind: "pool", label: "בריכה", x: 24000, y: 2500, widthMm: 6000, depthMm: 2500, heightMm: 0, shape: "ellipse", rotationDeg: 0 },
     { id: "f-seating", kind: "seating", label: "שורות כיסאות", x: 28000, y: 6000, widthMm: 2000, depthMm: 1500, heightMm: 900, shape: "rect", rotationDeg: 0, seating: { rows: 3, perRow: 4, chairStyle: "dining", chairWidthMm: 450, chairDepthMm: 500 } },
+    // 2026-11-07: the terrace's own pergola, slatted, 2.6 m.
+    { id: "f-pergola", kind: "pergola", label: "פרגולה", x: 21700, y: 5600, widthMm: 3000, depthMm: 3000, heightMm: 2600, shape: "rect", rotationDeg: 0, pergola: { postMm: 150, roof: "slats" } },
+    // 2026-11-07 (spec §7.3): the venue's own strip along its pergola's beam, and its own screen.
+    { id: "f-led", kind: "led", label: "פס לד", x: 21700, y: 4100, widthMm: 3000, depthMm: 80, heightMm: 0, shape: "rect", rotationDeg: 0, led: { rail: { type: "side", featureId: "f-pergola", side: 0, from: 0, to: 1, out: 1 }, colour: "#7fd4ff" } },
+    { id: "f-screen", kind: "screen", label: "מסך לד", x: 26000, y: 11000, widthMm: 4000, depthMm: 100, heightMm: 2500, shape: "rect", rotationDeg: 0 },
   ],
 };
 

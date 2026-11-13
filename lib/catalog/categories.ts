@@ -35,9 +35,16 @@ import {
   Combine,
   Lamp,
   DoorOpen,
+  Minus,
   type LucideIcon,
 } from "lucide-react";
 import type { Layer, ResizeSpec, StockKind } from "./types";
+import { Columns3 } from "lucide-react";
+import type { RailType } from "@/lib/studio/rail";
+import { Monitor, Zap } from "lucide-react";
+import type { PriceUnit } from "./types";
+import { Sailboat, Waves } from "lucide-react";
+import { Grid3x3 } from "lucide-react";
 
 export interface CategoryField {
   key: string;
@@ -155,6 +162,19 @@ export interface CategoryDef {
    *  the category already knows. The row's own `resize` wins when set — this is the default under
    *  it, read through `resizeSpecOf` (lib/studio/footprint.ts). */
   defaultResize?: ResizeSpec;
+  /** Which RAILS a row of this category may hang on (lib/studio/rail.ts — spec 2026-11-07 §1): a
+   *  curtain on a wall, on a side of a tall thing, on a free-standing rod. Absent = none. `anchor:
+   *  "wall"` still says "this hangs on a rail" to every reader that sorts drapes from objects; this
+   *  says which kinds of rail the placing offers. */
+  rails?: RailType[];
+  /** BUILT-IN ONLY (docs/superpowers/specs/2026-11-07-built-in-kit-design.md): the category's one row is
+   *  the studio's built-in (lib/catalog/standard/items.ts, installed at sign-up), so a studio's new-item
+   *  form and CSV import never offer it. Absent = an ordinary category, created by hand. */
+  builtIn?: true;
+  /** What a NEW product of this category is priced per (Product.priceUnit) — a seed for the drawer,
+   *  like `defaultStock`, stored on the row and editable. Absent = per unit. A sail is sold by the
+   *  square metre of its polygon, a ceiling drape by the metre of its runs (spec 2026-11-07 §6.3/§6.4). */
+  defaultPriceUnit?: PriceUnit;
 }
 
 /** Whether click-to-place lets go after one placement. Everything else stays armed until Escape,
@@ -198,11 +218,23 @@ export const CATEGORIES: CategoryDef[] = [
   { id: "greenery", label: "ירק וענפים", group: "grp-flowers", defaultLayer: "table", icon: Leaf, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10 },
   { id: "dried-flowers", label: "פרחים יבשים", group: "grp-flowers", defaultLayer: "table", icon: Wheat, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10 },
   { id: "chandeliers", label: "שנדליירים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Lightbulb, dims: "round", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
+  // Cloth in the air (spec 2026-11-07 §6.3/§6.4, lib/studio/ceiling-cloth.ts): a SAIL tied at three or
+  // four corners — a wall, a corner of a thing, a post of its own — billed by the square metre of its
+  // polygon; a CEILING DRAPE swagged from A to B, or laid over an area as parallel swags, billed by
+  // the metre of its runs. Each hangs on its own rail kinds only (`rails`) and is drawn to fit, so
+  // `sizing: "stretch"` and no height of its own to ask — its heights are its rail's. `anchor: "wall"`
+  // is the curtains' "this hangs on a rail" to every reader that sorts drapes from objects.
+  { id: "sails", label: "מפרשים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Sailboat, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["sail"], defaultPriceUnit: "m2", builtIn: true },
+  { id: "ceiling-drapes", label: "בדי תקרה", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Waves, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["run", "canopy"], defaultPriceUnit: "m", builtIn: true },
   { id: "candlesticks", label: "פמוטים", group: "grp-table-design", defaultLayer: "table", icon: Flame, dims: "box", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   // Table lamps — a turned base under a linen shade, set along a knights table like candlesticks.
   // Not a candlestick: nothing burns and nothing is packed per arm, so no count-multiplier.
   { id: "lamps", label: "מנורות ואהילים", group: "grp-table-design", defaultLayer: "table", icon: Lamp, dims: "round", fields: [] },
   { id: "rugs", label: "שטיחים", group: "grp-accessories", defaultLayer: "floor", icon: Frame, dims: "box", fields: [], sizing: "stretch", needsHeight: false },
+  // A dance floor (רחבת ריקודים — the built-in kit, spec 2026-11-07 §2): laid, stretched, rounded at
+  // its corners and stacked exactly as a rug is (a stretch floor row is the canvas's CarpetNode), drawn
+  // as its panels (lib/catalog/dance-floor.ts), billed by the square metre of its real outline.
+  { id: "dance-floors", label: "רחבות ריקודים", group: "grp-accessories", defaultLayer: "floor", icon: Grid3x3, dims: "box", fields: [], sizing: "stretch", needsHeight: false, defaultPriceUnit: "m2", builtIn: true },
   { id: "stages", label: "במות", group: "grp-stages", defaultLayer: "floor", icon: Boxes, dims: "box", fields: [], placeOnce: true },
   // The loose modules a stage is built from — a 244×122 sheet, the 244×80/60/40 strips that finish a row's depth.
   // The stage-fill tool (lib/studio/stage-fill.ts) builds from these AND from the studio's own
@@ -211,8 +243,8 @@ export const CATEGORIES: CategoryDef[] = [
   // What a stage needs besides its decks, counted off the stage itself (lib/design-document/stage.ts)
   // rather than placed by hand: a flight of STAIRS per opening the designer put on the plan, and the
   // SKIRT that hides the legs along every open side — measured, so a skirt is usually priced למטר.
-  { id: "stage-stairs", label: "מדרגות במה", group: "grp-stages", defaultLayer: "floor", icon: Footprints, dims: "box", fields: [] },
-  { id: "stage-skirts", label: "חצאיות במה", group: "grp-stages", defaultLayer: "floor", icon: PanelBottom, dims: "box", fields: [] },
+  { id: "stage-stairs", label: "מדרגות במה", group: "grp-stages", defaultLayer: "floor", icon: Footprints, dims: "box", fields: [], builtIn: true },
+  { id: "stage-skirts", label: "חצאיות במה", group: "grp-stages", defaultLayer: "floor", icon: PanelBottom, dims: "box", fields: [], builtIn: true },
   // The other two ways an open stage edge is finished (StageEdgeKind): a banquette people sit on
   // along the outside of the edge, and a barrier on it. Both counted by the metre off the stage.
   //
@@ -233,16 +265,38 @@ export const CATEGORIES: CategoryDef[] = [
     // …and its depth in 5cm: seat-deep (45) on its own, table-deep (60) once chairs sit at it
     // (lib/design-document/bench.ts BENCH_TABLE_DEPTH_MM), or whatever the crew's modules make.
     defaultResize: { stepMm: 100, width: { minMm: 600, maxMm: 12000 }, depth: { minMm: 300, maxMm: 1500, stepMm: 50 } },
+    builtIn: true,
   },
-  { id: "stage-barriers", label: "מחסומי במה", group: "grp-stages", defaultLayer: "floor", icon: Fence, dims: "box", fields: [] },
+  { id: "stage-barriers", label: "מחסומי במה", group: "grp-stages", defaultLayer: "floor", icon: Fence, dims: "box", fields: [], builtIn: true },
   // A wall standing on a stage edge (a flower wall, a draped frame) by the metre; a ramp by the ramp;
   // and what covers the deck (carpet, dance floor) by the square metre of stage.
-  { id: "stage-backdrops", label: "קירות רקע לבמה", group: "grp-stages", defaultLayer: "floor", icon: PanelTop, dims: "box", fields: [] },
-  { id: "stage-ramps", label: "רמפות נגישות", group: "grp-stages", defaultLayer: "floor", icon: Accessibility, dims: "box", fields: [] },
-  { id: "stage-surfaces", label: "משטחי במה", group: "grp-stages", defaultLayer: "floor", icon: Layers2, dims: "box", fields: [], needsHeight: false },
+  { id: "stage-backdrops", label: "קירות רקע לבמה", group: "grp-stages", defaultLayer: "floor", icon: PanelTop, dims: "box", fields: [], builtIn: true },
+  { id: "stage-ramps", label: "רמפות נגישות", group: "grp-stages", defaultLayer: "floor", icon: Accessibility, dims: "box", fields: [], builtIn: true },
+  { id: "stage-surfaces", label: "משטחי במה", group: "grp-stages", defaultLayer: "floor", icon: Layers2, dims: "box", fields: [], needsHeight: false, builtIn: true },
   { id: "bars", label: "ברים", group: "grp-bars", defaultLayer: "floor", icon: Wine, dims: "both", fields: [] },
   { id: "chuppahs", label: "חופות", group: "grp-chuppahs", defaultLayer: "floor", icon: Tent, dims: "both", fields: [], placeOnce: true },
-  { id: "curtains", label: "ווילונות", group: "grp-accessories", defaultLayer: "ceiling", icon: Blinds, dims: "box", fields: [], anchor: "wall", sizing: "stretch" },
+  // A hired PERGOLA (lib/venues/pergola.ts — the venue's own is a feature of the same definition):
+  // posts at its corners, beams along its sides, a roof of slats, a deck, a cloth or nothing — the
+  // roof is the row's drawing style (SYMBOL_STYLES.pergola), the post its `postMm` (mm; no suffix,
+  // so it multiplies nothing on the packing list). Beside the חופות it stands in for. Laid to the
+  // size the event needs by its handles (defaultResize, not `sizing: "stretch"`: a stretch row is
+  // drawn and stacked as a rug and kept out of the clearance check) — and stretched, it keeps its
+  // post and slat spacing in millimetres, only gaining slats.
+  { id: "pergolas", label: "פרגולות", group: "grp-chuppahs", defaultLayer: "floor", icon: Columns3, dims: "box", fields: [{ key: "postMm", label: "עובי עמוד (מ״מ)" }], defaultHeightMm: 2600, defaultResize: { stepMm: 100, width: { minMm: 1500, maxMm: 20000 }, depth: { minMm: 1500, maxMm: 20000 } }, builtIn: true },
+  { id: "curtains", label: "ווילונות", group: "grp-accessories", defaultLayer: "ceiling", icon: Blinds, dims: "box", fields: [], anchor: "wall", sizing: "stretch", rails: ["wall", "side", "rod"] },
+  // The ROD a curtain on a free-standing rod hangs from (spec 2026-11-07 §6.2), billed by the metre
+  // off the curtain itself (MeasureContext.rodOf — the studio's first row here), as a stage's skirt
+  // is off the stage: never placed on its own.
+  { id: "curtain-rods", label: "מוטות וילון", group: "grp-accessories", defaultLayer: "ceiling", icon: Minus, dims: "box", fields: [], needsHeight: false, builtIn: true },
+  // A line of LIGHT on a rail (spec 2026-11-07 §7.1, lib/venues/led.ts): along a wall at a height,
+  // along a side of a stage, a bar or a building, or a free run between two points. It hangs on a
+  // rail exactly as a drape does (`anchor: "wall"` sorts it with the drapes for every reader that
+  // asks "is this a thing on a rail"), is billed by the metre of its lines like one, and draws as a
+  // line of its shade's colour with a glow — never as cloth. No height of its own: the rail says it.
+  { id: "led-strips", label: "פסי לד", group: "grp-accessories", defaultLayer: "ceiling", icon: Zap, dims: "box", fields: [], anchor: "wall", sizing: "stretch", needsHeight: false, rails: ["wall", "side", "run"], defaultPriceUnit: "m", builtIn: true },
+  // An LED wall (§7.2): a free floor item like a stage backdrop — a 4 × 0.1 × 2.5 panel standing on a
+  // stage or the floor, its FRONT the +y face that lights. Counted per unit.
+  { id: "led-screens", label: "מסכי לד", group: "grp-accessories", defaultLayer: "floor", icon: Monitor, dims: "box", fields: [], builtIn: true },
   { id: "arches", label: "קשתות", group: "grp-accessories", defaultLayer: "floor", icon: Rainbow, dims: "box", fields: [] },
   // A gate — two columns joined overhead by a lintel (a square entrance) or an arch (a round one),
   // set where the guests come in or at the head of the aisle. Not an arch: an arch is a dressed
@@ -305,7 +359,7 @@ export const HALL_PASS_GROUPS: CategoryGroupId[] = ["grp-seating", "grp-stages",
  *  the tables when the room is set out, not when it is dressed (2026-10-31, the user: "a rug is not
  *  a design — it's related to the table sketch"). Offered in the hall pass's rail, drawn on its
  *  canvas, and taken off the design pass's rail. */
-export const HALL_PASS_CATEGORIES: string[] = ["rugs"];
+export const HALL_PASS_CATEGORIES: string[] = ["rugs", "dance-floors"];
 
 /** Is a row of this category one of `pass`'s — in its rail, on its canvas? An unknown category is
  *  shown rather than guessed away. */

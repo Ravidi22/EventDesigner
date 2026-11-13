@@ -22,6 +22,7 @@
 //
 // The list is data. A new department is a new array below and one more run of the install.
 import { CATEGORY_BY_ID } from "../categories";
+import { CATEGORIES } from "../categories";
 import type { MapAppearance, Product } from "../types";
 import { resolveFootprint, resolveContent, footprintBounds } from "../../studio/footprint";
 import { isMain } from "../../self-check";
@@ -34,6 +35,9 @@ export interface StandardItem {
   /** Everything but the id and the shades. A base item has no variants on purpose: a shade is a
    *  studio's own stock, and a bare table is the same table everywhere. */
   product: Omit<Product, "id" | "variants">;
+  /** One of the studio's BUILT-INS (docs/superpowers/specs/2026-11-07-built-in-kit-design.md): never
+   *  deleted or duplicated, pinned on the rail; otherwise the designer's to edit like any row. */
+  builtIn?: true;
 }
 
 /** One studio's copy of a base item. The id comes from the caller — the install derives a stable
@@ -149,6 +153,7 @@ export const STANDARD_DECKS: StandardItem[] = [
 export const STANDARD_STAGE_PARTS: StandardItem[] = [
   {
     key: "stage-stairs-100",
+    builtIn: true,
     product: {
       name: "מדרגות במה 100",
       category: "stage-stairs",
@@ -165,6 +170,7 @@ export const STANDARD_STAGE_PARTS: StandardItem[] = [
   },
   {
     key: "stage-bench",
+    builtIn: true,
     product: {
       name: "בנקט לבמה",
       category: "stage-benches",
@@ -182,6 +188,7 @@ export const STANDARD_STAGE_PARTS: StandardItem[] = [
   },
   {
     key: "stage-barrier",
+    builtIn: true,
     product: {
       name: "מחסום במה",
       category: "stage-barriers",
@@ -197,6 +204,7 @@ export const STANDARD_STAGE_PARTS: StandardItem[] = [
   },
   {
     key: "stage-backdrop",
+    builtIn: true,
     product: {
       name: "קיר רקע לבמה",
       category: "stage-backdrops",
@@ -212,6 +220,7 @@ export const STANDARD_STAGE_PARTS: StandardItem[] = [
   },
   {
     key: "stage-ramp",
+    builtIn: true,
     product: {
       name: "רמפת נגישות",
       category: "stage-ramps",
@@ -226,6 +235,7 @@ export const STANDARD_STAGE_PARTS: StandardItem[] = [
   },
   {
     key: "stage-carpet",
+    builtIn: true,
     product: {
       name: "שטיח במה",
       category: "stage-surfaces",
@@ -241,6 +251,7 @@ export const STANDARD_STAGE_PARTS: StandardItem[] = [
   },
   {
     key: "stage-skirt",
+    builtIn: true,
     product: {
       name: "חצאית במה",
       category: "stage-skirts",
@@ -316,6 +327,65 @@ export const STANDARD_BARS: StandardItem[] = [
   bar("bar-round-150", "בר עגול 150", { diameterMm: 1500 }),
 ];
 
+// ── רחבת ריקודים ─────────────────────────────────────────────────────────────
+
+// The dance floor every studio is given (the built-in kit, docs/superpowers/specs/2026-11-07-built-
+// in-kit-design.md §2): one row, laid and stretched on the plan like a rug, drawn as its panels in its
+// shade, billed by the square metre of the floor it really covers. 6×6m is a first size for a hall of
+// 300; the designer drags it to the room. No price and no shades: those are the studio's to add.
+export const STANDARD_DANCE_FLOOR: StandardItem = {
+  key: "builtin-dance-floor",
+  builtIn: true,
+  product: {
+    name: "רחבת ריקודים",
+    category: "dance-floors",
+    layer: "floor",
+    dimensions: { widthMm: 6000, depthMm: 6000, heightMm: 20 },
+    categoryFields: {},
+    priceUnit: "m2",
+    styleTags: [],
+    visibility: "public",
+    appearance: { shape: "rect", content: "none" },
+  },
+};
+
+// ── הערכה המובנית ───────────────────────────────────────────────────────────
+
+// The studio's BUILT-INS (docs/superpowers/specs/2026-11-07-built-in-kit-design.md): things a designer
+// does not make products OF — one LED strip, one sail, one ceiling drape is shaped where it is used,
+// per placement — so the app installs exactly one row of each and its category is never offered for
+// a new row (CategoryDef.builtIn). The row is the studio's from then on: name, photo, price, shades.
+// No shades here (a base item has none — see StandardItem) and no price (the studio's own number).
+//
+// The stage's finishing parts above are built-ins too; this is the rest of the kit. A stretch item
+// (strip, drape, sail, curtain) stores no width or depth — it is drawn to fit — and one whose
+// category asks no height carries 0, as a cloth does (the column is NOT NULL).
+const FLAT: MapAppearance = { shape: "rect", content: "none" };
+
+type KitProduct = Omit<Product, "id" | "variants" | "styleTags" | "visibility" | "categoryFields" | "appearance"> & Partial<Pick<Product, "categoryFields">>;
+
+function kit(key: string, product: KitProduct): StandardItem {
+  return { key, builtIn: true, product: { categoryFields: {}, styleTags: [], visibility: "public", appearance: FLAT, ...product } };
+}
+
+export const STANDARD_KIT: StandardItem[] = [
+  kit("builtin-led-strip", { name: "פס לד", category: "led-strips", layer: "ceiling", dimensions: { heightMm: 0 }, spec: "פס תאורה על מסילה — קיר, צד של אלמנט או קו חופשי", priceUnit: "m" }),
+  // Per UNIT, not per m²: a box item's m² is its FOOTPRINT (lib/design-document/measure.ts — width ×
+  // depth), which for a 4m × 10cm screen is 0.4 m² of floor, not the 10 m² of picture it lights.
+  kit("builtin-led-screen", { name: "מסך לד", category: "led-screens", layer: "floor", dimensions: { widthMm: 4000, depthMm: 100, heightMm: 2500 }, spec: "קיר לד 4×2.5 מ׳ — הצד הקדמי מאיר" }),
+  kit("builtin-curtain-rod", { name: "מוט וילון", category: "curtain-rods", layer: "ceiling", dimensions: { widthMm: 1000, depthMm: 30, heightMm: 0 }, spec: "מוט עומד לווילון — מחויב לפי המטרים של הווילון", priceUnit: "m" }),
+  kit("builtin-ceiling-drape", { name: "בד תקרה", category: "ceiling-drapes", layer: "ceiling", dimensions: { heightMm: 0 }, spec: "בד בקשתות בין שתי נקודות, או על שטח", priceUnit: "m" }),
+  kit("builtin-sail", { name: "מפרש", category: "sails", layer: "ceiling", dimensions: { heightMm: 0 }, spec: "בד מתוח בין שלוש או ארבע נקודות קשירה", priceUnit: "m2" }),
+  // Slats are the roof a row with no drawing style has (SYMBOL_STYLES.pergola), so none is stored.
+  kit("builtin-pergola", { name: "פרגולה", category: "pergolas", layer: "floor", dimensions: { widthMm: 4000, depthMm: 4000, heightMm: 2600 }, categoryFields: { postMm: 150 }, spec: "עמודי 15×15, רפפות" }),
+  // Sized, because it is also laid as one: "שטיח מותאם…" lays it to the surface it covers.
+  kit("builtin-rug", { name: "שטיח", category: "rugs", layer: "floor", dimensions: { widthMm: 3000, depthMm: 2000, heightMm: 0 }, priceUnit: "m2" }),
+  // A drape's height is its DROP — the one number its category still asks.
+  // The dance floor (above), laid like a rug and drawn as its panels.
+  STANDARD_DANCE_FLOOR,
+  kit("builtin-curtain", { name: "וילון", category: "curtains", layer: "ceiling", dimensions: { heightMm: 3000 }, spec: "נפילה 3.0 מ׳ — נמתח לאורך הקיר, הצד או המוט", priceUnit: "m" }),
+];
+
 /** The base items a stage is built and finished with — what the studio installs on its own the
  *  first time the stage tool finds none of them (installStageBasics, lib/catalog/actions.ts). */
 export const STANDARD_STAGE_KEYS: string[] = [...STANDARD_DECKS, ...STANDARD_STAGE_PARTS].map((i) => i.key);
@@ -324,7 +394,7 @@ export const STANDARD_STAGE_KEYS: string[] = [...STANDARD_DECKS, ...STANDARD_STA
 export const STANDARD_STAGE_PART_KEYS: string[] = STANDARD_STAGE_PARTS.map((i) => i.key);
 
 /** Everything the install writes. Concatenate the next department here. */
-export const STANDARD_ITEMS: StandardItem[] = [...STANDARD_TABLES, ...STANDARD_DECKS, ...STANDARD_STAGE_PARTS, ...STANDARD_BARS];
+export const STANDARD_ITEMS: StandardItem[] = [...STANDARD_TABLES, ...STANDARD_DECKS, ...STANDARD_STAGE_PARTS, ...STANDARD_BARS, ...STANDARD_KIT];
 
 // ponytail: self-check. Run: npm run check:standard
 if (isMain(import.meta.url)) {
@@ -345,15 +415,39 @@ if (isMain(import.meta.url)) {
 
   for (const item of STANDARD_ITEMS) {
     const p = item.product;
-    check(!!CATEGORY_BY_ID[p.category], `${item.key}: category "${p.category}" exists`);
-    check(p.dimensions.heightMm > 0, `${item.key}: has a height`);
+    const cat = CATEGORY_BY_ID[p.category];
+    check(!!cat, `${item.key}: category "${p.category}" exists`);
+    // A category that asks no height (a strip, a sail, a rug) carries 0 like a cloth; one that is cut
+    // to fit (`sizing: "stretch"`) stores no width or depth — every other item has both.
+    check(p.dimensions.heightMm > 0 || cat?.needsHeight === false, `${item.key}: has a height`);
     check(
-      !!p.dimensions.diameterMm || !!(p.dimensions.widthMm && p.dimensions.depthMm),
+      !!p.dimensions.diameterMm || !!(p.dimensions.widthMm && p.dimensions.depthMm) || cat?.sizing === "stretch" || cat?.needsHeight === false,
       `${item.key}: has a diameter, or a width and a depth`,
     );
+    check(p.layer === cat?.defaultLayer, `${item.key}: stands on its category's layer`);
     check(p.visibility === "public", `${item.key}: is public — that is what the base library is`);
     check(p.unitPrice === undefined && p.costPrice === undefined, `${item.key}: carries no price`);
   }
+
+  // The built-in kit (spec 2026-11-07): every built-in-only category has exactly ONE built-in row —
+  // it IS the category for a studio, which can make no other — and a built-in in a mixed category
+  // (rugs, curtains) stands beside the rows made by hand.
+  const builtIns = STANDARD_ITEMS.filter((i) => i.builtIn);
+  check(builtIns.length >= 16, `the kit ships its built-ins (${builtIns.length})`);
+  for (const c of CATEGORIES.filter((c) => c.builtIn)) {
+    const n = builtIns.filter((i) => i.product.category === c.id).length;
+    check(n === 1, `${c.id}: built-in only, so exactly one built-in row (${n})`);
+  }
+  for (const item of builtIns) {
+    check(item.product.unitPrice === undefined && item.product.costPrice === undefined, `${item.key}: a built-in carries no price — the studio sets it`);
+  }
+  for (const key of ["stage-skirt", "stage-stairs-100", "stage-ramp", "stage-barrier", "stage-backdrop", "stage-carpet", "stage-bench"]) {
+    check(builtIns.some((i) => i.key === key), `${key}: the stage part is a built-in, under the key it always had`);
+  }
+  // The stage tool installs its own basics (installStageBasics) — marking the parts built-in must
+  // not change which keys those are.
+  check(STANDARD_STAGE_PART_KEYS.length === STANDARD_STAGE_PARTS.length && STANDARD_STAGE_KEYS.length === STANDARD_DECKS.length + STANDARD_STAGE_PARTS.length, "the stage tool's basics are unchanged");
+  check(!STANDARD_KIT.some((i) => STANDARD_STAGE_KEYS.includes(i.key)), "…and never include the rest of the kit");
 
   // One table height: the base library's and the drawer's seed for a new table (75cm) agree.
   check(
@@ -423,6 +517,13 @@ if (isMain(import.meta.url)) {
   for (const item of STANDARD_BARS) {
     check(item.product.dimensions.heightMm >= 1000, `${item.key}: is counter height, not table height`);
   }
+
+  // The dance floor: a built-in of a built-in-only category, laid like a rug, billed per m².
+  const dance = STANDARD_DANCE_FLOOR.product;
+  check(
+    STANDARD_DANCE_FLOOR.builtIn === true && CATEGORY_BY_ID[dance.category]?.builtIn === true && CATEGORY_BY_ID[dance.category]?.sizing === "stretch" && dance.priceUnit === "m2",
+    "the dance floor is a built-in, stretched like a rug and priced by the square metre",
+  );
 
   if (failures.length) {
     console.error(`${failures.length} failed`);

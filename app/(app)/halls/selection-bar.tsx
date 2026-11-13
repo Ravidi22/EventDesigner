@@ -38,6 +38,7 @@ import { useState } from "react";
 import { Segmented } from "@/components/segmented";
 import { VENUE_EDGE_KINDS, VENUE_EDGE_LABEL, edgeRows, edgesMatter, featureGaps, takesEdgeItems, type VenueEdgeKind } from "@/lib/venues/stage-edges";
 import { BUILDING_HEIGHT_MM, featureWorldOutline, followsWalls } from "@/lib/venues/face-surfaces";
+import { canEditOutline } from "@/lib/venues/face-surfaces";
 import { SurfaceTiles } from "@/components/surface-tiles";
 import type { DoorOpening, WallDistance } from "@/lib/design-document/stage";
 import { Actions, Bar, BarButton, Note, PanelRow, Rotation, ltr } from "@/components/inspector-bar";
@@ -58,7 +59,11 @@ import { MAP_SHAPES, SHAPE_LABEL } from "@/lib/catalog/types";
 import { climbRunMm, isClimb } from "@/lib/venues/climb";
 import { seatingChair, seatingCount, seatingOf, seatingPatch } from "@/lib/venues/seating";
 import { canDefineColumns, columnOf, columnPatch } from "@/lib/venues/column";
-import { curtainLengthMm, curtainOf, curtainPatch } from "@/lib/venues/curtain";
+import { CURTAIN_FILL, curtainLengthMm, curtainLines, curtainLookPatch, curtainOf, curtainPatch, curtainRail, curtainRailPatch } from "@/lib/venues/curtain";
+import { CANTILEVER_MAX_MM, type RailLine } from "@/lib/studio/rail";
+import { ledLengthMm } from "@/lib/venues/led";
+import { VenueLedPopover } from "./led-panel";
+import { CurtainStyleTiles } from "@/components/curtain-style-tiles";
 import { wallTrack } from "@/lib/studio/anchor";
 import { CHAIR_STYLES, CHAIR_STYLE_LABEL, type ChairStyle } from "@/lib/catalog/symbols";
 import { ChairRowsPopover } from "@/components/chair-rows-popover";
@@ -99,6 +104,17 @@ import { ClimbFields, FEATURE_ICON, PLANT_ICON, SURFACE_ICON } from "@/component
 import { ZONE_KIND_LABEL, type ZoneKind, type ZoneSource } from "@/lib/venues/zone";
 import { MAX_ZONE_MARGIN_MM } from "@/lib/venues/feature-zones";
 import { soleKind, type PlanSelection, type PlanSelectionKind } from "@/lib/venues/selection";
+// The venue round of 2026-11-07 (spec §2, §9): a wall's own height, and a pool's / surface's rim.
+import { SquareSquare } from "lucide-react";
+import { setWallHeight } from "@/lib/venues/structure";
+import { rimPatch, rimSpecOf, takesRim } from "@/lib/venues/rim";
+// The pergola round of 2026-11-07 (spec §5): its own panel.
+import { RotateCw } from "lucide-react";
+import { TagToggle } from "@/components/tag-toggle";
+import { PergolaGlyph } from "@/components/pergola-glyph";
+import { NEW_PERGOLA, PERGOLA_ROOFS, PERGOLA_ROOF_HINT, PERGOLA_ROOF_LABEL, pergolaGeometry, pergolaOf, pergolaPatch, pergolaSides, type Pergola } from "@/lib/venues/pergola";
+import { featureFootprint } from "@/lib/venues/structure";
+import type { Footprint } from "@/lib/studio/footprint";
 
 // The selection bar of the hall editor — the same `Bar` of chips the sketch puts under a selected
 // table (components/inspector-bar.tsx), at the bottom centre of the canvas, each chip a small
@@ -557,6 +573,24 @@ export function SelectionBar({
               className="w-24"
             />
           </PanelRow>
+          {/* The wall's own height (Wall.heightMm) — blank is the room's: as tall as the roofed zone
+              or building it borders, a garden wall, a kerb for a boundary. A number wins either way,
+              a half wall inside a hall or a parapet over a terrace; per wall, nothing on the plan. */}
+          <PanelRow label="גובה (ס״מ)" htmlFor="wall-height">
+            <NumberField
+              id="wall-height"
+              decimals={0}
+              min={0}
+              step={10}
+              commitOnBlur
+              hideZero
+              placeholder="לפי החדר"
+              value={wall.heightMm ? Math.round(wall.heightMm / 10) : 0}
+              onChange={(cm) => apply((s) => setWallHeight(s, wall.id, cm > 0 ? cm * 10 : undefined))}
+              className="w-24"
+            />
+          </PanelRow>
+          <Note>{wall.kind === "edge" ? "גובה לגבול הופך אותו לגדר או לקיר נמוך בתלת־ממד. 0 — גבול נמוך בלבד, כמו עד היום." : "0 — לפי החדר: כגובה התקרה של האזור או המבנה שהקיר גובל בו."}</Note>
         </Popover>
         <Rotation value={Math.round(wallAngleDeg(pts.a, pts.b))} onChange={(deg) => apply((s) => setWallAngle(s, wall.id, deg))} />
         {/* A wall can carry doors; a boundary is a line you can see but not walk into, so switching
@@ -676,7 +710,12 @@ export function SelectionBar({
     // panel for the glass — floor to ceiling (a ויטרינה), or between a sill and a head.
     const window = isWindow(door);
     const vitrine = window && isVitrine(door);
-    const glassWords = !window ? (door.doubleDoor ? "כנף כפולה" : "כנף יחידה") : vitrine ? "זכוכית מהרצפה עד התקרה" : `אדן ${Math.round((door.sillMm ?? 0) / 10)} ס״מ · עד ${Math.round((door.headMm ?? WINDOW_HEAD_MM) / 10)} ס״מ`;
+    // Said the way the user says it (2026-11-07): how high off the floor, and how tall the glass —
+    // never sill and head. Storage is unchanged: the glass is `headMm − sillMm`, and no head is the
+    // wall's own top.
+    const sillMm = door.sillMm ?? 0;
+    const glassMm = door.headMm !== undefined ? Math.max(0, door.headMm - sillMm) : null;
+    const glassWords = !window ? (door.doubleDoor ? "כנף כפולה" : "כנף יחידה") : vitrine ? "זכוכית מהרצפה עד התקרה" : `${Math.round(sillMm / 10)} ס״מ מהרצפה · ${glassMm !== null ? `גובה ${Math.round(glassMm / 10)} ס״מ` : "עד הקיר"}`;
     return (
       <Bar
         icon={window ? AppWindow : DoorOpen}
@@ -754,35 +793,42 @@ export function SelectionBar({
                 onChange={(v) => apply((s) => updateEntrance(s, door.id, v === "vitrine" ? { sillMm: undefined, headMm: undefined } : { sillMm: WINDOW_SILL_MM, headMm: WINDOW_HEAD_MM }))}
               />
             </div>
-            {!vitrine && (
-              <>
-                <PanelRow label="אדן — גובה מהרצפה (ס״מ)" htmlFor="window-sill">
-                  <NumberField
-                    id="window-sill"
-                    decimals={0}
-                    min={0}
-                    step={10}
-                    commitOnBlur
-                    value={Math.round((door.sillMm ?? 0) / 10)}
-                    onChange={(cm) => apply((s) => updateEntrance(s, door.id, { sillMm: Math.max(0, Math.round(cm * 10)) }))}
-                    className="w-24"
-                  />
-                </PanelRow>
-                <PanelRow label="משקוף — גובה מהרצפה (ס״מ)" htmlFor="window-head">
-                  <NumberField
-                    id="window-head"
-                    decimals={0}
-                    min={10}
-                    step={10}
-                    commitOnBlur
-                    value={Math.round((door.headMm ?? WINDOW_HEAD_MM) / 10)}
-                    onChange={(cm) => apply((s) => updateEntrance(s, door.id, { headMm: Math.max(100, Math.round(cm * 10)) }))}
-                    className="w-24"
-                  />
-                </PanelRow>
-              </>
-            )}
-            <Note>{vitrine ? "ויטרינה — זכוכית מהרצפה עד גובה הקיר. בתוכנית היא קטע מזוגג בקיר; במבט התלת־ממדי, זכוכית במקום הקיר." : "חלון בקיר: הקיר נשאר מתחת לאדן ומעל המשקוף, ובין שניהם זכוכית."}</Note>
+            {/* How high off the floor and how tall — the user's words (2026-11-07), on a ויטרינה too
+                (0 off the floor, as tall as the wall). Stored as before: the sill, and the head at
+                the sill plus the height; no height = the glass runs to the wall's top. Raising the
+                window keeps its height — the head moves with the sill. */}
+            <PanelRow label="גובה מהרצפה (ס״מ)" htmlFor="window-sill">
+              <NumberField
+                id="window-sill"
+                decimals={0}
+                min={0}
+                step={10}
+                commitOnBlur
+                value={Math.round(sillMm / 10)}
+                onChange={(cm) =>
+                  apply((s) => {
+                    const sill = Math.max(0, Math.round(cm * 10));
+                    return updateEntrance(s, door.id, { sillMm: sill, ...(glassMm !== null ? { headMm: sill + glassMm } : {}) });
+                  })
+                }
+                className="w-24"
+              />
+            </PanelRow>
+            <PanelRow label="גובה החלון (ס״מ)" htmlFor="window-height">
+              <NumberField
+                id="window-height"
+                decimals={0}
+                min={0}
+                step={10}
+                commitOnBlur
+                hideZero
+                placeholder="עד הקיר"
+                value={glassMm !== null ? Math.round(glassMm / 10) : 0}
+                onChange={(cm) => apply((s) => updateEntrance(s, door.id, { headMm: cm > 0 ? sillMm + Math.max(100, Math.round(cm * 10)) : undefined }))}
+                className="w-24"
+              />
+            </PanelRow>
+            <Note>{vitrine ? "ויטרינה — זכוכית מהרצפה עד גובה הקיר. בתוכנית היא קטע מזוגג בקיר; במבט התלת־ממדי, זכוכית במקום הקיר." : "חלון בקיר: הקיר נשאר מתחתיו ומעליו, ובין שניהם זכוכית. גובה החלון 0 — הזכוכית עד ראש הקיר."}</Note>
           </Popover>
         ) : (
           <>
@@ -808,7 +854,7 @@ export function SelectionBar({
         )}
         {/* A curtain on this wall (lib/venues/curtain.ts): over the door, or parted for it — the
             main entrance stays clear, a service door is hidden behind the cloth. */}
-        {!window && structure.features.some((f) => f.kind === "curtain" && f.curtain?.wallId === door.wallId) && (
+        {!window && structure.features.some((f) => f.kind === "curtain" && curtainOf(f)?.wallId === door.wallId) && (
           <SegmentedToggle
             value={!!door.curtainClear}
             options={[
@@ -836,6 +882,13 @@ export function SelectionBar({
   const seating = feature.kind === "seating";
   // A curtain: a stretch of its wall (lib/venues/curtain.ts) — no shape, size or turn of its own.
   const curtain = feature.kind === "curtain" ? curtainOf(feature) : null;
+  // …or a stretch of a SIDE of a tall feature, or a free-standing ROD (lib/studio/rail.ts): every
+  // curtain is `isCurtain`; `curtain` is the wall reading alone.
+  const isCurtain = feature.kind === "curtain";
+  const curtainLine = isCurtain && !curtain ? curtainLines(structure, feature)[0] : undefined;
+  // The venue's LED strip (lib/venues/led.ts): a line of light on a rail — no shape, size, turn or
+  // look of its own; its colour, stretch and height are its panel's (./led-panel.tsx).
+  const isLed = feature.kind === "led";
   // Measured ALONG the wall — round the bow of a curved one (lib/studio/anchor.ts WallTrack).
   const curtainWall = curtain ? wallTrack(structure, curtain.wallId) : null;
   // A column: its plinth is the size; its shaft and base are its own panel (lib/venues/column.ts).
@@ -848,6 +901,10 @@ export function SelectionBar({
     ? `${(feature.widthMm / 1000).toFixed(2)} × ${(climbRunMm(feature) / 1000).toFixed(2)} מ׳ · עולה ${Math.round(feature.heightMm / 10)} ס״מ`
     : curtain
       ? `${(curtainLengthMm(structure, feature) / 1000).toFixed(2)} מ׳ לאורך ה${curtainWall?.curved ? "קיר המעוגל" : "קיר"}${curtainWall ? ` (${(curtainWall.lengthMm / 1000).toFixed(2)} מ׳)` : ""}`
+    : isCurtain
+      ? `${(curtainLengthMm(structure, feature) / 1000).toFixed(2)} מ׳ ${curtainLine?.side ? "לאורך הצד" : "על המוט"}`
+    : isLed
+      ? `${(ledLengthMm(structure, feature) / 1000).toFixed(2)} מ׳`
     : seating
       ? `${seatingCount(feature)} כיסאות · ${(feature.widthMm / 1000).toFixed(2)} × ${(feature.depthMm / 1000).toFixed(2)} מ׳`
       : feature.shape === "circle"
@@ -866,6 +923,7 @@ export function SelectionBar({
     bound ? `ממלא שטח סגור · ${Math.round(polygonAreaMm2(featureWorldOutline(feature)) / 1_000_000)} מ״ר` : size,
     band !== null && feature.kind === "bar" ? `דלפק ${Math.round(band / 10)} ס״מ` : null,
     column ? `עמוד ⌀ ${cmOf(column.shaftMm)} ס״מ` : null,
+    feature.kind === "pergola" ? `${PERGOLA_ROOF_LABEL[pergolaOf(feature).roof]} · עמוד ${cmOf(pergolaOf(feature).postMm)} ס״מ` : null,
     !climb && !surface && !seating && feature.heightMm > 0 ? `גובה ${(feature.heightMm / 1000).toFixed(2)} מ׳` : null,
     feature.locked ? "נעול" : null,
   ]
@@ -979,7 +1037,7 @@ export function SelectionBar({
               {feature.style?.fill && <Note>החלפת החומר מחזירה את הצבע שלו — הגוון שנבחר לחומר הקודם יורד.</Note>}
             </Popover>
           )}
-          {!bound && !curtain && (
+          {!bound && !isCurtain && !isLed && (
             <Popover label="צורה" icon={Shapes} value={SHAPE_LABEL[feature.shape]}>
               <PanelRow label="צורה" stack>
                 <Select
@@ -1033,9 +1091,11 @@ export function SelectionBar({
             </>
           );
         })()
-      ) : curtain ? (
+      ) : isLed ? (
+        <VenueLedPopover feature={feature} structure={structure} apply={apply} />
+      ) : isCurtain ? (
         <Popover label="קטע" icon={FEATURE_ICON.curtain} value={size} panelClassName="w-80">
-          {curtainWall ? (
+          {curtain && curtainWall ? (
             <>
               <PanelRow label="מתחילת הקיר (מ׳)" htmlFor="curtain-from">
                 <NumberField
@@ -1076,9 +1136,12 @@ export function SelectionBar({
               </PanelRow>
               <Note>הווילון תלוי על הקיר וזז איתו. בסקיצה אפשר להסיר אותו לאירוע אחד או להחליף אותו בווילון מהקטלוג — המתחם עצמו לא משתנה.</Note>
             </>
+          ) : curtainLine ? (
+            <VenueRailFields feature={feature} line={curtainLine} apply={apply} />
           ) : (
-            <Note>הקיר שהווילון היה תלוי עליו נמחק. מחקו את הווילון ותלו אחד חדש.</Note>
+            <Note>{curtainRail(feature)?.type === "side" ? "האלמנט שהווילון היה תלוי עליו נמחק. מחקו את הווילון ותלו אחד חדש." : "הקיר שהווילון היה תלוי עליו נמחק. מחקו את הווילון ותלו אחד חדש."}</Note>
           )}
+          <CurtainLookFields feature={feature} onPatch={patch} />
         </Popover>
       ) : bound ? null : (
         <Popover label="מידות" icon={Ruler} value={size}>
@@ -1163,7 +1226,42 @@ export function SelectionBar({
         </Popover>
       )}
 
-      {!climb && !bound && !curtain && <Rotation value={feature.rotationDeg} onChange={(rotationDeg) => patch({ rotationDeg })} />}
+      {/* A pergola's own panel (lib/venues/pergola.ts): its roof, its slats, its posts, its closed sides. */}
+      {feature.kind === "pergola" && <PergolaPopover feature={feature} onPatch={patch} />}
+
+      {/* A pool's שפה, a surface's edging (lib/venues/rim.ts): a band INSIDE the outline — the water
+          (or the surface) shrinks to make room, the size in "מידות" stays the whole thing. Its width,
+          what it is laid in, how far it stands up in 3D, its tint. Width 0 takes it away. */}
+      {takesRim(feature) &&
+        (() => {
+          const rim = rimSpecOf(feature);
+          const setRim = (p: Parameters<typeof rimPatch>[1]) => patch(rimPatch(feature, p));
+          return (
+            <Popover label="שפה" icon={SquareSquare} value={rim ? `${cmOf(rim.widthMm)} ס״מ · ${SURFACE_MATERIAL_LABEL[rim.material]}` : "ללא"} panelClassName="w-80">
+              <PanelRow label="רוחב (ס״מ)" htmlFor="rim-width">
+                <NumberField id="rim-width" decimals={0} min={0} step={5} commitOnBlur hideZero placeholder="ללא" value={rim ? cmOf(rim.widthMm) : 0} onChange={(cm) => setRim({ widthMm: cm * 10 })} className="w-20" />
+              </PanelRow>
+              <div className="py-1.5">
+                <SurfaceTiles label="ממה היא עשויה" value={rim?.material} onChange={(m) => m && setRim({ material: m })} />
+              </div>
+              {rim && (
+                <>
+                  <PanelRow label="מוגבהת (ס״מ)" htmlFor="rim-raised">
+                    <NumberField id="rim-raised" decimals={0} min={0} step={5} commitOnBlur value={cmOf(rim.raisedMm ?? 0)} onChange={(cm) => setRim({ raisedMm: cm * 10 })} className="w-20" />
+                  </PanelRow>
+                  <StyleFields style={rim.style} onChange={(style) => setRim({ style })} strokeWidthDefault={1} fillOnly fillLabel="גוון" />
+                </>
+              )}
+              <Note>
+                {feature.kind === "pool"
+                  ? "השפה בתוך קו הבריכה: המים מצטמצמים, והגודל של הבריכה לא משתנה. השפה היא רצפה — המרחק לשולחנות נמדד משפת המים. רוחב 0 — בלי שפה."
+                  : "השוליים בתוך קו המשטח: המשטח מצטמצם, והגודל לא משתנה. ״מוגבהת״ — אבן שפה בתלת־ממד. רוחב 0 — בלי שוליים."}
+              </Note>
+            </Popover>
+          );
+        })()}
+
+      {!climb && !bound && !isCurtain && !isLed && <Rotation value={feature.rotationDeg} onChange={(rotationDeg) => patch({ rotationDeg })} />}
 
       {/* THE EDGES — the sketch's own panel: what stands on them, what is still bare (and one
           click to finish it), and adding one more, which is then clicked onto a side; each one is
@@ -1240,19 +1338,21 @@ export function SelectionBar({
           );
         })()}
 
-      {styleOf(feature.style, (style) => patch({ style }), surface || feature.kind === "plant" || seating || !!curtain)}
+      {!isLed && styleOf(feature.style, (style) => patch({ style }), surface || feature.kind === "plant" || seating || isCurtain)}
 
       {/* A surface that fills a closed shape follows its walls; cut loose, it is a free surface of
           the same outline. A free one is reshaped point by point, as a freehand zone is. */}
       {bound && <BarButton icon={Unlink} label="ניתוק מהקירות — המשטח נשאר בצורתו, ואפשר להזיז אותו ולשנות את קוויו" onClick={() => patch({ fillsFace: undefined })} />}
-      {surface && !bound && !feature.locked && onToggleOutline && (
+      {/* …and so, since 2026-11-07, is a pool, a building or an "אחר": its sides bowed and its
+          corners rounded there too (lib/studio/shaped-outline.ts). */}
+      {canEditOutline(feature) && onToggleOutline && (
         <BarButton
           icon={PenLine}
           active={outlineEditId === feature.id}
           label={
             outlineEditId === feature.id
               ? "סיום עריכת הקווים · Esc"
-              : "עריכת הקווים — גררו פינה, גררו נקודת אמצע כדי להוסיף פינה, לחיצה כפולה על פינה מוחקת אותה"
+              : "עריכת הקווים — גררו פינה, גררו צלע כדי להוסיף בה פינה, המעוין מעקם צלע והעיגול שבפינה מעגל אותה, לחיצה כפולה על פינה מוחקת אותה"
           }
           onClick={() => onToggleOutline(feature.id)}
         />
@@ -1282,3 +1382,150 @@ export function SelectionBar({
     </Bar>
   );
 }
+
+/** The venue curtain on a SIDE or a ROD (lib/studio/rail.ts, spec 2026-11-07 §6.1/§6.2): a side's
+ *  stretch typed in metres along the side, the whole side again, the other side of it; a rod's height
+ *  and its ר — no post under its end, the arm held to its reach. */
+function VenueRailFields({ feature, line, apply }: { feature: StructureFeature; line: RailLine; apply: (fn: (s: VenueStructure) => VenueStructure) => void }) {
+  const rail = curtainRail(feature);
+  const re = (fn: (s: VenueStructure, f: StructureFeature) => Partial<Omit<StructureFeature, "id">>) =>
+    apply((s) => {
+      const f = s.features.find((x) => x.id === feature.id);
+      return f ? updateFeature(s, f.id, fn(s, f)) : s;
+    });
+  if (rail?.type === "side" && line.side) {
+    const L = line.side.side.L;
+    const at = (t: number) => (Math.max(0, Math.min(1, t)) * L) / 1000;
+    return (
+      <>
+        <PanelRow label="מתחילת הצד (מ׳)" htmlFor="curtain-side-from">
+          <NumberField id="curtain-side-from" decimals={2} min={0} max={L / 1000} step={0.1} commitOnBlur value={at(Math.min(rail.from, rail.to))} onChange={(m) => re((s, f) => curtainPatch(s, f, { from: (m * 1000) / L }))} className="w-24" />
+        </PanelRow>
+        <PanelRow label="עד (מ׳)" htmlFor="curtain-side-to">
+          <NumberField id="curtain-side-to" decimals={2} min={0} max={L / 1000} step={0.1} commitOnBlur value={at(Math.max(rail.from, rail.to))} onChange={(m) => re((s, f) => curtainPatch(s, f, { to: (m * 1000) / L }))} className="w-24" />
+        </PanelRow>
+        <div className="flex gap-2 py-1">
+          <Button size="sm" variant="outline" className="flex-1" onClick={() => re((s, f) => curtainPatch(s, f, { from: 0, to: 1 }))}>
+            כל הצד
+          </Button>
+          <Button size="sm" variant="outline" className="flex-1" onClick={() => re((s, f) => curtainPatch(s, f, { side: rail.out === 1 ? -1 : 1 }))}>
+            {rail.out === 1 ? "לצד הפנימי" : "לצד החיצוני"}
+          </Button>
+        </div>
+        <Note>{`תלוי על צד של האלמנט מגובהו (${((line.topMm ?? 0) / 1000).toFixed(2)} מ׳) וזז איתו.`}</Note>
+      </>
+    );
+  }
+  if (rail?.type === "rod") {
+    return (
+      <>
+        <PanelRow label="גובה המוט (מ׳)" htmlFor="curtain-rod-h">
+          <NumberField id="curtain-rod-h" decimals={2} min={0.5} max={8} step={0.1} commitOnBlur value={rail.heightMm / 1000} onChange={(m) => re((s, f) => curtainRailPatch(s, f, { ...rail, heightMm: Math.round(m * 1000) }))} className="w-24" />
+        </PanelRow>
+        <label className="flex items-center justify-between gap-3 py-1 text-sm text-ink">
+          <span>ללא עמוד בקצה (ר)</span>
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-[var(--color-accent)]"
+            checked={rail.cantilever === "end"}
+            onChange={(e) => {
+              const { cantilever: _c, ...plain } = rail;
+              void _c;
+              re((s, f) => curtainRailPatch(s, f, e.target.checked ? { ...plain, cantilever: "end" } : plain));
+            }}
+          />
+        </label>
+        <Note>{`מוט עומד על עמודים בכל קצה ופינה. בלי עמוד בקצה — הזרוע יוצאת מהעמוד האחרון, עד ${CANTILEVER_MAX_MM / 1000} מ׳. גוררים את קצוות המוט על הקנבס.`}</Note>
+      </>
+    );
+  }
+  return null;
+}
+
+/** A venue curtain's look and drop (FeatureCurtain.style / dropMm — spec 2026-11-07 §6.5): the style
+ *  tiles in its own cloth, and how far it comes down (blank = to the floor). Drawing and 3D only. */
+function CurtainLookFields({ feature, onPatch }: { feature: StructureFeature; onPatch: (p: Partial<Omit<StructureFeature, "id">>) => void }) {
+  const drop = feature.curtain?.dropMm;
+  return (
+    <div className="mt-2 flex flex-col gap-2 border-t border-border-soft pt-2">
+      <CurtainStyleTiles value={feature.curtain?.style} tone={feature.style?.fill ?? CURTAIN_FILL} onPick={(style) => onPatch(curtainLookPatch(feature, { style: style ?? null }))} />
+      <PanelRow label="אורך הבד (ס״מ)" htmlFor="curtain-drop">
+        <NumberField id="curtain-drop" decimals={0} min={0} max={1200} hideZero placeholder="עד הרצפה" value={drop ? Math.round(drop / 10) : 0} onChange={(v) => onPatch(curtainLookPatch(feature, { dropMm: v > 0 ? v * 10 : null }))} className="w-24" />
+      </PanelRow>
+    </div>
+  );
+}
+
+/** The pergola's panel (lib/venues/pergola.ts): what is laid across the beams — four tiles, each the
+ *  plan's own drawing of it — the slats' direction (typed, or turned a quarter) and spacing, the
+ *  posts, and which sides carry a lattice, named by where they face (hollowSides — the catalog's
+ *  open-sides chips). Every number in cm, stored in mm. */
+function PergolaPopover({ feature, onPatch }: { feature: StructureFeature; onPatch: (p: Partial<Omit<StructureFeature, "id">>) => void }) {
+  const spec = pergolaOf(feature);
+  const footprint = featureFootprint(feature);
+  const geometry = pergolaGeometry(footprint, spec);
+  const sides = pergolaSides(footprint);
+  const closed = (spec.closedSides ?? []).filter((i) => i < sides.length);
+  const set = (p: Partial<Pergola>) => onPatch(pergolaPatch(feature, p));
+  const slatDeg = Math.round(geometry?.slatDeg ?? spec.slatDirectionDeg ?? 0);
+  return (
+    <Popover label="פרגולה" icon={FEATURE_ICON.pergola} value={`${PERGOLA_ROOF_LABEL[spec.roof]} · ${cmOf(spec.postMm)} ס״מ`} panelClassName="w-80">
+      <PanelRow label="גג" stack>
+        <div className="grid grid-cols-4 gap-1" role="radiogroup" aria-label="גג">
+          {PERGOLA_ROOFS.map((roof) => {
+            const on = spec.roof === roof;
+            return (
+              <button
+                key={roof}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                title={PERGOLA_ROOF_HINT[roof]}
+                onClick={() => set({ roof })}
+                className={"flex flex-col items-center gap-0.5 rounded-sm border p-1 transition-colors " + (on ? "border-accent bg-accent-tint" : "border-border-soft hover:border-accent-line")}
+              >
+                <svg viewBox="-2200 -1700 4400 3400" className="h-9 w-full" aria-hidden>
+                  <PergolaGlyph footprint={PERGOLA_TILE} pergola={{ ...NEW_PERGOLA, roof }} stroke="var(--color-ink-soft)" postFill="var(--color-ink-soft)" fabric="var(--color-accent)" />
+                </svg>
+                <span className="w-full truncate text-center text-[10px] leading-tight text-ink-soft">{PERGOLA_ROOF_LABEL[roof]}</span>
+              </button>
+            );
+          })}
+        </div>
+      </PanelRow>
+      {spec.roof !== "none" && (
+        <PanelRow label={spec.roof === "slats" ? "כיוון הרפפות (°)" : "כיוון (°)"} htmlFor="pergola-dir">
+          <BarButton icon={RotateCw} label="סיבוב ב־90°" onClick={() => set({ slatDirectionDeg: (slatDeg + 90) % 180 })} />
+          <NumberField id="pergola-dir" decimals={0} min={0} max={179} step={15} commitOnBlur value={slatDeg} onChange={(deg) => set({ slatDirectionDeg: deg })} className="w-20" />
+        </PanelRow>
+      )}
+      {spec.roof === "slats" && (
+        <PanelRow label="מרווח בין רפפות (ס״מ)" htmlFor="pergola-spacing">
+          <NumberField id="pergola-spacing" decimals={0} min={5} step={5} commitOnBlur value={cmOf(geometry?.spacingMm ?? spec.slatSpacingMm ?? 300)} onChange={(cm) => set({ slatSpacingMm: cm * 10 })} className="w-20" />
+        </PanelRow>
+      )}
+      <PanelRow label="עובי עמוד (ס״מ)" htmlFor="pergola-post">
+        <NumberField id="pergola-post" decimals={0} min={5} max={60} step={1} commitOnBlur value={cmOf(spec.postMm)} onChange={(cm) => set({ postMm: cm * 10 })} className="w-20" />
+      </PanelRow>
+      {sides.length > 0 && (
+        <PanelRow label="צדדים סגורים (סבכה)" stack>
+          <div className="flex flex-wrap gap-1">
+            {sides.map((s) => (
+              <TagToggle
+                key={s.index}
+                active={closed.includes(s.index)}
+                onClick={() => set({ closedSides: closed.includes(s.index) ? closed.filter((i) => i !== s.index) : [...closed, s.index] })}
+              >
+                {s.name}
+              </TagToggle>
+            ))}
+          </div>
+        </PanelRow>
+      )}
+      <Note>העמודים עומדים בפינות הקו (ולאורך קשת — כל כ־3 מ׳), והרפפות שומרות על המרווח כשמשנים את הגודל. שולחנות עומדים מתחתיה — רק העמודים נחשבים למכשול. לצורה אחרת: ״עריכת הקווים״.</Note>
+    </Popover>
+  );
+}
+
+/** The roof tiles' drawing: a small pergola, the same for each roof. */
+const PERGOLA_TILE: Footprint = { kind: "rect", widthMm: 4000, depthMm: 3000 };

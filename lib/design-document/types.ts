@@ -5,6 +5,9 @@
 // table — design intent, serialisable, renderer-agnostic plain data — not a rendering concern.
 // resolveStyle (lib/element-style.ts) is what turns it into pixels, and it lives outside this file.
 import type { ElementStyle } from "../element-style";
+import type { Rail } from "../studio/rail";
+import type { Border } from "../catalog/border";
+import type { EdgeCurve } from "../studio/hall";
 
 export type Layer = "table" | "floor" | "ceiling";
 
@@ -115,8 +118,17 @@ export interface Placement {
   position: Point;
   rotation: number;
   scale: number;
-  /** Wall-anchored items (curtains). When set, `position` is ignored — the wall places it. */
+  /** Wall-anchored items (curtains). When set, `position` is ignored — the wall places it. LEGACY:
+   *  read into a `wall` rail by railOf (lib/studio/rail.ts); nothing new writes it. */
   span?: WallSpan;
+  /** What a curtain hangs along (lib/studio/rail.ts): a stretch of a wall, of a side of a thing with
+   *  height, a free-standing rod. When set, `position` is ignored — the rail places it. Absent on a
+   *  drape = its legacy `span`. */
+  rail?: Rail;
+  /** A curtain's DROP, mm — how far its cloth comes down from its rail. Absent = to the floor (the
+   *  user: "mostly always touch the floor"). A drawing fact for the 3D room; the quote bills the
+   *  rail's length either way. */
+  dropMm?: number;
   /** For an arrangement (lib/catalog/vessel.ts): the vase or jug it stands in, a `vases` variant id;
    *  null = none on this plan, whatever its row says; absent = its row's own (`categoryFields.vessel`).
    *  Packed and counted beside it, drawn under it. */
@@ -136,6 +148,26 @@ export interface Placement {
    *  measurement, kept when the rug is stretched; held to the rug's size when drawn). Absent = square
    *  corners. A drawing fact like `bows`. */
   corners?: [number, number, number, number];
+  /** A RUG's or a CLOTH's contour on THIS plan (lib/catalog/border.ts) — overriding its row's
+   *  (MapAppearance.border); null = none on this plan, whatever the row says; absent = the row's own.
+   *  The vessel's rule. A drawing fact like `bows`: nothing priced or packed reads it. */
+  border?: Border | null;
+  /** A RUG LAID OVER something on this plan — a venue surface (a lawn, a face-filling floor, a venue
+   *  stage) or one of this sketch's stages (lib/studio/cover.ts). Its shape is the covered thing's
+   *  outline pulled in by `insetMm`, DERIVED and written onto `outline`/`position`/`rotation`/`sizeMm`
+   *  by `settleCovers` (in the reducer, and on opening a sketch), so the stage moved or the surface
+   *  reshaped at /halls carries its carpet. Absent = a rug laid by hand, exactly as before. */
+  cover?: PlacementCover;
+  /** A carpet laid to an OUTLINE rather than a rectangle (lib/studio/cover.ts): in the placement's
+   *  own frame, centred on its box, before its turn — the shape `sizeMm` stretches. Written by a
+   *  cover and kept when the cover is let go ("ניתוק מהמשטח"), so a detached carpet stays the shape
+   *  it was laid in. Read by `placementFootprint`, the quote (its true area) and every rug drawing;
+   *  `bows`/`corners` are a rectangle's and are ignored while it is set. */
+  outline?: Point[];
+  edgeCurves?: (EdgeCurve | null)[];
+  /** …and the places it is cut through — a stage's hole (StagePiece.hole) under a carpet over the
+   *  stage — in the same frame, each inside `outline`. */
+  holes?: Point[][];
   /** A CEILING item's height above the floor on THIS plan, mm — overriding its catalog row's default
    *  (categoryFields.hangHeightMm, lib/studio/hang.ts). Absent = the row's. A rigging fact printed on
    *  the ceiling plan, like `scale` a drawing fact: the quote, the packing list and orders never read it. */
@@ -190,6 +222,15 @@ export interface Placement {
   rows?: ChairRows;
   /** Pinned where it stands on THIS plan — see DesignTable.locked, which this means exactly. */
   locked?: boolean;
+}
+
+/** See Placement.cover — what a carpet is laid over: ONE of a venue feature (by id, read through
+ *  this event's arrangement of the venue) or a stage on this plan (a placement id), and how far in
+ *  from its edge the carpet stops, mm (absent = 0, edge to edge). */
+export interface PlacementCover {
+  featureId?: string;
+  stageId?: string;
+  insetMm?: number;
 }
 
 /** See Placement.rows — what the designer chose; everything else about the block is derived. */

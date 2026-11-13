@@ -91,7 +91,24 @@ import {
 } from "@/lib/venues/structure";
 import { addSurfaceUnder, asOutline, buildingFilling, buildingFromBoundary, buildingInFace, featureWorldOutline, followsWalls, surfaceFilling, surfaceFromBoundary, surfaceInFace, syncFaceSurfaces } from "@/lib/venues/face-surfaces";
 import { ItemSymbol } from "@/components/item-symbol";
-import { insertRegionPoint, moveRegionPoint, removeRegionPoint, tidyRegion } from "@/lib/venues/region-edit";
+import { tidyRegion } from "@/lib/venues/region-edit";
+import {
+  bowShapeSide,
+  carryShape,
+  insertShapePoint,
+  moveShapePoint,
+  removeShapePoint,
+  roundShapeCorner,
+  smoothShape,
+  type OutlineShape,
+} from "@/lib/studio/shaped-outline";
+import { canEditOutline, featureEditOutline } from "@/lib/venues/face-surfaces";
+import { regionShape, regionSource } from "@/lib/venues/zone";
+import { POOL_PRESET_SIZE, newPoolFeature, poolOutline } from "@/lib/venues/pool";
+import { OutlineBar } from "./outline-bar";
+import type { OutlinePart } from "@/components/venue-plan";
+import { FootprintShape } from "@/components/footprint-shape";
+import { featureFootprint } from "@/lib/venues/structure";
 import { detectFaces, faceAt, pointInPolygon, type Face } from "@/lib/venues/faces";
 import {
   detachedNote,
@@ -107,8 +124,14 @@ import { newSeatingFeature } from "@/lib/venues/seating";
 import { FALLBACK_CHAIR, chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { SeatingGlyph } from "@/components/chair-block";
 import { ColumnGlyph } from "@/components/column-glyph";
+import { PergolaGlyph } from "@/components/pergola-glyph";
+import { pergolaOf } from "@/lib/venues/pergola";
+import { roofHeightAt } from "@/lib/venues/roofs";
 import { defineColumns } from "@/lib/venues/column";
-import { curtainEndT, curtainPatch, newCurtain, syncCurtains } from "@/lib/venues/curtain";
+import { curtainEndPatch, newCurtain, newRailCurtain, syncCurtains } from "@/lib/venues/curtain";
+import { ledDropRail, ledEndPatch, ledRunRail, ledSideCandidates, ledsFollowFeatures, newLedFeature, syncLeds } from "@/lib/venues/led";
+import { defaultRailHeight, nearestSideRail, sideCandidates } from "@/lib/studio/rail";
+import { RodDrawPane } from "@/components/rod-draw-pane";
 import {
   ZoneRegions,
   StructureFeatures,
@@ -246,8 +269,14 @@ const DRAW_SURFACE = "surface:draw";
  *  edit that moved a wall or a corner re-lays them, inside that same history entry — so a wall drag
  *  carries the floor with it frame by frame, and one undo takes both back. */
 function settleWalls(before: VenueStructure, after: VenueStructure): VenueStructure {
+  // The venue's LED strips (lib/venues/led.ts) are re-laid on their walls and their features' sides
+  // the same way, in the same entry.
+  if (after.nodes !== before.nodes || after.walls !== before.walls || (after.features !== before.features && ledsFollowFeatures(after))) after = syncLeds(after);
   // …and the curtains hung on them (lib/venues/curtain.ts), the same way.
-  return after.nodes === before.nodes && after.walls === before.walls ? after : syncCurtains(syncFaceSurfaces(after));
+  if (after.nodes !== before.nodes || after.walls !== before.walls) return syncCurtains(syncFaceSurfaces(after));
+  // A curtain on a SIDE of a feature follows the feature (spec 2026-11-07 §6.6): re-laid when the
+  // features changed and one hangs so — the floors are not, nothing they follow moved.
+  return after.features !== before.features && after.features.some((f) => f.kind === "curtain" && f.curtain?.rail?.type === "side") ? syncCurtains(after) : after;
 }
 
 /** A feature's box as it stands, turned — what alignment and snapping measure. */
@@ -316,14 +345,24 @@ export function HallsScreen() {
   const [handTool, setHandTool] = useState(false);
   // `intent: "surface"` — traced from the flyout's "ציור חופשי": the bar asks for a material, not a name.
   const [draftZone, setDraftZone] = useState<{ source: ZoneSource; name: string; kind: ZoneKind; intent?: "surface" } | null>(null);
-  // What the freehand trace in progress will become once it closes.
-  const [regionFor, setRegionFor] = useState<"zone" | "surface">("zone");
+  // What the freehand trace in progress will become once it closes — "water" is the flyout's
+  // "בריכה · ציור חופשי": the trace laid straight in the water material, no question asked.
+  const [regionFor, setRegionFor] = useState<"zone" | "surface" | "water">("zone");
   // The one free surface whose outline is open for editing point by point (the bar's "עריכת הקווים").
   const [outlineEditId, setOutlineEditId] = useState<string | null>(null);
+  // The side or corner of the outline out for editing that the "עריכת הקווים" bar's fields act on
+  // (app/(app)/halls/outline-bar.tsx), and the hooks the keyboard reaches it through — refs, so the
+  // key handler's long dependency list does not grow by the outline editor's every render.
+  const [outlinePart, setOutlinePart] = useState<OutlinePart | null>(null);
+  const outlineKeys = useRef<{ part: OutlinePart | null; removePoint: ((i: number) => void) | null }>({ part: null, removePoint: null });
   // Which add-toolbar button is armed, if any — the next click on empty canvas places one of it and
   // disarms, the same one-shot placement the old right-click menu gave (see the toolbar and
   // onCanvasClick below). Only meaningful in "select" mode; every mode switch clears it.
   const [armedToolId, setArmedToolId] = useState<string | null>(null);
+  // "וילון על מוט" being drawn: its first post, while the rest are clicked (null = not drawing one).
+  const [rodFrom, setRodFrom] = useState<Point | null>(null);
+  // The rod pane is drawing an LED strip's free run (two ends), not a curtain's rod.
+  const [ledRun, setLedRun] = useState(false);
   // The catalog, for the two departments a venue has BUILT versions of (lib/venues/add-tools.ts).
   // Read-only here, and its own hook rather than a prop: this screen has no server component above
   // it to seed from, and nothing on this plan resolves a product id while rendering, so the list
@@ -549,8 +588,20 @@ export function HallsScreen() {
   // undo step per drag, like a wall corner), through `set` for a one-off edit.
   const editRegion = useCallback(
     (id: string, fn: (b: Point[]) => Point[], during: "drag" | "edit" = "edit") => {
+      // A region's bows and radii ride on its points (2026-11-07): an edit that only knows points
+      // (the tidy) hands them on by where each point stood (carryShape).
       const apply = (zs: Zone[]) =>
-        zs.map((z) => (z.id === id && z.source.type === "region" ? { ...z, source: { type: "region" as const, boundary: fn(z.source.boundary) } } : z));
+        zs.map((z) => (z.id === id && z.source.type === "region" ? { ...z, source: regionSource(carryShape(regionShape(z.source), fn(z.source.boundary))) } : z));
+      if (during === "drag") hist.amend((p) => ({ ...p, zones: apply(p.zones) }));
+      else hist.set((p) => ({ ...p, zones: apply(p.zones) }));
+    },
+    [hist],
+  );
+  // The same, for an edit that knows the bows and radii too — the outline editor's every handle.
+  const editRegionShape = useCallback(
+    (id: string, fn: (s: OutlineShape) => OutlineShape, during: "drag" | "edit" = "edit") => {
+      const apply = (zs: Zone[]) =>
+        zs.map((z) => (z.id === id && z.source.type === "region" ? { ...z, source: regionSource(fn(regionShape(z.source))) } : z));
       if (during === "drag") hist.amend((p) => ({ ...p, zones: apply(p.zones) }));
       else hist.set((p) => ({ ...p, zones: apply(p.zones) }));
     },
@@ -922,9 +973,15 @@ export function HallsScreen() {
   const curtainEnd = useCallback(
     (id: string, end: "from" | "to", p: Point) => {
       dragStructure((s) => {
+        // Along its wall or its side, or a rod's end post moved (lib/venues/curtain.ts curtainEndPatch).
         const f = s.features.find((x) => x.id === id);
-        const t = f ? curtainEndT(s, f, p) : null;
-        return f && t !== null ? updateFeature(s, id, curtainPatch(s, f, { [end]: t })) : s;
+        // …or an LED strip's end, along its wall or side, or a run's end point (lib/venues/led.ts).
+        if (f?.kind === "led") {
+          const led = ledEndPatch(s, f, end, p);
+          return Object.keys(led).length ? updateFeature(s, id, led) : s;
+        }
+        const patch = f ? curtainEndPatch(s, f, end, p) : {};
+        return f && Object.keys(patch).length ? updateFeature(s, id, patch) : s;
       });
     },
     [dragStructure],
@@ -954,10 +1011,20 @@ export function HallsScreen() {
   // a caller that already has the point-to-close-with in hand doesn't need a redundant state update.
   const finishRegion = useCallback(
     (boundary: Point[]) => {
+      // A pool traced by hand asks nothing: it is water, laid as a free surface of that outline.
+      if (regionFor === "water") {
+        const { structure: next, featureId } = addSurfaceUnder(structure, surfaceFromBoundary(boundary, "water"));
+        editStructure(() => next);
+        setRegion(null);
+        setRegionFor("zone");
+        setMode("select");
+        setSelection([{ kind: "feature", id: featureId }]);
+        return;
+      }
       setDraftZone({ source: { type: "region", boundary }, name: "", kind: "open", ...(regionFor === "surface" ? { intent: "surface" as const } : {}) });
       setRegion(null);
     },
-    [regionFor],
+    [regionFor, structure, editStructure],
   );
 
   // Esc still ends a wall run or abandons a half-drawn region (and always clears the selection) —
@@ -975,7 +1042,8 @@ export function HallsScreen() {
       if (e.key === "Escape") {
         // One step back per press, innermost first — the sketch's cascade. One Escape used to drop
         // everything at once: the tool in hand, the half-drawn room and the selection together.
-        if (outlineEditId) setOutlineEditId(null);
+        if (outlineKeys.current.part) setOutlinePart(null);
+        else if (outlineEditId) setOutlineEditId(null);
         else if (edgePick) setEdgePick(null);
         else if (activeEdge) setActiveEdge(null);
         else if (addMenuOpen) setAddMenuOpen(false);
@@ -999,6 +1067,10 @@ export function HallsScreen() {
         // The edge item being edited goes, not the stage it stands on.
         e.preventDefault();
         removeEdge(activeEdge.featureId, activeEdge.itemId);
+      } else if ((e.key === "Delete" || e.key === "Backspace") && outlineKeys.current.part?.kind === "corner" && outlineKeys.current.removePoint) {
+        // A point picked on the outline being edited goes — not the pool or zone it is a point of.
+        e.preventDefault();
+        outlineKeys.current.removePoint(outlineKeys.current.part.index);
       } else if ((e.key === "Delete" || e.key === "Backspace") && selection.length > 0) {
         e.preventDefault();
         deleteSelection();
@@ -1215,12 +1287,22 @@ export function HallsScreen() {
     setRegion([]);
   };
 
-  /** A free surface's outline rewritten point by point — amended into one entry while a corner is
-   *  dragged, like a freehand zone's. Baked flat and unturned (lib/venues/face-surfaces.ts asOutline). */
-  const editSurfaceOutline = (id: string, fn: (b: Point[]) => Point[], during: "drag" | "edit" = "edit") => {
+  /** "בריכה · ציור חופשי": the same freehand trace, laid in water the moment it closes. */
+  const startPoolDraw = () => {
+    startSurfaceDraw();
+    setRegionFor("water");
+  };
+
+  /** A feature's outline — points, bows and radii — rewritten by the outline editor (2026-11-07):
+   *  read off the feature as drawn (featureEditOutline), written back flat and unturned (asOutline),
+   *  amended into one entry while a handle is dragged. Any pool, surface or building out for editing,
+   *  a rectangle or an oval too: the first edit makes it a drawn outline of the same shape. */
+  const editFeatureShape = (id: string, fn: (s: OutlineShape) => OutlineShape, during: "drag" | "edit" = "edit") => {
     const apply = (s: VenueStructure) => {
       const f = s.features.find((x) => x.id === id);
-      return f ? updateFeature(s, id, asOutline(fn(featureWorldOutline(f)))) : s;
+      if (!f) return s;
+      const next = fn(featureEditOutline(f));
+      return updateFeature(s, id, asOutline(next.outline, next.edgeCurves, next.corners));
     };
     if (during === "drag") dragStructure(apply);
     else editStructure(apply);
@@ -1446,9 +1528,37 @@ export function HallsScreen() {
   // The free surface open for point editing — gone the moment it is not the one thing selected.
   const outlineSurface =
     outlineEditId && isSelectMode && selection.length === 1 && selection[0].kind === "feature" && selection[0].id === outlineEditId
-      ? structure.features.find((f) => f.id === outlineEditId && f.kind === "surface" && !f.locked && !followsWalls(f))
+      ? structure.features.find((f) => f.id === outlineEditId && canEditOutline(f))
       : undefined;
   if (outlineEditId && !outlineSurface) setOutlineEditId(null);
+  // The outline out for editing as its points, bows and radii — a feature's read off its drawing,
+  // a region's off its source — and which one it is, so a new one starts with nothing picked.
+  const surfaceShape = useMemo(() => (outlineSurface ? featureEditOutline(outlineSurface) : null), [outlineSurface]);
+  const regionEditShape = editableRegion?.source.type === "region" ? regionShape(editableRegion.source) : null;
+  const outlineShapeKey = editableRegion ? `z:${editableRegion.id}` : outlineSurface ? `f:${outlineSurface.id}` : null;
+  const [outlinePartFor, setOutlinePartFor] = useState<string | null>(null);
+  if (outlinePartFor !== outlineShapeKey) {
+    setOutlinePartFor(outlineShapeKey);
+    setOutlinePart(null);
+  }
+  // The outline's handles and its bar, one set of verbs whichever host it is.
+  const outlineEdit = editableRegion
+    ? (fn: (s: OutlineShape) => OutlineShape, during: "drag" | "edit" = "edit") => editRegionShape(editableRegion.id, fn, during)
+    : outlineSurface
+      ? (fn: (s: OutlineShape) => OutlineShape, during: "drag" | "edit" = "edit") => editFeatureShape(outlineSurface.id, fn, during)
+      : null;
+  const outlineShapeNow = regionEditShape ?? surfaceShape;
+  useEffect(() => {
+    outlineKeys.current = {
+      part: outlineShapeNow ? outlinePart : null,
+      removePoint: outlineEdit
+        ? (i: number) => {
+            outlineEdit((s) => removeShapePoint(s, i));
+            setOutlinePart(null);
+          }
+        : null,
+    };
+  });
   const outlineOfSurface = useMemo(() => (outlineSurface ? featureWorldOutline(outlineSurface) : null), [outlineSurface]);
 
   // ⚠ NOTHING FRAMES ITSELF ON SELECTION HERE, and that is deliberate. Picking a stage, a bar or a
@@ -1477,8 +1587,18 @@ export function HallsScreen() {
       addOpeningNear(p, tool.id === "window" ? "window" : "door");
       return;
     }
+    if (tool.kind === "led") {
+      // "פס לד חופשי": this click is its start, the next its end; else the nearest wall or side.
+      if (tool.id === "led-run") {
+        setLedRun(true);
+        setRodFrom(p);
+      } else addLedNear(p);
+      return;
+    }
     if (tool.kind === "curtain") {
-      addCurtainNear(p);
+      // "וילון על מוט": this click is the first post; the rest are drawn on the canvas.
+      if (tool.id === "curtain-rod") setRodFrom(p);
+      else addCurtainNear(p);
       return;
     }
     // A ground clicked inside a closed shape that is not a zone fills that shape, wall to wall — the
@@ -1491,9 +1611,16 @@ export function HallsScreen() {
         return;
       }
     }
+    // A pool is put down in the shape picked (lib/venues/pool.ts) — or, for "ציור חופשי", traced.
+    if (tool.kind === "pool" && tool.pool === "free") {
+      startPoolDraw();
+      return;
+    }
     const { structure: next, featureId } = addFeature(
       structure,
-      tool.kind === "seating"
+      tool.kind === "pool" && tool.pool && tool.pool !== "free"
+        ? newPoolFeature(tool.pool, p)
+        : tool.kind === "seating"
         ? newSeatingFeature(p, tool.chair)
         : tool.product
           ? newFeatureFromProduct(tool.kind, tool.product, p)
@@ -1511,11 +1638,65 @@ export function HallsScreen() {
   const addCurtainNear = (p: Point) => {
     const hit = nearestWall(structure, p);
     const wall = hit ? structure.walls.find((w) => w.id === hit.wallId) : null;
+    // …or the nearest SIDE of a building or a tall feature, when that is nearer (spec 2026-11-07
+    // §6.1, lib/studio/rail.ts sideCandidates): hung from its height, on the side the click fell.
+    const side = nearestSideRail(sideCandidates(structure.features), p);
+    const onWall = !!hit && !!wall && wall.kind !== "edge";
+    if (side && (!onWall || side.distanceMm < hit!.distanceMm)) {
+      const made = newRailCurtain(structure, side.rail);
+      if (!made) return;
+      const { structure: next, featureId } = addFeature(structure, made);
+      editStructure(() => next);
+      setSelection([{ kind: "feature", id: featureId }]);
+      return;
+    }
     if (!hit || !wall || wall.kind === "edge") {
-      setHint("וילון נתלה על קיר — לחצו ליד קיר");
+      setHint("וילון נתלה על קיר או על צד של מבנה — לחצו לידו, או ״וילון על מוט״");
       return;
     }
     const made = newCurtain(structure, wall.id, p);
+    if (!made) return;
+    const { structure: next, featureId } = addFeature(structure, made);
+    editStructure(() => next);
+    setSelection([{ kind: "feature", id: featureId }]);
+  };
+
+  /** "וילון על מוט" drawn: the venue's curtain on a free-standing rod at the rod's height (spec
+   *  2026-11-07 §6.2 — 2.4 m under open sky; the bar types another). */
+  /** The venue's LED strip (lib/venues/led.ts) along the nearest wall at the floor line, or the nearest
+   *  side of anything with height (a stage's deck edge, a bar's counter, a pergola's beam), whichever is
+   *  nearer — the whole of it; the bar shortens it and sets its height. A boundary line takes none. */
+  const addLedNear = (p: Point) => {
+    const hit = nearestWall(structure, p);
+    const wall = hit ? structure.walls.find((w) => w.id === hit.wallId) : null;
+    const rail = ledDropRail(structure, p, hit && wall && wall.kind !== "edge" ? hit : null, ledSideCandidates(structure.features), 0, (t) => t !== "run");
+    const made = rail ? newLedFeature(structure, rail) : null;
+    if (!made) {
+      setHint("פס לד רץ לאורך קיר או צד של אלמנט — לחצו לידו, או ״פס לד חופשי״");
+      return;
+    }
+    const { structure: next, featureId } = addFeature(structure, made);
+    editStructure(() => next);
+    setSelection([{ kind: "feature", id: featureId }]);
+  };
+
+  const finishRod = (points: Point[]) => {
+    // "פס לד חופשי" drawn: a run between its two ends, under the roof there or at a rod's height.
+    if (ledRun) {
+      setLedRun(false);
+      setRodFrom(null);
+      const run = ledRunRail(points, defaultRailHeight(points[0], roofHeightAt(structure, resolved)));
+      const made = run ? newLedFeature(structure, run) : null;
+      if (!made) return;
+      const { structure: next, featureId } = addFeature(structure, made);
+      editStructure(() => next);
+      setSelection([{ kind: "feature", id: featureId }]);
+      return;
+    }
+    setRodFrom(null);
+    // Under a roof the rod starts at it — a zone's ceiling, a building's, the pergola it stands
+    // under (lib/venues/roofs.ts); under open sky, the rod's 2.4 m.
+    const made = newRailCurtain(structure, { type: "rod", points, heightMm: defaultRailHeight(points[0], roofHeightAt(structure, resolved)) });
     if (!made) return;
     const { structure: next, featureId } = addFeature(structure, made);
     editStructure(() => next);
@@ -1675,6 +1856,10 @@ export function HallsScreen() {
                         section: tool.section,
                         title: tool.surface
                           ? `${tool.label} — לחיצה בשטח סגור ממלאת אותו מקיר לקיר; בשטח פתוח מניחה משטח לשינוי גודל`
+                          : tool.pool
+                          ? tool.pool === "free"
+                            ? "בריכה בציור חופשי — לחיצה לכל פינה, Enter לסגירה; הקווים מתעקמים ומתעגלים אחר כך"
+                            : `בריכה · ${tool.label} — הקווים מתעקמים והפינות מתעגלות ב״עריכת הקווים״`
                           : tool.kind === "seating"
                             ? `${tool.label} — חמש שורות של חמישה${tool.chair ? ` · ${tool.chair.name}` : ""}; השורות, הרווחים ומעבר באמצע בסרגל`
                             : tool.product
@@ -1704,6 +1889,11 @@ export function HallsScreen() {
                       setAddMenuOpen(false);
                       if (toolId === DRAW_SURFACE) {
                         startSurfaceDraw();
+                        return;
+                      }
+                      // A pool traced by hand starts tracing now, like "ציור חופשי" — nothing to arm.
+                      if (findAddTool(tools, toolId)?.pool === "free") {
+                        startPoolDraw();
                         return;
                       }
                       setArmedToolId((id) => (id === toolId ? null : toolId));
@@ -1931,18 +2121,23 @@ export function HallsScreen() {
             }
             // The rotate knob, last of all: above the walls' hit lines and every length the canvas
             // writes, so none of them can cover it or take its press (the user, 2026-10-17).
-            topmost={({ mm, clientToMm }) =>
-              acts && !placing ? (
-                <FeatureRotateHandles
-                  structure={structure}
-                  selectedIds={outlineSurface ? [] : featureSelection}
-                  onRotate={rotateFeature}
-                  onCommit={endGesture}
-                  clientToMm={clientToMm}
-                  mm={mm}
-                />
-              ) : null
-            }
+            topmost={(layer) => (
+              <>
+                {/* "וילון על מוט" being drawn, post by post (components/rod-draw-pane.tsx) — above
+                    everything, so every click is a post. */}
+                {rodFrom && <RodDrawPane ctx={layer} start={rodFrom} maxPoints={ledRun ? 2 : undefined} onFinish={finishRod} onCancel={() => { setRodFrom(null); setLedRun(false); }} />}
+                {acts && !placing && !rodFrom ? (
+                  <FeatureRotateHandles
+                    structure={structure}
+                    selectedIds={outlineSurface ? [] : featureSelection}
+                    onRotate={rotateFeature}
+                    onCommit={endGesture}
+                    clientToMm={layer.clientToMm}
+                    mm={layer.mm}
+                  />
+                ) : null}
+              </>
+            )}
             backdrop={({ clientToMm, mm, snap }) => {
               closeSnapMmRef.current = mm(16); // 16px, matching the outline tool's own SNAP_PX
               const closable = region !== null && region.length >= 3;
@@ -1998,32 +2193,30 @@ export function HallsScreen() {
                     onCommit={endGesture}
                     clientToMm={clientToMm}
                   />
-                  {editableRegion && editableRegion.source.type === "region" && (
+                  {/* The outline out for editing — a freehand zone's, or a pool's, surface's or
+                      building's (the bar's "עריכת הקווים"): its points, the bow diamond on every
+                      side and the radius grip in every corner (lib/studio/shaped-outline.ts). */}
+                  {outlineEdit && outlineShapeNow && (
                     <RegionOutlineEditor
-                      boundary={editableRegion.source.boundary}
+                      boundary={outlineShapeNow.outline}
+                      edgeCurves={outlineShapeNow.edgeCurves}
+                      corners={outlineShapeNow.corners}
                       mm={mm}
                       clientToMm={clientToMm}
-                      onMovePoint={(i, to) => editRegion(editableRegion.id, (b) => moveRegionPoint(b, i, to), "drag")}
-                      onInsertPoint={(i) => {
+                      onMovePoint={(i, to) => outlineEdit((s) => moveShapePoint(s, i, to), "drag")}
+                      onInsertPoint={(i, t) => {
                         // The new corner is part of the drag that made it: undo takes both back at once.
-                        editRegion(editableRegion.id, (b) => insertRegionPoint(b, i).boundary, "drag");
+                        outlineEdit((s) => insertShapePoint(s, i, t).shape, "drag");
                         return i + 1;
                       }}
-                      onRemovePoint={(i) => editRegion(editableRegion.id, (b) => removeRegionPoint(b, i))}
-                      onCommit={endGesture}
-                    />
-                  )}
-                  {outlineSurface && outlineOfSurface && (
-                    <RegionOutlineEditor
-                      boundary={outlineOfSurface}
-                      mm={mm}
-                      clientToMm={clientToMm}
-                      onMovePoint={(i, to) => editSurfaceOutline(outlineSurface.id, (b) => moveRegionPoint(b, i, to), "drag")}
-                      onInsertPoint={(i) => {
-                        editSurfaceOutline(outlineSurface.id, (b) => insertRegionPoint(b, i).boundary, "drag");
-                        return i + 1;
+                      onRemovePoint={(i) => {
+                        outlineEdit((s) => removeShapePoint(s, i));
+                        setOutlinePart(null);
                       }}
-                      onRemovePoint={(i) => editSurfaceOutline(outlineSurface.id, (b) => removeRegionPoint(b, i))}
+                      onBowSide={(i, depth) => outlineEdit((s) => bowShapeSide(s, i, depth), "drag")}
+                      onCorner={(i, r) => outlineEdit((s) => roundShapeCorner(s, i, r), "drag")}
+                      selected={outlinePart}
+                      onSelectPart={setOutlinePart}
                       onCommit={endGesture}
                     />
                   )}
@@ -2143,17 +2336,39 @@ export function HallsScreen() {
               }
             >
               {region !== null
-                ? regionFor === "surface"
+                ? regionFor === "water"
+                  ? "הקיפו את הבריכה בנקודות · Enter לסגירה · Esc לביטול"
+                  : regionFor === "surface"
                   ? "הקיפו את המשטח בנקודות · Enter לסגירה · Esc לביטול"
                   : "הקיפו בנקודות · Enter לסגירה · Esc לביטול"
                 : activeMode.hint}
             </div>
           )}
 
+          {/* An outline out for editing — a freehand zone's, or a feature's "עריכת הקווים" — takes
+              the bar's place: the picked side's bow, the picked corner's radius, every corner, and
+              "החלקה" (app/(app)/halls/outline-bar.tsx). Its ✕ ends the editing: a feature goes back
+              to its own bar, a zone is let go. */}
+          {!draftZone && outlineEdit && outlineShapeNow && (
+            <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center">
+              <div className="pointer-events-auto flex min-w-0 justify-center">
+                <OutlineBar
+                  title={editableRegion ? `עריכת הקווים · ${editableRegion.name || "אזור"}` : "עריכת הקווים"}
+                  shape={outlineShapeNow}
+                  selected={outlinePart}
+                  onBow={(i, depth) => outlineEdit((s) => bowShapeSide(s, i, depth))}
+                  onCorner={(i, r) => outlineEdit((s) => roundShapeCorner(s, i, r))}
+                  onSmooth={() => outlineEdit((s) => smoothShape(s))}
+                  onClose={() => (editableRegion ? setSelection([]) : setOutlineEditId(null))}
+                />
+              </div>
+            </div>
+          )}
+
           {/* The selection's bar, bottom centre — the sketch's own place for it (app/(app)/studio/
               studio-screen.tsx), built from the same Bar and chips. A lone zone is the one selection
               with nothing to show here: its fields live in its edit dialog (the ✎ on its row). */}
-          {(draftZone || (!soleZoneId && selection.length > 0)) && (
+          {(draftZone || (!soleZoneId && selection.length > 0)) && !(outlineEdit && outlineShapeNow && !draftZone) && (
             <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center">
               <div className="pointer-events-auto flex min-w-0 justify-center">
                 <SelectionBar
@@ -2687,6 +2902,33 @@ const DRAW_PREVIEW_OUTLINE = [
   { x: 120, y: 640 },
   { x: -660, y: 300 },
 ];
+/** A pool shape's card: the shape at its own proportions in the water material, outlined — the
+ *  freehand one the trace's dotted outline (DrawSurfacePreview's) in water. */
+function PoolPreview({ preset }: { preset: NonNullable<AddTool["pool"]> }) {
+  if (preset === "free") {
+    const s = 1600;
+    return (
+      <span className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-md bg-inset">
+        <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-11 w-11" aria-hidden>
+          <SurfaceFill material="water" footprint={{ kind: "custom", outline: DRAW_PREVIEW_OUTLINE }} w={1320} d={1300} id="draw-pool" />
+          <polygon points={DRAW_PREVIEW_OUTLINE.map((q) => `${q.x},${q.y}`).join(" ")} fill="none" stroke="var(--color-accent)" strokeWidth={40} strokeDasharray="90 70" />
+        </svg>
+      </span>
+    );
+  }
+  const { widthMm: w, depthMm: d } = POOL_PRESET_SIZE[preset];
+  const fp = featureFootprint({ ...poolOutline(preset, w, d), arc: undefined, ring: undefined });
+  const pad = Math.max(w, d) * 0.08;
+  return (
+    <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
+      <svg viewBox={`${-w / 2 - pad} ${-d / 2 - pad} ${w + pad * 2} ${d + pad * 2}`} className="h-10 w-10" aria-hidden>
+        <SurfaceFill material="water" footprint={fp} w={w} d={d} id={`pool-${preset}`} />
+        <FootprintShape footprint={fp} fill="none" stroke="var(--color-ink-soft)" strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
+      </svg>
+    </span>
+  );
+}
+
 function DrawSurfacePreview() {
   const s = 1600;
   return (
@@ -2718,9 +2960,13 @@ const SEATING_PREVIEW_BOX = (() => {
 const COLUMN_PREVIEW = newFeature("column", { x: 0, y: 0 });
 // The fountain on its card: the catalog's own picture at a new one's size.
 const FOUNTAIN_PREVIEW = newFeature("fountain", { x: 0, y: 0 });
+// The pergola on its card: a new one (4 × 4, 15cm posts, slats) drawn as it will be placed.
+const PERGOLA_PREVIEW = newFeature("pergola", { x: 0, y: 0 });
 
 function ToolPreview({ tool }: { tool: AddTool }) {
   const Icon = ADD_TOOL_ICON[addToolIconKey(tool)];
+  // A pool's card is its shape, in water — the kidney and the ר say what they are before placing.
+  if (tool.pool) return <PoolPreview preset={tool.pool} />;
   if (tool.kind === "fountain") {
     const s = FOUNTAIN_PREVIEW.widthMm * 1.15;
     return (
@@ -2737,6 +2983,31 @@ function ToolPreview({ tool }: { tool: AddTool }) {
       <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
         <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-8 w-8" aria-hidden>
           <ColumnGlyph f={COLUMN_PREVIEW} fill="var(--color-surface)" stroke="var(--color-muted)" strokeWidth={1.25} />
+        </svg>
+      </span>
+    );
+  }
+  if (tool.kind === "pergola" && !tool.product) {
+    const s = PERGOLA_PREVIEW.widthMm * 1.15;
+    return (
+      <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
+        <svg viewBox={`${-s / 2} ${-s / 2} ${s} ${s}`} className="h-9 w-9" aria-hidden>
+          <PergolaGlyph footprint={featureFootprint(PERGOLA_PREVIEW)} pergola={pergolaOf(PERGOLA_PREVIEW)} stroke="var(--color-muted)" postFill="var(--color-ink-soft)" />
+        </svg>
+      </span>
+    );
+  }
+  // The venue's LED (spec 2026-11-07 §7.3): a strip's glowing line, a screen's dark bar — the drawing
+  // each lands as.
+  if (tool.kind === "led" || tool.kind === "screen") {
+    return (
+      <span className="flex h-11 w-11 items-center justify-center rounded-md bg-inset">
+        <svg viewBox="-2300 -2300 4600 4600" className="h-9 w-9" aria-hidden>
+          {tool.kind === "led" ? (
+            <ItemSymbol kind="led" footprint={{ kind: "rect", widthMm: 4000, depthMm: 1400 }} count={1} />
+          ) : (
+            <ItemSymbol kind="screen" footprint={{ kind: "rect", widthMm: 4000, depthMm: 500 }} count={1} />
+          )}
         </svg>
       </span>
     );

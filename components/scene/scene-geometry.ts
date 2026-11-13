@@ -271,6 +271,41 @@ function pleated(path: Point[], pleatMm: number, amplitudeMm: number): Point[] {
 
 /** A vertical strip along the path, both faces (a skirt is seen from outside, a curtain from
  *  inside, and the builder's path runs whichever way the edge does). UV: u metres along, v up. */
+/** A cloth in the air (Part "sheet" — a sail, a swag): its grid as given, plan mm into three metres,
+ *  stitched into quads and smooth-shaded — and stitched AGAIN with the winding reversed over its own
+ *  copy of the points, so it is lit from below as well as above whatever the material's side. */
+function sheetGeometry(rows: Vec3[][]): BufferGeometry {
+  const R = rows.length;
+  const C = R ? rows[0].length : 0;
+  const g = new BufferGeometry();
+  if (R < 2 || C < 2 || rows.some((r) => r.length !== C)) return g;
+  const pos: number[] = [];
+  const uv: number[] = [];
+  for (let face = 0; face < 2; face++)
+    for (const row of rows)
+      for (const q of row) {
+        pos.push(m(q.x), m(q.z), m(q.y));
+        uv.push(m(q.x), m(q.y));
+      }
+  const idx: number[] = [];
+  const N = R * C;
+  for (let j = 0; j < R - 1; j++) {
+    for (let i = 0; i < C - 1; i++) {
+      const a = j * C + i;
+      const b = a + 1;
+      const c = a + C;
+      const d = c + 1;
+      idx.push(a, c, b, b, c, d);
+      idx.push(N + a, N + b, N + c, N + b, N + d, N + c);
+    }
+  }
+  g.setAttribute("position", new Float32BufferAttribute(pos, 3));
+  g.setAttribute("uv", new Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
 function ribbonGeometry(path: Point[], h: number, pleatMm: number | undefined, amplitudeMm: number | undefined): BufferGeometry {
   const pts = pleated(path, pleatMm ?? 0, amplitudeMm ?? DEFAULT_AMPLITUDE_MM);
   const H = m(h);
@@ -325,7 +360,10 @@ function ribbonGeometry(path: Point[], h: number, pleatMm: number | undefined, a
  *  normals: fabric, not facets. Built outward-facing whatever way the outline winds. */
 const DRAPE_STEP_MM = 25;
 const DRAPE_ROWS = 14;
-function drapeGeometry(outline: Point[], h: number, pitchMm: number, depthMm: number, flareMm: number): BufferGeometry {
+/** How far a hem band (Part "drape" `band`) stands off the fall it is laid on — enough that the two
+ *  surfaces never fight for a pixel, too little to read as a second layer. */
+const DRAPE_BAND_PROUD_MM = 1.5;
+function drapeGeometry(outline: Point[], h: number, pitchMm: number, depthMm: number, flareMm: number, band?: [number, number]): BufferGeometry {
   // Resample the closed rim.
   const rim: Point[] = [];
   const along: number[] = [];
@@ -365,21 +403,27 @@ function drapeGeometry(outline: Point[], h: number, pitchMm: number, depthMm: nu
   const folds = Math.max(3, Math.round(s / Math.max(80, pitchMm)));
   const pos: number[] = [];
   const uv: number[] = [];
-  for (let j = 0; j <= DRAPE_ROWS; j++) {
-    const t = j / DRAPE_ROWS;
-    const z = h * (1 - t);
+  // A band is the same surface between two heights (t is still measured down the WHOLE fall, so its
+  // folds are the fall's), pushed a hair further out.
+  const zTop = band ? Math.min(h, Math.max(band[0], band[1])) : h;
+  const zBottom = band ? Math.max(0, Math.min(band[0], band[1])) : 0;
+  const rows = band ? Math.max(2, Math.ceil((DRAPE_ROWS * (zTop - zBottom)) / Math.max(1, h))) : DRAPE_ROWS;
+  const proud = band ? DRAPE_BAND_PROUD_MM : 0;
+  for (let j = 0; j <= rows; j++) {
+    const z = zTop - ((zTop - zBottom) * j) / rows;
+    const t = h > 0 ? 1 - z / h : 0;
     for (let i = 0; i <= N; i++) {
       const k = i % N;
       const nrm = normal(k);
       const phase = ((i === N ? s : along[k]) / s) * folds * Math.PI * 2;
-      const push = flareMm * t * t + depthMm * Math.pow(t, 1.3) * Math.sin(phase);
+      const push = flareMm * t * t + depthMm * Math.pow(t, 1.3) * Math.sin(phase) + proud;
       pos.push(m(rim[k].x + nrm.x * push), m(z), m(rim[k].y + nrm.y * push));
       uv.push(m(i === N ? s : along[k]), m(z));
     }
   }
   const idx: number[] = [];
   const W = N + 1;
-  for (let j = 0; j < DRAPE_ROWS; j++) {
+  for (let j = 0; j < rows; j++) {
     for (let i = 0; i < N; i++) {
       const a = j * W + i;
       const b = a + 1;
@@ -396,7 +440,7 @@ function drapeGeometry(outline: Point[], h: number, pitchMm: number, depthMm: nu
   // Faces outward? Compare the first column's normal half way down with its outward direction
   // (plan (x, y) is three (x, z)); flip the winding if it points in.
   const nAttr = g.getAttribute("normal");
-  const probe = Math.floor(DRAPE_ROWS / 2) * W;
+  const probe = Math.floor(rows / 2) * W;
   const n0 = normal(0);
   if (nAttr.getX(probe) * n0.x + nAttr.getZ(probe) * n0.y < 0) {
     const flipped: number[] = [];
@@ -584,13 +628,15 @@ export function partGeometry(part: Part): BufferGeometry {
       return g;
     }
     case "drape":
-      return drapeGeometry(part.outline, part.h, part.foldPitchMm ?? 230, part.foldDepthMm ?? 20, part.flareMm ?? 40);
+      return drapeGeometry(part.outline, part.h, part.foldPitchMm ?? 230, part.foldDepthMm ?? 20, part.flareMm ?? 40, part.band);
     case "torus":
       return torusGeometry(part.r, part.tube, part.segments ?? DEFAULT_TORUS_TUBULAR);
     case "plane":
       return planeGeometry(part.outline, part.side ?? "up", part.holes);
     case "ribbon":
       return ribbonGeometry(part.path, part.h, part.pleatMm, part.amplitudeMm);
+    case "sheet":
+      return sheetGeometry(part.rows);
   }
 }
 
@@ -822,8 +868,17 @@ export function geometrySignature(body: BodyNode): string {
         num(p.foldPitchMm ?? 0);
         num(p.foldDepthMm ?? 0);
         num(p.flareMm ?? 0);
+        num(p.band ? p.band[0] : -1);
+        num(p.band ? p.band[1] : -1);
         num(p.outline.length);
         for (const q of p.outline) pt(q);
+        break;
+      case "sheet":
+        num(p.rows.length);
+        for (const row of p.rows) {
+          num(row.length);
+          for (const q of row) v3(q);
+        }
         break;
     }
   }

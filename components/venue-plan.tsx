@@ -9,6 +9,8 @@ import { isAdditiveClick } from "@/lib/keyboard";
 import { featureFootprint, isWindow, nodeMap, plantSpecies, surfaceMaterial, wallPoints, type StructureFeature, type VenueStructure, featureEdgeItems, featurePlacement } from "@/lib/venues/structure";
 import { ItemSymbol } from "@/components/item-symbol";
 import { CURTAIN_DEPTH_MM, CURTAIN_FILL, curtainEnds, curtainPieces, type CurtainEnds, type CurtainPiece } from "@/lib/venues/curtain";
+import { ledColour, ledEnds, ledPieces } from "@/lib/venues/led";
+import { LedLine } from "@/components/led-glyph";
 import { CurtainCloth } from "@/components/curtain-cloth";
 import { WindowGlazing } from "@/components/window-glazing";
 import { FootprintShape } from "@/components/footprint-shape";
@@ -17,10 +19,15 @@ import { SurfaceFill, ZoneSurface } from "@/components/surface-fill";
 import { ClimbGlyph } from "@/components/climb-glyph";
 import { SeatingGlyph } from "@/components/chair-block";
 import { ColumnGlyph } from "@/components/column-glyph";
+import { PergolaGlyph } from "@/components/pergola-glyph";
+import { pergolaOf } from "@/lib/venues/pergola";
+import { DEFAULT_TONE } from "@/components/item-symbol";
 import { seatingOf } from "@/lib/venues/seating";
 import { EdgeItemHandles, EdgeItemsDrawing, EdgePickLines, stageGaps, stagePickLines } from "@/components/stage-edge-handles";
 import { NO_DECKS, edgesMatter, takesEdgeItems } from "@/lib/venues/stage-edges";
 import { followsWalls } from "@/lib/venues/face-surfaces";
+import { rimOf } from "@/lib/venues/rim";
+import { RimFill } from "@/components/rim-fill";
 import type { StageEdgeKind, StageStair } from "@/lib/design-document/types";
 import type { WallDistance } from "@/lib/design-document/stage";
 import { isClimb } from "@/lib/venues/climb";
@@ -29,6 +36,9 @@ import { clampOpacity, spanMm, underlayCentre } from "@/lib/venues/underlay";
 import type { PlanUnderlay } from "@/lib/venues/types";
 import { ZONE_KIND_LABEL, type ResolvedZone } from "@/lib/venues/zone";
 import type { EdgeCurve, Point } from "@/lib/studio/hall";
+import { edgeMidpoint, edgePathD } from "@/lib/studio/geometry";
+import { gridStepMm } from "@/lib/studio/snap";
+import { cornerAtPoint, cornerGrips, hasCorners, maxSideBowMm, nearestOnSide, sideBowMm, sideNormal, type OutlineShape } from "@/lib/studio/shaped-outline";
 import { EntranceDoor, RotateHandle } from "@/components/plan-canvas";
 
 /** No walls: a curtain read against it is drawn in its own box (curtainPieces' fallback). */
@@ -321,7 +331,8 @@ export const ZoneRegions = memo(function ZoneRegions({
             >
               {surface && <ZoneSurface boundary={r.boundary} material={surface} id={r.zone.id} color={hexOf(r.zone.style?.fill)} />}
               <path
-                d={outlinePathD(r.boundary)}
+                // A region drawn with bowed sides or rounded corners is drawn on its true curves.
+                d={r.shape ? outlinePathD(r.shape.outline, r.shape.edgeCurves) : outlinePathD(r.boundary)}
                 fill={surface ? (selected ? "var(--color-accent-wash)" : "transparent") : style.fill}
                 fillOpacity={surface ? (selected ? 0.35 : 1) : style.fillOpacity}
                 stroke={selected ? "var(--color-accent)" : style.stroke}
@@ -373,28 +384,78 @@ const hexOf = (c?: string) => (c && /^#[0-9a-f]{6}$/i.test(c) ? c : undefined);
  *  under the letters keeps them readable on any floor, and is invisible on a pale tint. */
 const halo = (w: number) => ({ stroke: "var(--color-canvas)", strokeWidth: w, strokeLinejoin: "round" as const, paintOrder: "stroke" as const });
 
+/** A side or a corner of the outline being edited — what the "עריכת הקווים" bar's fields act on. */
+export type OutlinePart = { kind: "side" | "corner"; index: number };
+
 /** The editable outline of a freehand zone (lib/venues/region-edit.ts): a handle on every corner to
  *  drag, a smaller one mid-edge that becomes a new corner the moment it is dragged, and a
  *  double-click on a corner to take it away. Drawn only for the one selected region zone — a face
- *  zone's outline is its walls, which the canvas already lets you drag. */
+ *  zone's outline is its walls, which the canvas already lets you drag.
+ *
+ *  CURVES AND CORNERS (2026-11-07, lib/studio/shaped-outline.ts). A host that passes `onBowSide`
+ *  gets the wall's bow diamond on every side's middle (drag = its depth along the side's normal,
+ *  pulled to the zoom's grid step, Alt frees, double-click straightens) — and the side's own line
+ *  takes over adding a corner: press it and drag, and a new corner comes out of the side where it was
+ *  pressed (a click selects the side). `onCorner` puts the rug's round grip inside each corner on its
+ *  bisector (drag = that corner's radius, Alt = every corner, double-click squares it). The points
+ *  are the outline's own; a rounded corner's point stands outside the drawn arc, on the faint dashed
+ *  line of the shape before it was rounded. Every drag is one startPointerGesture. */
 export function RegionOutlineEditor({
   boundary,
+  edgeCurves,
+  corners,
   mm,
   clientToMm,
   onMovePoint,
   onInsertPoint,
   onRemovePoint,
+  onBowSide,
+  onCorner,
+  selected,
+  onSelectPart,
+  gridMm = 1000,
   onCommit,
 }: {
   boundary: Point[];
+  /** The sides' bows, aligned to `boundary`. Absent = straight sides. */
+  edgeCurves?: (EdgeCurve | null)[];
+  /** Each corner's radius, mm, aligned to `boundary`. Absent = square corners. */
+  corners?: (number | null)[];
   mm: (px: number) => number;
   clientToMm: (clientX: number, clientY: number) => { x: number; y: number };
   onMovePoint: (index: number, to: Point) => void;
-  /** Adds a corner mid-edge `index` and returns the new corner's index, which the drag then moves. */
-  onInsertPoint: (index: number) => number;
+  /** Adds a corner on side `index` — at parameter `t` along it, the middle when absent — and
+   *  returns the new corner's index, which the drag then moves. */
+  onInsertPoint: (index: number, t?: number) => number;
   onRemovePoint: (index: number) => void;
+  /** Side `index` bowed `depthMm` out of the shape (− in). Absent = no diamonds, the mid-side dots. */
+  onBowSide?: (index: number, depthMm: number) => void;
+  /** Corner `index` (or every one) rounded at `radiusMm`. Absent = no corner grips. */
+  onCorner?: (index: number | "all", radiusMm: number) => void;
+  selected?: OutlinePart | null;
+  onSelectPart?: (part: OutlinePart | null) => void;
+  /** The canvas's grid, which a bow's depth is pulled to at the zoom's step. */
+  gridMm?: number;
   onCommit: () => void;
 }) {
+  if (onBowSide || onCorner) {
+    return (
+      <ShapedOutlineHandles
+        shape={{ outline: boundary, ...(edgeCurves ? { edgeCurves } : {}), ...(corners ? { corners } : {}) }}
+        mm={mm}
+        clientToMm={clientToMm}
+        onMovePoint={onMovePoint}
+        onInsertPoint={onInsertPoint}
+        onRemovePoint={onRemovePoint}
+        onBowSide={onBowSide}
+        onCorner={onCorner}
+        selected={selected ?? null}
+        onSelectPart={onSelectPart}
+        gridMm={gridMm}
+        onCommit={onCommit}
+      />
+    );
+  }
   // One gesture per press (lib/studio/gesture.ts): its origin lives in the press's own closure, so
   // the host re-rendering and rebuilding these handlers mid-drag changes nothing.
   const drag = (index: number | null, edge: number | null) => ({
@@ -472,6 +533,251 @@ export function RegionOutlineEditor({
             fill="#ffffff"
             stroke="var(--color-accent)"
             strokeWidth={2}
+            vectorEffect="non-scaling-stroke"
+            className="transition-colors group-hover:fill-accent-tint"
+          />
+        </g>
+      ))}
+    </g>
+  );
+}
+
+/** RegionOutlineEditor's handles for an outline whose sides bow and whose corners round. */
+function ShapedOutlineHandles({
+  shape,
+  mm,
+  clientToMm,
+  onMovePoint,
+  onInsertPoint,
+  onRemovePoint,
+  onBowSide,
+  onCorner,
+  selected,
+  onSelectPart,
+  gridMm,
+  onCommit,
+}: {
+  shape: OutlineShape;
+  mm: (px: number) => number;
+  clientToMm: (clientX: number, clientY: number) => { x: number; y: number };
+  onMovePoint: (index: number, to: Point) => void;
+  onInsertPoint: (index: number, t?: number) => number;
+  onRemovePoint: (index: number) => void;
+  onBowSide?: (index: number, depthMm: number) => void;
+  onCorner?: (index: number | "all", radiusMm: number) => void;
+  selected: OutlinePart | null;
+  onSelectPart?: (part: OutlinePart | null) => void;
+  gridMm: number;
+  onCommit: () => void;
+}) {
+  const pts = shape.outline;
+  const n = pts.length;
+  const curveOf = (i: number) => shape.edgeCurves?.[i] ?? null;
+  // The grip stands this far further in along the corner's bisector, clear of the point's handle.
+  const inset = mm(16);
+  const grips = onCorner ? cornerGrips(shape, inset) : [];
+  const rounded = hasCorners(shape.corners);
+  const isSel = (kind: OutlinePart["kind"], i: number) => selected?.kind === kind && selected.index === i;
+  const tooShort = (i: number) => Math.hypot(pts[(i + 1) % n].x - pts[i].x, pts[(i + 1) % n].y - pts[i].y) < mm(36);
+
+  // A corner's point: dragged to move it, double-clicked to take it away, pressed to pick it for the bar.
+  const pointDown = (i: number) => (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    onSelectPart?.({ kind: "corner", index: i });
+    const from = pts[i];
+    const start = clientToMm(e.clientX, e.clientY);
+    startPointerGesture(e, {
+      onMove: (ev) => {
+        const now = clientToMm(ev.clientX, ev.clientY);
+        onMovePoint(i, { x: from.x + now.x - start.x, y: from.y + now.y - start.y });
+      },
+      onEnd: (_ev, moved) => {
+        if (moved) onCommit();
+      },
+    });
+  };
+  // A side's line: a drag pulls a new corner out of it where it was pressed; a click picks the side.
+  const sideDown = (i: number) => (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const start = clientToMm(e.clientX, e.clientY);
+    const t = nearestOnSide(shape, i, start);
+    let index = -1;
+    startPointerGesture(e, {
+      onStart: () => {
+        index = onInsertPoint(i, t);
+        onSelectPart?.({ kind: "corner", index });
+      },
+      onMove: (ev) => {
+        if (index < 0) return;
+        onMovePoint(index, clientToMm(ev.clientX, ev.clientY));
+      },
+      onEnd: (_ev, moved) => {
+        if (moved) onCommit();
+        else onSelectPart?.({ kind: "side", index: i });
+      },
+    });
+  };
+  // The bow diamond: only the push along the side's outward normal counts, from the depth it had when
+  // pressed, pulled to the grid step the zoom shows (Alt frees it).
+  const bowDown = (i: number) => (e: React.PointerEvent) => {
+    if (e.button !== 0 || !onBowSide) return;
+    e.stopPropagation();
+    onSelectPart?.({ kind: "side", index: i });
+    const start = clientToMm(e.clientX, e.clientY);
+    const from = sideBowMm(shape, i);
+    const nrm = sideNormal(shape, i);
+    const max = maxSideBowMm(shape, i);
+    const step = gridStepMm(gridMm, mm(6));
+    startPointerGesture(e, {
+      onMove: (ev) => {
+        const now = clientToMm(ev.clientX, ev.clientY);
+        let depth = from + (now.x - start.x) * nrm.x + (now.y - start.y) * nrm.y;
+        if (!ev.altKey) depth = Math.round(depth / step) * step;
+        onBowSide(i, Math.max(-max, Math.min(max, depth)));
+      },
+      onEnd: (_ev, moved) => {
+        if (moved) onCommit();
+      },
+    });
+  };
+  // The radius grip: how far in along the corner's bisector it is dragged; Alt rounds every corner.
+  const cornerDown = (i: number) => (e: React.PointerEvent) => {
+    if (e.button !== 0 || !onCorner) return;
+    e.stopPropagation();
+    onSelectPart?.({ kind: "corner", index: i });
+    startPointerGesture(e, {
+      onMove: (ev) => {
+        const r = cornerAtPoint(shape, i, clientToMm(ev.clientX, ev.clientY), inset);
+        onCorner(ev.altKey ? "all" : i, r);
+      },
+      onEnd: (_ev, moved) => {
+        if (moved) onCommit();
+      },
+    });
+  };
+
+  return (
+    // A click on a handle is not a click on the empty plan: letting it bubble to the canvas would
+    // clear the selection, and with it these handles, before a double-click could land.
+    <g onClick={(e) => e.stopPropagation()}>
+      {/* The shape before its corners were rounded — the line the points stand on. */}
+      {rounded && (
+        <path
+          d={outlinePathD(pts, shape.edgeCurves)}
+          fill="none"
+          stroke="var(--color-accent)"
+          strokeOpacity={0.4}
+          strokeWidth={1}
+          strokeDasharray="4 4"
+          vectorEffect="non-scaling-stroke"
+          className="pointer-events-none"
+        />
+      )}
+      {pts.map((a, i) => {
+        const b = pts[(i + 1) % n];
+        const d = edgePathD(a, b, curveOf(i));
+        return (
+          <g key={`s${i}`} onPointerDown={sideDown(i)} role="button" aria-label={`צלע ${i + 1} — לחיצה לבחירה · גרירה מוסיפה בה פינה`} className="cursor-copy touch-none">
+            <title>לחיצה בוחרת את הצלע · גרירה מוסיפה בה פינה</title>
+            {isSel("side", i) && (
+              <path d={d} fill="none" stroke="var(--color-accent)" strokeWidth={3} vectorEffect="non-scaling-stroke" className="pointer-events-none" />
+            )}
+            <path d={d} fill="none" stroke="transparent" strokeWidth={mm(10)} />
+          </g>
+        );
+      })}
+      {onBowSide &&
+        pts.map((a, i) => {
+          if (tooShort(i) && !isSel("side", i)) return null;
+          const curve = curveOf(i);
+          const mid = edgeMidpoint(a, pts[(i + 1) % n], curve);
+          const bowed = !!curve;
+          return (
+            <g
+              key={`b${i}`}
+              onPointerDown={bowDown(i)}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                if (!bowed) return;
+                onBowSide(i, 0);
+                onCommit();
+              }}
+              tabIndex={0}
+              role="button"
+              aria-label={`עיקום צלע ${i + 1} — גרירה · לחיצה כפולה מיישרת`}
+              className="cursor-move touch-none focus:outline-none"
+            >
+              <title>גררו לעיקום הצלע · Alt בלי הצמדה · לחיצה כפולה מיישרת</title>
+              <circle cx={mid.x} cy={mid.y} r={mm(11)} fill="transparent" />
+              <rect
+                x={mid.x - mm(5)}
+                y={mid.y - mm(5)}
+                width={mm(10)}
+                height={mm(10)}
+                transform={`rotate(45 ${mid.x} ${mid.y})`}
+                className={`hover:text-accent ${isSel("side", i) ? "text-accent" : bowed ? "text-accent/70" : "text-ink-soft/60"}`}
+                fill="currentColor"
+                stroke="var(--color-canvas)"
+                strokeWidth={1.5}
+                vectorEffect="non-scaling-stroke"
+              />
+            </g>
+          );
+        })}
+      {onCorner &&
+        grips.map((g, i) => {
+          if (!g || (tooShort(i) && tooShort((i - 1 + n) % n) && !isSel("corner", i))) return null;
+          const isRounded = (shape.corners?.[i] ?? 0) > 0;
+          return (
+            <circle
+              key={`r${i}`}
+              cx={g.at.x}
+              cy={g.at.y}
+              r={mm(5)}
+              fill={isRounded ? "var(--color-accent)" : "var(--color-canvas)"}
+              stroke="var(--color-accent)"
+              strokeWidth={isSel("corner", i) ? 3 : 2}
+              vectorEffect="non-scaling-stroke"
+              className="cursor-move touch-none focus:outline-none"
+              tabIndex={0}
+              role="button"
+              aria-label={`עיגול פינה ${i + 1} — גרירה (Alt — כל הפינות יחד), לחיצה כפולה מיישרת`}
+              onPointerDown={cornerDown(i)}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                if (!isRounded) return;
+                onCorner(i, 0);
+                onCommit();
+              }}
+            >
+              <title>גררו לעיגול הפינה · Alt — כל הפינות · לחיצה כפולה מיישרת</title>
+            </circle>
+          );
+        })}
+      {pts.map((p, i) => (
+        <g
+          key={`p${i}`}
+          onPointerDown={pointDown(i)}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            onRemovePoint(i);
+          }}
+          tabIndex={0}
+          role="button"
+          aria-label={`פינה ${i + 1} — גרירה להזזה · לחיצה כפולה למחיקה`}
+          className="group cursor-move touch-none"
+        >
+          <title>גררו להזזה · לחיצה כפולה מוחקת את הפינה</title>
+          <circle cx={p.x} cy={p.y} r={mm(12)} fill="transparent" />
+          <circle
+            cx={p.x}
+            cy={p.y}
+            r={mm(6)}
+            fill={isSel("corner", i) ? "var(--color-accent-tint)" : "#ffffff"}
+            stroke="var(--color-accent)"
+            strokeWidth={isSel("corner", i) ? 3 : 2}
             vectorEffect="non-scaling-stroke"
             className="transition-colors group-hover:fill-accent-tint"
           />
@@ -578,13 +884,15 @@ export function StructureFeatures({
   const piecesOf = useMemo(() => {
     const m = new Map<string, CurtainPiece[]>();
     for (const f of structure.features) if (f.kind === "curtain") m.set(f.id, curtainPieces(structure, f));
+    // …and every LED strip in the lines its rail resolves to (lib/venues/led.ts), the same way.
+    for (const f of structure.features) if (f.kind === "led") m.set(f.id, ledPieces(structure, f));
     return m;
   }, [structure]);
   // …and its two ends on the plan, where the grips that slide them stand (round a bow too).
   const endsOf = useMemo(() => {
     const m = new Map<string, CurtainEnds>();
     for (const f of structure.features) {
-      const ends = f.kind === "curtain" ? curtainEnds(structure, f) : null;
+      const ends = f.kind === "curtain" ? curtainEnds(structure, f) : f.kind === "led" ? ledEnds(structure, f) : null;
       if (ends) m.set(f.id, ends);
     }
     return m;
@@ -670,7 +978,7 @@ export function FeatureRotateHandles({
   return (
     <>
       {structure.features
-        .filter((f) => selectedIds.includes(f.id) && !f.locked && !followsWalls(f))
+        .filter((f) => selectedIds.includes(f.id) && !f.locked && !followsWalls(f) && f.kind !== "led")
         .map((f) => (
           <RotateHandle
             key={f.id}
@@ -741,7 +1049,8 @@ const FeatureNode = memo(function FeatureNode({
         // shape: it follows them, and has no drag, size or turn of its own.
         // A curtain hangs on its wall (lib/venues/curtain.ts): its stretch is typed in the bar,
         // never dragged, and a sketch takes it down rather than moving it.
-        const pinned = !!f.locked || followsWalls(f) || f.kind === "curtain";
+        // An LED strip likewise rides its rail (lib/venues/led.ts) — its ends slide, its body does not.
+        const pinned = !!f.locked || followsWalls(f) || f.kind === "curtain" || f.kind === "led";
         const onMove = pinned || (f.kind === "surface" && !selected) ? undefined : onMoveProp;
         // Chairs in rows are resized by their rows (the bar's "שורות"), never by a handle that
         // would stretch the box away from the chairs in it (lib/venues/seating.ts).
@@ -753,6 +1062,8 @@ const FeatureNode = memo(function FeatureNode({
         // and with no items there was nothing drawing them.
         const edgeItems = featureEdgeItems(f);
         const stageP = edgeItems.length > 0 || (selected && edgesMatter(f)) ? featurePlacement(f) : null;
+        // A pool's שפה or a surface's edging (lib/venues/rim.ts) — read once per feature object.
+        const rim = rimOf(f);
         const style = resolveStyle(f.style, "screen", {
           fill: "var(--color-canvas)",
           stroke: selected ? "var(--color-accent)" : "var(--color-muted)",
@@ -783,7 +1094,19 @@ const FeatureNode = memo(function FeatureNode({
                   footprint is centred on its own origin, so the position is a translate — the
                   label and the resize handles below keep their absolute coordinates. */}
               <g transform={`translate(${f.x} ${f.y})`}>
-                {f.kind === "surface" ? (
+                {rim ? (
+                  // A pool or a surface with a rim: the band in its own material, the water (or the
+                  // surface's own material) inside it — components/rim-fill.tsx. A pool's water edge
+                  // keeps the pool's own line (the band's hairlines are the rest); selected, the
+                  // whole outline is dashed in accent, as a surface's is.
+                  <>
+                    <RimFill f={f} seed={f.id} />
+                    {f.kind === "pool" && <FootprintShape footprint={rim.inside ?? featureFootprint(f)} {...common} fill="none" />}
+                    {selected && (
+                      <FootprintShape footprint={featureFootprint(f)} fill="none" stroke="var(--color-accent)" strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
+                    )}
+                  </>
+                ) : f.kind === "surface" ? (
                   <>
                     {/* The ground: a real-scale texture filling its own shape, with the same
                         dashed selection outline as a plant rather than a dashed resting border. */}
@@ -867,8 +1190,26 @@ const FeatureNode = memo(function FeatureNode({
                       fillOpacity={f.style?.fillOpacity}
                       ink={isDark(f.style?.fill ?? CURTAIN_FILL) ? "#ffffff" : "var(--color-ink)"}
                       opacity={isDark(f.style?.fill ?? CURTAIN_FILL) ? 0.45 : 0.35}
+                      style={f.curtain?.style}
                     />
                     <FootprintShape footprint={featureFootprint(f)} fill="transparent" stroke={selected ? "var(--color-accent)" : "none"} strokeWidth={selected ? 2 : 0} strokeDasharray={selected ? "4 3" : undefined} vectorEffect="non-scaling-stroke" />
+                  </>
+                ) : f.kind === "led" ? (
+                  // The venue's LED strip (lib/venues/led.ts): its light along the lines its rail
+                  // resolves to, as a hired one is drawn (components/led-glyph.tsx); its band an
+                  // invisible hit area, outlined when selected. No name.
+                  <>
+                    {(pieces ?? ledPieces(EMPTY_STRUCTURE, f)).map((pc, i) => (
+                      <LedLine key={i} path={pc.line} colour={ledColour(f)} core={2.5} glow={10} nonScaling />
+                    ))}
+                    <FootprintShape footprint={featureFootprint(f)} fill="transparent" stroke={selected ? "var(--color-accent)" : "none"} strokeWidth={selected ? 2 : 0} strokeDasharray={selected ? "4 3" : undefined} vectorEffect="non-scaling-stroke" />
+                  </>
+                ) : f.kind === "screen" ? (
+                  // The venue's LED screen: the catalog's drawing — a dark bar, its pixel grid, its
+                  // front (+y) marked, its name behind it.
+                  <>
+                    <ItemSymbol kind="screen" footprint={featureFootprint(f)} count={1} tone={f.style?.fill} label={f.label} textMm={labelPx} />
+                    <FootprintShape footprint={featureFootprint(f)} fill="transparent" stroke={selected ? "var(--color-accent)" : "none"} strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
                   </>
                 ) : f.kind === "fountain" ? (
                   // A fountain: the catalog's own picture (components/item-symbol.tsx) — the basin
@@ -877,6 +1218,30 @@ const FeatureNode = memo(function FeatureNode({
                   <>
                     <ItemSymbol kind="fountain" footprint={featureFootprint(f)} count={1} tone={f.style?.fill} ink={selected ? "var(--color-accent)" : undefined} />
                     {selected && <FootprintShape footprint={featureFootprint(f)} fill="none" stroke="var(--color-accent)" strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />}
+                  </>
+                ) : f.kind === "pergola" ? (
+                  // A pergola (lib/venues/pergola.ts): its posts, its roof across them and any
+                  // lattice sides — no name, the drawing says what it is. Tables, a bar, the lawn
+                  // stand UNDER it, so until it is selected it is picked up by its posts and a
+                  // finger-wide band along its outline alone; selected, its whole footprint is its
+                  // handle (the chandelier's rule in the sketch, canvas-stage's PlacementNode).
+                  <>
+                    <PergolaGlyph
+                      footprint={featureFootprint(f)}
+                      pergola={pergolaOf(f)}
+                      stroke={selected ? "var(--color-accent)" : (f.style?.stroke ?? "var(--color-ink-soft)")}
+                      strokeWidth={selected ? 2 : 1.25}
+                      postFill={f.style?.fill ?? DEFAULT_TONE.pergola}
+                      hitPosts
+                    />
+                    <FootprintShape
+                      footprint={featureFootprint(f)}
+                      fill={selected ? "transparent" : "none"}
+                      stroke="transparent"
+                      strokeWidth={14}
+                      vectorEffect="non-scaling-stroke"
+                      style={{ pointerEvents: selected ? "visiblePainted" : "stroke" }}
+                    />
                   </>
                 ) : f.kind === "column" ? (
                   // A column: its plinth, base ring and shaft (lib/venues/column.ts) — drawn solid,
@@ -930,7 +1295,7 @@ const FeatureNode = memo(function FeatureNode({
                   <path d={`M ${-mm(2.8)} ${-mm(1)} v ${-mm(1.6)} a ${mm(2.8)} ${mm(2.8)} 0 0 1 ${mm(5.6)} 0 v ${mm(1.6)}`} fill="none" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
                 </g>
               )}
-              {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && !isClimb(f.kind) && <text
+              {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && f.kind !== "pergola" && f.kind !== "led" && f.kind !== "screen" && !isClimb(f.kind) && <text
                 x={f.x}
                 y={f.y}
                 textAnchor="middle"
@@ -952,7 +1317,7 @@ const FeatureNode = memo(function FeatureNode({
                   constrain convention every design tool gives its resize handles. */}
               {/* A curtain's two ends, slid along its wall — the sketch's own drape ends — a few
                   px on past each end along the wall (round a bow, where the wall runs there). */}
-              {selected && onCurtainEnd && f.kind === "curtain" && clientToMm && ends && (
+              {selected && onCurtainEnd && (f.kind === "curtain" || f.kind === "led") && clientToMm && ends && (
                 <g>
                   {(["from", "to"] as const).map((end) => (
                     <ResizeHandle
@@ -967,7 +1332,7 @@ const FeatureNode = memo(function FeatureNode({
                   ))}
                 </g>
               )}
-              {selected && onResize && f.kind !== "curtain" && (
+              {selected && onResize && f.kind !== "curtain" && f.kind !== "led" && (
                 usesDiameter(f.shape) ? (
                   f.shape === "circle" ? (
                     // Four handles round the rim, on the diagonals where a designer reaches for a

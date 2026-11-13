@@ -452,6 +452,14 @@ function baseMaterial(ref: MaterialRef): MeshStandardMaterial {
       mat.roughness = 0.6;
       mat.toneMapped = false;
       break;
+    case "glow":
+      // An LED strip's or a screen's face (lib/scene/led.ts): its own light, brightened by the MOOD
+      // (MaterialCache.setGlow — a uniform, never a recompile, never a point light).
+      mat.emissive = colour.clone();
+      mat.emissiveIntensity = 1;
+      mat.roughness = 0.5;
+      mat.toneMapped = false;
+      break;
   }
   const finish = ref.texture ? FINISH[ref.texture] : undefined;
   if (finish && ref.kind !== "water") {
@@ -537,6 +545,10 @@ export class MaterialCache {
     const hit = this.materials.get(key);
     if (hit) return hit;
     const mat = baseMaterial(ref);
+    if (ref.kind === "glow") {
+      mat.emissiveIntensity = this.glow;
+      this.glows.add(mat);
+    }
     const map = this.textureFor(ref);
     if (map) {
       mat.map = map;
@@ -559,6 +571,19 @@ export class MaterialCache {
     return mat;
   }
 
+  /** How strongly every `glow` face shines (scene-rules.ts GLOW_BY_MOOD), and the faces that do. */
+  private glow = 1;
+  private readonly glows = new Set<MeshStandardMaterial>();
+
+  /** Set the glow of every LED face — a uniform written in place, so a mood switch recompiles
+   *  nothing. True when anything changed (the caller invalidates the frame). */
+  setGlow(level: number): boolean {
+    if (level === this.glow) return false;
+    this.glow = level;
+    for (const m of this.glows) m.emissiveIntensity = level;
+    return this.glows.size > 0;
+  }
+
   /** The emitters' halo, drawn once. */
   haloMap(): CanvasTexture | null {
     if (this.halo === undefined) this.halo = haloTexture();
@@ -568,6 +593,7 @@ export class MaterialCache {
   dispose(): void {
     for (const m of this.materials.values()) m.dispose();
     this.materials.clear();
+    this.glows.clear();
     for (const t of this.textures.values()) t.dispose();
     this.textures.clear();
     this.halo?.dispose();

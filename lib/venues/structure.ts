@@ -14,6 +14,8 @@ import type { ElementStyle } from "@/lib/element-style";
 import type { ArcSpec, MapShape, Product, RingSpec } from "@/lib/catalog/types";
 import { canHollow } from "@/lib/catalog/types";
 import { footprintBounds, resolveFootprint, shapeFootprint, uShapeBandOf, type Footprint } from "@/lib/studio/footprint";
+import { customShapeBounds } from "@/lib/studio/footprint";
+import { hasCorners, shapedOutline } from "@/lib/studio/shaped-outline";
 import {
   absoluteControlPoints,
   bulgeDepthMm,
@@ -33,6 +35,8 @@ import { FALLBACK_CHAIR, NEW_BLOCK, chairRowsLayout } from "../design-document/c
 import type { ChairStyle } from "@/lib/catalog/symbols";
 import type { FeatureClimb } from "./climb";
 import type { FeatureCurtain } from "./curtain";
+import type { FeatureLed } from "./led";
+import { NEW_PERGOLA, pergolaOfProduct, type Pergola } from "./pergola";
 import { isMain } from "../self-check";
 
 export interface StructureNode {
@@ -52,6 +56,14 @@ export interface Wall {
   b: string; // StructureNode id
   kind: WallKind;
   curve?: EdgeCurve | null; // bow, stored as offsets from a→b (same convention as lib/studio/hall)
+  /** The wall's own height, typed (the user, 2026-11-07: "define walls height, not must to be an
+   *  area" — a half wall, a מחיצה inside a hall, a parapet over an open terrace; "the ceiling does
+   *  not have one height"). It WINS over what the room would give it, higher or lower: a wall lower
+   *  than its zone's ceiling simply stops under the roof, which does not move. On an `edge` it makes
+   *  the kerb a fence of that height in 3D; on the plan an edge stays the line it is. Absent = the
+   *  height is DERIVED, exactly as before (lib/scene/envelope.ts wallHeightMm). Set through
+   *  setWallHeight, which drops the key rather than store an empty one. */
+  heightMm?: number;
 }
 
 // Doors hang off a wall id rather than a positional index. The old Hall stored `wallIndex` into an
@@ -164,7 +176,15 @@ export function doorDistanceFrom(e: Pick<StructureEntrance, "widthMm" | "measure
 //
 // A curtain (the user, same day: "a default וילון, like אמרה has in both halls — can be removed or
 // changed in the sketch") hangs on a WALL: its span is stored, its box derived (./curtain.ts).
-export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "column" | "other" | "plant" | "surface" | "stairs" | "ramp" | "seating" | "fountain" | "curtain";
+//
+// The venue's own LED (2026-11-07, spec §7.3): a strip is a line of light on a RAIL — a wall at a
+// height, a side of a stage or a bar, two points in the air — its box derived from the rail as a
+// curtain's is (./led.ts); a screen is a box, drawn as the catalog's LED screen.
+//
+// A pergola (2026-11-07, spec §5): posts at its outline's corners, beams along its sides, a roof of
+// slats, a deck, a cloth or nothing across them (./pergola.ts) — the one definition a hired pergola
+// in the catalog shares. Tables stand under it, so only its posts are in anyone's way.
+export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "column" | "other" | "plant" | "surface" | "stairs" | "ramp" | "seating" | "fountain" | "curtain" | "pergola" | "led" | "screen";
 
 /** A `column` feature's parts (./column.ts). Its footprint — width × depth, square or round — is the
  *  PLINTH it stands on; the shaft rises from it `shaftMm` across, with a base moulding `baseMm`
@@ -189,6 +209,23 @@ export interface FeatureSeating extends ChairRows {
   /** One chair's box. Absent = a dining chair's (FALLBACK_CHAIR). */
   chairWidthMm?: number;
   chairDepthMm?: number;
+}
+
+/** A pool's שפה — the stone band round its water — or the edging round any surface (the user,
+ *  2026-11-07: "add to pool שפה like a stroke"; ./rim.ts). The band is cut INSIDE the feature's own
+ *  outline, `widthMm` deep, by the hollow band's arithmetic (lib/studio/footprint.ts buildHollow):
+ *  the outline is untouched and the WATER shrinks — so the box the handles drag is still the pool's.
+ *  It is floor: people stand on it, so the pool's obstacle is the water's edge (./rim.ts
+ *  obstacleFootprint). A band as deep as the shape leaves no water at all. Absent (or width 0) =
+ *  none, and a pool draws to its outline's edge exactly as before. */
+export interface FeatureRim {
+  widthMm: number;
+  /** What the band is laid in — the ground materials' textures. */
+  material: SurfaceMaterial;
+  /** How far the band stands above the floor in 3D. Absent/0 = flush. */
+  raisedMm?: number;
+  /** Its tint (`fill`) and opacity — the material's own colour when absent. */
+  style?: ElementStyle;
 }
 
 /** What a `surface` feature is laid in — the ground under everything else: a lawn, a paved court, a
@@ -253,6 +290,12 @@ export interface StructureFeature {
    *  numbers are what the resize handles drag. */
   outline?: Point[];
   edgeCurves?: (EdgeCurve | null)[];
+  /** A RADIUS per point of `outline`, mm, aligned to it (null = a square corner) — a hand-drawn
+   *  pool, surface or building rounded at its corners (lib/studio/shaped-outline.ts, 2026-11-07).
+   *  A measurement, so it is not scaled when the feature is resized; turned into arcs where the
+   *  footprint is built (featureFootprint), so every reader that honours `edgeCurves` draws them.
+   *  Absent = every corner square, exactly as before. */
+  corners?: (number | null)[];
   /** iff `shape === "arc"`: how much of its circle, and how wide the band (widthMm is the circle). */
   arc?: ArcSpec;
   /** iff `shape === "oval-ring"`: the band and the opening, which the two measurements do not say. */
@@ -276,11 +319,20 @@ export interface StructureFeature {
   seating?: FeatureSeating;
   /** iff `kind === "column"`: the shaft and its base (./column.ts). Absent reads as a new column's. */
   column?: FeatureColumn;
+  /** iff `kind === "pergola"`: its posts, roof, slats and lattice sides (./pergola.ts). Absent reads
+   *  as a new pergola's. */
+  pergola?: Pergola;
   /** iff `kind === "curtain"`: the wall stretch it hangs on and which side (./curtain.ts). The box
    *  is derived from it and written with it; a curtain with no span keeps the box it has. */
   curtain?: FeatureCurtain;
+  /** iff `kind === "led"`: the rail the strip runs along and its colour (./led.ts). The box is
+   *  derived from the rail and written with it, as a curtain's is. */
+  led?: FeatureLed;
   /** iff `kind === "surface"`. Absent on a surface reads as paving — see surfaceMaterial. */
   surface?: SurfaceMaterial;
+  /** iff `kind` is "pool" or "surface": the band round its edge, inside its outline (./rim.ts).
+   *  Absent = none. */
+  rim?: FeatureRim;
   /** A surface laid wall to wall in a CLOSED SHAPE of the walls, without that shape being a zone
    *  (./face-surfaces.ts): its outline is re-laid on the shape after every edit of the walls, and
    *  it takes no drag, resize or turn of its own. Absent = a free surface (or any other feature). */
@@ -308,7 +360,10 @@ export interface StructureFeature {
 export function featureMovable(f: Pick<StructureFeature, "kind" | "movable">): boolean {
   // Chairs in rows too: an event sets the ceremony where its חופה is tonight. A curtain is "movable"
   // so a sketch may take it DOWN for its event (the drawing pins it to its wall either way).
-  return f.movable ?? (f.kind === "bar" || f.kind === "stage" || f.kind === "seating" || f.kind === "curtain");
+  // The venue's LED strip likewise (spec 2026-11-07 §7.3): pinned to its rail, taken down for one
+  // event. Its screen is the room's, like a column.
+  if (f.movable === undefined && f.kind === "led") return true;
+  return f.movable ??(f.kind === "bar" || f.kind === "stage" || f.kind === "seating" || f.kind === "curtain");
 }
 
 /** A plant's species, with the one fallback a hand-edited or half-saved row could need. */
@@ -345,6 +400,9 @@ export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
   seating: "שורות כיסאות",
   fountain: "מזרקה",
   curtain: "וילון",
+  led: "פס לד",
+  screen: "מסך לד",
+  pergola: "פרגולה",
 };
 
 export interface VenueStructure {
@@ -448,6 +506,19 @@ export function setWallAngle(s: VenueStructure, wallId: string, angleDeg: number
   const wall = s.walls.find((w) => w.id === wallId);
   const pts = wall ? wallPoints(s, wall) : null;
   return pts ? reaimWall(s, wallId, wallLengthMm(pts.a, pts.b), angleDeg) : s;
+}
+
+/** Types a wall's own height (Wall.heightMm), in whole millimetres — or, with no number (or 0, or
+ *  anything not a positive length), hands it back to the room: the key is DROPPED, not stored
+ *  empty, so a wall that was never typed and one typed and cleared read exactly alike. Per wall:
+ *  the bar never sets a room's walls at once (the user, 2026-11-07). */
+export function setWallHeight(s: VenueStructure, wallId: string, heightMm: number | undefined): VenueStructure {
+  const wall = s.walls.find((w) => w.id === wallId);
+  if (!wall) return s;
+  const h = heightMm !== undefined && Number.isFinite(heightMm) && heightMm >= 1 ? Math.round(heightMm) : undefined;
+  if (h === wall.heightMm) return s;
+  const { heightMm: _was, ...rest } = wall;
+  return { ...s, walls: s.walls.map((w) => (w.id === wallId ? (h === undefined ? rest : { ...rest, heightMm: h }) : w)) };
 }
 
 // --- curved walls ----------------------------------------------------------
@@ -682,9 +753,9 @@ function counterKept(f: StructureFeature, patch: Partial<Omit<StructureFeature, 
 
 /** Gives a feature its first flight of stairs, sized to the deck it climbs (see ./stairs.ts). */
 /** The feature's shape, size and height that make it a stage to the sketch's stage module. */
-type StageSource = Pick<StructureFeature, "x" | "y" | "rotationDeg" | "shape" | "widthMm" | "depthMm" | "heightMm" | "outline" | "edgeCurves" | "arc" | "ring" | "edgeItems" | "stairs"> & { id?: string };
+type StageSource = Pick<StructureFeature, "x" | "y" | "rotationDeg" | "shape" | "widthMm" | "depthMm" | "heightMm" | "outline" | "edgeCurves" | "arc" | "ring" | "edgeItems" | "stairs"> & Pick<StructureFeature, "corners"> & { id?: string };
 
-const GEOMETRY_KEYS: (keyof StructureFeature)[] = ["shape", "widthMm", "depthMm", "outline", "edgeCurves", "arc", "ring"];
+const GEOMETRY_KEYS: (keyof StructureFeature)[] = ["shape", "widthMm", "depthMm", "outline", "edgeCurves", "arc", "ring", "corners"];
 
 function dropLegacyStairs<T extends { stairs?: FeatureStairs }>(f: T): T {
   if (!("stairs" in f)) return f;
@@ -795,6 +866,12 @@ const FEATURE_DEFAULTS: Record<FeatureKind, Pick<StructureFeature, "widthMm" | "
   fountain: { widthMm: 3000, depthMm: 3000, heightMm: 1500, shape: "circle" },
   // A band along its wall (./curtain.ts re-lays it); no height of its own — it hangs from the ceiling.
   curtain: { widthMm: 4000, depthMm: 220, heightMm: 0, shape: "rect" },
+  // A strip along its rail (./led.ts re-lays it): a thin band; its height is the rail's.
+  led: { widthMm: 4000, depthMm: 60, heightMm: 0, shape: "rect" },
+  // An LED wall: 4 m wide, 10 cm deep, 2.5 m tall, its FRONT (+y) the face that lights.
+  screen: { widthMm: 4000, depthMm: 100, heightMm: 2500, shape: "rect" },
+  // A 4 × 4 pergola, 2.6 m to the top of its slats (./pergola.ts).
+  pergola: { widthMm: 4000, depthMm: 4000, heightMm: 2600, shape: "rect" },
 };
 
 // A plant's rough size is the species', not the kind's: a palm's crown is metres across and a pot
@@ -821,6 +898,9 @@ export function newFeature(kind: FeatureKind, at: Point, variant?: PlantSpecies 
   }
   if (kind === "seating") return { ...base, label: FEATURE_KIND_LABEL.seating, ...FEATURE_DEFAULTS.seating, seating: { ...NEW_BLOCK } };
   if (kind === "column") return { ...base, label: FEATURE_KIND_LABEL.column, ...FEATURE_DEFAULTS.column, column: { ...NEW_COLUMN } };
+  // Fixed in every sketch, like a column (featureMovable); at /halls it is dragged and sized as
+  // drawn until somebody pins it (`locked`).
+  if (kind === "pergola") return { ...base, label: FEATURE_KIND_LABEL.pergola, ...FEATURE_DEFAULTS.pergola, pergola: { ...NEW_PERGOLA } };
   return { ...base, label: FEATURE_KIND_LABEL[kind], ...FEATURE_DEFAULTS[kind] };
 }
 
@@ -874,6 +954,8 @@ export function newFeatureFromProduct(kind: FeatureKind, product: Product, at: P
     // comes across as itself — with the band and opening its two numbers cannot say. A square ח
     // brings its measured counter depth the same way (uShapeBandOf).
     ...((shape === "oval-ring" || shape === "horseshoe" || shape === "rounded-u" || shape === "u-shape") && product.appearance?.ring ? { ring: product.appearance.ring } : {}),
+    // A hired pergola set down as the venue's own: its post and roof come across (./pergola.ts).
+    ...(kind === "pergola" ? { pergola: pergolaOfProduct(product) } : {}),
   };
 }
 
@@ -885,7 +967,7 @@ export function newFeatureFromProduct(kind: FeatureKind, product: Product, at: P
  *  a feature's two numbers are what its resize handles drag and what the inspector shows, so an
  *  outline that ignored them would be a shape the plan claims is 4m wide and draws at 3. */
 export function featureFootprint(
-  f: Pick<StructureFeature, "shape" | "widthMm" | "depthMm" | "outline" | "edgeCurves" | "arc" | "ring">,
+  f: Pick<StructureFeature, "shape" | "widthMm" | "depthMm" | "outline" | "edgeCurves" | "arc" | "ring"> & Pick<StructureFeature, "corners">,
 ): Footprint {
   return shapeFootprint(f.shape, {
     widthMm: f.widthMm,
@@ -897,29 +979,44 @@ export function featureFootprint(
     // A quarter's box is one radius across, so its circle is twice the width.
     diameterMm: f.shape === "quarter-circle" ? f.widthMm * 2 : f.widthMm,
     ...(f.shape === "custom" && f.outline && f.outline.length >= 3
-      ? scaleOutline(f.outline, f.edgeCurves, f.widthMm, f.depthMm)
+      ? scaleOutline(f.outline, f.edgeCurves, f.widthMm, f.depthMm, f.corners)
       : {}),
   });
 }
 
 /** An outline recentred on its own bounding box and stretched to `widthMm` × `depthMm`. Edge curves
  *  are offsets from their own endpoints (lib/studio/geometry), so they scale by the same two factors
- *  and stay attached to the edge they bow. */
+ *  and stay attached to the edge they bow.
+ *
+ *  A BOWED or ROUNDED outline is measured as it is DRAWN (2026-11-07): its box is the box of the
+ *  shape with its bows and arcs (customShapeBounds samples them), not of its points — every drawer
+ *  centres a custom footprint on that box, so measured by its points a side bowed out pushed the
+ *  whole drawing off its position by half the bow, and stretched it by the bow besides. Measured as
+ *  drawn, an outline baked by asOutline (lib/venues/face-surfaces.ts) is scaled by exactly 1 and
+ *  lands exactly where its points were dragged. Corner radii are applied AFTER the stretch — a
+ *  radius is a measurement, R30 stays R30. A straight, square outline is measured by its points as
+ *  it always was. */
 function scaleOutline(
   outline: Point[],
   edgeCurves: (EdgeCurve | null)[] | undefined,
   widthMm: number,
   depthMm: number,
+  corners?: (number | null)[],
+  /** True: the stretched points and bows WITHOUT the corners rounded (featureOutlineShape). */
+  unrounded = false,
 ): { outline: Point[]; edgeCurves?: (EdgeCurve | null)[] } {
-  const minX = Math.min(...outline.map((p) => p.x));
-  const maxX = Math.max(...outline.map((p) => p.x));
-  const minY = Math.min(...outline.map((p) => p.y));
-  const maxY = Math.max(...outline.map((p) => p.y));
+  const drawn = edgeCurves?.some(Boolean) || hasCorners(corners);
+  const shaped = drawn ? shapedOutline(outline, edgeCurves, corners) : null;
+  const box = shaped ? customShapeBounds(shaped.outline, shaped.edgeCurves) : null;
+  const minX = box ? box.minX : Math.min(...outline.map((p) => p.x));
+  const maxX = box ? box.maxX : Math.max(...outline.map((p) => p.x));
+  const minY = box ? box.minY : Math.min(...outline.map((p) => p.y));
+  const maxY = box ? box.maxY : Math.max(...outline.map((p) => p.y));
   const sx = maxX > minX ? widthMm / (maxX - minX) : 1;
   const sy = maxY > minY ? depthMm / (maxY - minY) : 1;
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
-  return {
+  const scaled = {
     outline: outline.map((p) => ({ x: (p.x - cx) * sx, y: (p.y - cy) * sy })),
     ...(edgeCurves
       ? {
@@ -928,6 +1025,27 @@ function scaleOutline(
           ),
         }
       : {}),
+  };
+  return hasCorners(corners) && !unrounded ? shapedOutline(scaled.outline, scaled.edgeCurves, corners) : scaled;
+}
+
+/** A hand-drawn feature's points, bows and radii in its OWN frame, exactly where its drawing puts
+ *  them — stretched as featureFootprint stretches them, and moved by the same shift every drawer
+ *  applies (a custom footprint is drawn centred on the box of what is drawn, rounded corners and
+ *  all). What the hall editor's outline handles stand on. Null for a shape that is not drawn by hand. */
+export function featureOutlineShape(f: Pick<StructureFeature, "shape" | "widthMm" | "depthMm" | "outline" | "edgeCurves" | "corners">): {
+  outline: Point[];
+  edgeCurves?: (EdgeCurve | null)[];
+  corners?: (number | null)[];
+} | null {
+  if (f.shape !== "custom" || !f.outline || f.outline.length < 3) return null;
+  const raw = scaleOutline(f.outline, f.edgeCurves, f.widthMm, f.depthMm, f.corners, true);
+  const drawn = hasCorners(f.corners) ? shapedOutline(raw.outline, raw.edgeCurves, f.corners) : raw;
+  const b = customShapeBounds(drawn.outline, drawn.edgeCurves);
+  return {
+    outline: raw.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy })),
+    ...(raw.edgeCurves ? { edgeCurves: raw.edgeCurves } : {}),
+    ...(f.corners ? { corners: f.corners } : {}),
   };
 }
 
@@ -987,6 +1105,23 @@ if (isMain(import.meta.url)) {
   // The guarantee is "the wall did not change size", not a bit-exact float.
   assert(Math.abs(wallLengthMm(tp.a, tp.b) - 4000) < 1, "re-aiming a wall keeps its length");
   assert(Math.round(wallAngleDeg(tp.a, tp.b)) === 45, "…at exactly the angle asked for");
+
+  // --- setWallHeight ----------------------------------------------------------------------------
+  // A typed height is stored in whole millimetres on that wall alone; cleared (or 0, or nonsense) the
+  // key is GONE, so the wall reads exactly as one never typed — the derived height comes back.
+  {
+    const typed = setWallHeight(base, "w-shared", 1200.4);
+    assert(typed.walls.find((w) => w.id === "w-shared")!.heightMm === 1200, "a typed wall height is stored, in whole millimetres");
+    assert(typed.walls.filter((w) => w.heightMm !== undefined).length === 1, "…on that wall alone — never the room's other walls");
+    assert(!("heightMm" in base.walls.find((w) => w.id === "w-shared")!), "…without touching the structure it was given");
+    for (const cleared of [undefined, 0, -5, NaN]) {
+      const back = setWallHeight(typed, "w-shared", cleared).walls.find((w) => w.id === "w-shared")!;
+      assert(!("heightMm" in back), `clearing the height (${cleared}) drops the key — the wall is derived again`);
+    }
+    assert(setWallHeight(typed, "w-shared", 1200) === typed, "the same height again is no edit");
+    assert(setWallHeight(base, "no-such-wall", 1200) === base, "an unknown wall id is a no-op");
+    assert(setWallLength(typed, "w-shared", 6000).walls.find((w) => w.id === "w-shared")!.heightMm === 1200, "a wall keeps its height through a change of length");
+  }
 
   // A length of zero is not an edit, it's a request to collapse a wall into nothing — refused.
   assert(setWallLength(base, "w-shared", 0) === base, "a zero length is rejected rather than collapsing the wall");
@@ -1106,6 +1241,14 @@ if (isMain(import.meta.url)) {
   assert(roundBar.shape === "circle" && roundBar.widthMm === 1500 && roundBar.depthMm === 1500, "a round bar is as wide as it is across");
   assert(featureFootprint(roundBar).kind === "circle", "…and draws as a circle of that width");
 
+  // A pergola (./pergola.ts): a new one is 4 × 4 × 2.6 on 15cm posts with slats, fixed in a sketch;
+  // a hired row set down at /halls brings its post and its roof across.
+  const pergola = newFeature("pergola", { x: 0, y: 0 });
+  assert(pergola.widthMm === 4000 && pergola.depthMm === 4000 && pergola.heightMm === 2600 && pergola.pergola?.postMm === 150 && pergola.pergola.roof === "slats", "a new pergola: 4 × 4, 2.6 m, 15cm posts, slats");
+  assert(!featureMovable(pergola), "…fixed in every sketch");
+  const pergolaRow = newFeatureFromProduct("pergola", { ...uBar, id: "p-perg", category: "pergolas", categoryFields: { postMm: 120 }, appearance: { shape: "rect", content: "none", symbolStyle: "fabric" } }, { x: 0, y: 0 });
+  assert(pergolaRow.kind === "pergola" && pergolaRow.pergola?.postMm === 120 && pergolaRow.pergola.roof === "fabric", "a pergola row lands with its post and its cloth roof");
+
   // A row drawn hollow comes across as the outline it resolves to — one keyhole, baked like the
   // arc — and a band opened into two pieces as its outer shape, solid: a feature is one outline.
   {
@@ -1222,6 +1365,28 @@ if (isMain(import.meta.url)) {
     assert(removed.entrances.length === 0, "a wall taken away takes its windows with it, like its doors");
     assert(newFeature("fountain", { x: 0, y: 0 }).shape === "circle" && newFeature("fountain", { x: 0, y: 0 }).heightMm === 1500, "a new fountain is a round basin with the height of its jet");
     assert(!featureMovable({ kind: "fountain" }), "a fountain is the property's — a sketch does not move it");
+  }
+
+  // CURVES AND CORNERS on a hand-drawn feature (lib/studio/shaped-outline.ts, 2026-11-07): the
+  // footprint carries the arcs as curves, is drawn exactly in its box, and a radius is a measurement
+  // the feature's stretch does not scale.
+  {
+    const sq = [{ x: -3000, y: -1500 }, { x: 3000, y: -1500 }, { x: 3000, y: 1500 }, { x: -3000, y: 1500 }];
+    const pool = { shape: "custom" as const, widthMm: 6000, depthMm: 3000, outline: sq, corners: [500, 500, 500, 500] };
+    const fp = featureFootprint(pool);
+    assert(fp.kind === "custom" && fp.outline.length === 8 && (fp.edgeCurves ?? []).filter(Boolean).length === 4, "a rounded feature's footprint has its arcs as curves");
+    const b = footprintBounds(fp);
+    assert(Math.abs(b.w - 6000) < 1 && Math.abs(b.h - 3000) < 1, `…and still fills its box (${b.w.toFixed(1)} × ${b.h.toFixed(1)})`);
+    const wide = featureFootprint({ ...pool, widthMm: 12000 });
+    const firstArc = wide.kind === "custom" ? wide.edgeCurves!.findIndex(Boolean) : -1;
+    const arcChord = wide.kind === "custom" ? Math.hypot(wide.outline[firstArc + 1].x - wide.outline[firstArc].x, wide.outline[firstArc + 1].y - wide.outline[firstArc].y) : 0;
+    assert(Math.abs(arcChord - 500 * Math.SQRT2) < 1, `…stretched twice as wide, its corners stay R500 (chord ${arcChord.toFixed(1)})`);
+    // A side bowed out is measured as drawn: the box is width × depth with the bow inside it, and the
+    // drawing is centred on it — before, the points were, and the bow hung half outside the box.
+    const bowed = { shape: "custom" as const, widthMm: 6000, depthMm: 4000, outline: sq, edgeCurves: [setBulgeDepth(sq[0], sq[1], null, 1000), null, null, null] };
+    const bb = footprintBounds(featureFootprint(bowed));
+    assert(Math.abs(bb.w - 6000) < 1 && Math.abs(bb.h - 4000) < 2, `a bowed feature is drawn exactly in its box (${bb.w.toFixed(1)} × ${bb.h.toFixed(1)})`);
+    assert(featureFootprint({ shape: "custom", widthMm: 6000, depthMm: 3000, outline: sq }).kind === "custom", "a plain custom feature is drawn as it always was");
   }
 
   console.log("venue structure self-check passed");

@@ -23,7 +23,13 @@ import { productById } from "@/lib/catalog/storage";
 import type { Composition, Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { CATEGORIES, CATEGORY_BY_ID, DESIGN_PASS_GROUPS, anchorOf, categoryInPass, isRunner, passGroups, placesOnce, type CategoryGroupId } from "@/lib/catalog/categories";
+import { builtInRug } from "@/lib/catalog/built-in";
 import { doorOpenings, nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
+import { curtainRail } from "@/lib/venues/curtain";
+import { isLedStrip, ledDropRail, ledRunRail, ledSideCandidates } from "@/lib/venues/led";
+import { defaultRailHeight, isRailed, nearestSideRail, railOf, sideCandidates, type Rail } from "@/lib/studio/rail";
+import { defaultClothHeight, isCeilingClothCategory, newCanopy, newRun, newSail, redrawnCloth, SAIL_MAX_TIES, snapTie, tieCandidates } from "@/lib/studio/ceiling-cloth";
+import { roofHeightAt, sketchPergolas } from "@/lib/venues/roofs";
 import { STAGE_SETTLE_MS, useSettled } from "./use-settled";
 import {
   DEFAULT_NUMBERING,
@@ -116,6 +122,9 @@ import { TablePatternPicker, type PatternGroup } from "./table-pattern-picker";
 import { carriedDressing, coverOf, isBlock, landOn, memberAt, patternUnits, tableFrame, unitOf, unitsOf, type DressUnit } from "./dressing-units";
 import { clearanceSubjects, itemGeometry, type ItemGeometry } from "./plan-geometry";
 import { adoptHung, hangCentreOf, hangPointOf, hangTargetsOf, positionHungAt, tableUnderHang } from "./hang-targets";
+import { COVERABLE_FEATURES, adoptCovers, featureName, layCover, primeCovers } from "@/lib/studio/cover";
+import { featureFootprint, type StructureFeature } from "@/lib/venues/structure";
+import { Frame as RugIcon, Plus } from "lucide-react";
 import { centreOver, hangHeightOf } from "@/lib/studio/hang";
 import { autoStack, floorStack, isStackable, landOnTop, restackTo, type StackBox, type StackEntry, type StackKind, type StackRef } from "@/lib/design-document/stacking";
 import { clipCount, copySelection, heldClip, holdClip, nextPasteStep, pasteInto, type Clip } from "@/lib/studio/clipboard";
@@ -166,6 +175,9 @@ const RAIL: Record<StudioMode, { groups?: CategoryGroupId[]; hint?: string }> = 
   design: { groups: DESIGN_PASS_GROUPS, hint: "לחצו על פריט עיצוב ואז על התוכנית — או גררו. פריטי שולחן — על שולחן; רצפה ותקרה — לכל נקודה." },
 };
 
+/** A curtain dropped where there is no wall and no tall side to hang it on stands on a straight rod
+ *  this long, centred on the drop (spec 2026-11-07 §6.2) — redrawn post by post from its bar. */
+const ROD_DROP_MM = 3000;
 /** The catalog categories a stage may be built from (see deckTypes in the screen below). */
 const STAGE_PIECE_CATEGORIES = ["stages", "stage-decks"];
 
@@ -371,6 +383,13 @@ export function StudioScreen({
   const [showClearance, setShowClearance] = useState(true);
   // "מילוי במות": null, drawing the area, or choosing which decks fill it (see stage-fill-panel.tsx).
   const [stageFill, setStageFill] = useState<StageFillState | null>(null);
+  // "וילון על מוט": the drape whose free-standing rod is being drawn on the canvas, post by post
+  // (components/rod-draw-pane.tsx) — null when no rod is being drawn.
+  const [rodDraw, setRodDraw] = useState<string | null>(null);
+  // A sail's ties, a ceiling drape's run or a canopy's area being drawn (lib/studio/ceiling-cloth.ts):
+  // for a NEW placement of `productId`, dropped at `start`, or redrawing `placementId`. `id` re-mounts
+  // the pane for each drawing.
+  const [clothDraw, setClothDraw] = useState<{ id: number; kind: "sail" | "run" | "canopy"; productId?: string; placementId?: string; start?: Point } | null>(null);
   const [saveState, setSaveState] = useState<"saving" | "saved" | "error">("saved");
   const [zoneFocus, setZoneFocus] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
@@ -439,7 +458,9 @@ export function StudioScreen({
       // drawing (hang-targets.ts adoptHung) — the one edit made on open. `persisted` stays the
       // server's copy, so an adopted link is saved once, and a document with nothing to adopt is
       // the same object and is not written back at all.
-      setHistory(initHistory(adoptHung(saved, arrangedStructure(plan.structure, saved))));
+      // …and every carpet laid over a surface or a stage is laid again over it (lib/studio/cover.ts
+      // adoptCovers): a lawn reshaped at /halls since reshapes its carpet now.
+      setHistory(initHistory(adoptCovers(adoptHung(saved, arrangedStructure(plan.structure, saved)), plan.structure, deckOf)));
       // What is already on the server, so the first render after a restore doesn't write it
       // straight back. Against localStorage that redundant save was free; it is a round trip now.
       persisted.current = saved;
@@ -455,6 +476,12 @@ export function StudioScreen({
     primeEventShades(workspace?.event?.shades);
     return () => primeEventShades(undefined);
   }, [workspace]);
+  // The venue a carpet laid over one of its surfaces is read against, by the reducer's settle
+  // (lib/studio/cover.ts) — primed the same way, and cleared on the way out.
+  useEffect(() => {
+    primeCovers({ structure: plan.structure, deckOf });
+    return () => primeCovers({});
+  }, [plan.structure]);
 
   // A CLIENT'S PROPOSAL waiting on this event (lib/proposals/, the client side): read when the event
   // resolves and whenever the window comes back into focus — the bell tells the designer, this is
@@ -618,6 +645,58 @@ export function StudioScreen({
     setHint(msg);
     clearTimeout(hintTimer.current);
     hintTimer.current = setTimeout(() => setHint(null), 2600);
+  };
+
+  /** What is overhead on this sketch, as a height (lib/venues/roofs.ts — rail.ts defaultRailHeight's
+   *  hook): read when a rod is placed, never per render — the venue as this event arranged it, every
+   *  zone on the property, and the pergolas hired into this drawing. */
+  const sketchRoofOf = () => roofHeightAt(arrangedStructure(plan.structure, doc), plan.all, sketchPergolas(doc.placements, (v) => resolve(v)?.product));
+
+  /** Begin drawing cloth in the air on the canvas (lib/studio/ceiling-cloth.ts): a new sail or drape
+   *  dropped off the rail (its drop is the first point), or a placed one drawn again from its bar.
+   *  Nothing is added until the drawing ends — one entry, and Escape leaves the plan untouched. */
+  const startClothDraw = (draw: { kind: "sail" | "run" | "canopy"; productId?: string; placementId?: string; start?: Point }) => {
+    // The armed row lets go (the pane takes every click from here), and so does a rod being drawn.
+    setArmedId(null);
+    setRodDraw(null);
+    setClothDraw({ ...draw, id: Date.now() });
+    showHint(
+      draw.kind === "sail"
+        ? "לחיצה לכל קשירה — ליד קיר או פינה של מבנה היא נקשרת אליהם, אחרת עמוד · לחיצה על הראשונה, Enter או הרביעית לסיום · Alt — עמוד · Esc לביטול"
+        : draw.kind === "run"
+          ? "לחיצה לקצה השני של הבד · Esc לביטול"
+          : "לחיצה לכל פינה של השטח · לחיצה על הראשונה או Enter לסגירה · Esc לביטול",
+    );
+  };
+  /** The drawing ended: the new sail or drape placed on its rail, or the redrawn one's rail replaced
+   *  — keeping what was typed for it (heights, width, sag, scallops). */
+  const finishClothDraw = (points: Point[]) => {
+    const draw = clothDraw;
+    setClothDraw(null);
+    if (!draw || points.length < 2) return;
+    const roof = sketchRoofOf();
+    const was = draw.placementId ? doc.placements.find((x) => x.id === draw.placementId) : undefined;
+    let rail: Rail;
+    if (draw.kind === "sail") {
+      // The pane put every point where its tie lands (a wall, a thing's corner, a post); read each
+      // tie back off its point against the same walls and things.
+      const tctx = { structure: plan.structure, candidates: tieCandidates(arrangedStructure(plan.structure, doc).features, doc, (v) => resolve(v)?.product) };
+      rail = newSail(points.slice(0, SAIL_MAX_TIES).map((q) => snapTie(q, tctx, 3)), (q) => defaultClothHeight(q, roof));
+    } else if (draw.kind === "run") rail = newRun(points[0], points[1], defaultClothHeight(points[0], roof));
+    else rail = newCanopy(points, defaultClothHeight(points[0], roof));
+    const prior = was ? railOf(was) : null;
+    if (prior) rail = redrawnCloth(prior, rail);
+    if (was) {
+      act({ type: "setPlacementRail", id: was.id, rail });
+      setSelected([{ kind: "placement", id: was.id }]);
+      return;
+    }
+    const product = draw.productId ? productById(draw.productId) : undefined;
+    if (!product) return;
+    const id = uid();
+    const at = { x: Math.round(points.reduce((n, q) => n + q.x, 0) / points.length), y: Math.round(points.reduce((n, q) => n + q.y, 0) / points.length) };
+    act({ type: "addPlacement", placement: { id, variantId: defaultVariantId(product), layer: product.layer, quantity: 1, rotation: 0, scale: 1, position: at, rail } });
+    setSelected([{ kind: "placement", id }]);
   };
 
   // F-3.3: auto-running table numbering, editable per table. Off the numbers the plan SHOWS — a
@@ -787,17 +866,60 @@ export function StudioScreen({
       return true;
     }
 
+    // A SAIL is drawn tie by tie and a CEILING DRAPE end to end, from the drop (spec 2026-11-07
+    // §6.3/§6.4) — it is placed when the drawing ends. An area of swags is the drape's bar's "ציור כשטח".
+    if (isCeilingClothCategory(product.category)) {
+      startClothDraw({ kind: product.category === "sails" ? "sail" : "run", productId: product.id, start: { x, y } });
+      return true;
+    }
+
     if (cat?.anchor === "wall") {
-      const near = nearestWall(plan.structure, { x, y });
-      if (!near) {
+      // On the nearest WALL, or the nearest SIDE of a thing tall enough to hang from (a building, a
+      // tall bar or backdrop, a hired stage — lib/studio/rail.ts sideCandidates), whichever is nearer
+      // the drop; the whole of it, which is the normal case and the one worth defaulting to — the two
+      // end grips shorten it from there. With neither in the room (an open lawn), it stands on a rod
+      // of its own, 3 m along the drop at the rod's height; the bar's "תלייה על מוט" draws any drape
+      // a rod post by post (spec §6.1, §6.2).
+      // Only the rails the row's CATEGORY takes (CategoryDef.rails — absent = every one).
+      const takes = (t: Rail["type"]) => !cat.rails || cat.rails.includes(t);
+      // An LED STRIP (spec 2026-11-07 §7.1, lib/venues/led.ts): the nearest wall at the floor line, or
+      // the nearest side of anything with height — a 40cm deck's edge, a bar's counter — whichever is
+      // nearer; with neither, a run through the drop at a rod's height. Its bar types the rest.
+      if (isLedStrip(product)) {
+        const led = ledDropRail(
+          plan.structure,
+          { x, y },
+          nearestWall(plan.structure, { x, y }),
+          ledSideCandidates(arrangedStructure(plan.structure, doc).features, doc, (v) => resolve(v)?.product),
+          defaultRailHeight({ x, y }, sketchRoofOf()),
+          takes,
+        );
+        if (!led) {
+          showHint("אין קיר או צד להניח עליו את הפס");
+          return false;
+        }
+        act({ type: "addPlacement", placement: { ...base, position: { x, y }, rail: led } });
+        landNew([{ kind: "placement", id }]);
+        setSelected([{ kind: "placement", id }]);
+        return true;
+      }
+      const near = takes("wall") ? nearestWall(plan.structure, { x, y }) : null;
+      const side = takes("side") ? nearestSideRail(sideCandidates(arrangedStructure(plan.structure, doc).features, doc, (v) => resolve(v)?.product), { x, y }) : null;
+      let rail: Rail;
+      if (side && (!near || side.distanceMm < near.distanceMm)) rail = side.rail;
+      else if (near) rail = { type: "wall", wallId: near.wallId, ...WHOLE_WALL };
+      else if (!takes("rod")) {
         showHint("אין קיר לתלות עליו — שרטטו את המתחם ב״אולמות״");
         return false;
+      } else {
+        const half = ROD_DROP_MM / 2;
+        // At what is overhead where it lands (lib/venues/roofs.ts): a zone's ceiling, a building's
+        // roof, the venue's pergola or a hired one in this sketch — the rod's 2.4 m under open sky.
+        rail = { type: "rod", points: [{ x: Math.round(x - half), y: Math.round(y) }, { x: Math.round(x + half), y: Math.round(y) }], heightMm: defaultRailHeight({ x, y }, sketchRoofOf()) };
       }
-      // Across the whole wall, which is the normal case and the one worth defaulting to; the two
-      // end handles shorten it from there.
       act({
         type: "addPlacement",
-        placement: { ...base, position: { x, y }, span: { wallId: near.wallId, ...WHOLE_WALL } },
+        placement: { ...base, position: { x, y }, rail },
       });
     } else if (product.layer === "table") {
       const t = tableUnder(doc.tables, { x, y });
@@ -1186,7 +1308,7 @@ export function StudioScreen({
       [
         ...doc.tables.filter((t) => inside(t.position)).map((t) => ({ kind: "table" as const, id: t.id })),
         ...doc.placements
-          .filter((p) => !p.tableId && !p.span && inside(p.position))
+          .filter((p) => !p.tableId && !isRailed(p) && inside(p.position))
           .map((p) => ({ kind: "placement" as const, id: p.id })),
       ],
       false,
@@ -1738,13 +1860,18 @@ export function StudioScreen({
     (featureId: string, productId: string) => {
       const f = plan.structure.features.find((x) => x.id === featureId);
       const product = catalog.find((p) => p.id === productId);
-      if (!f || f.kind !== "curtain" || !f.curtain || !product) return;
+      // The venue curtain's own rail (lib/venues/curtain.ts curtainRail — its legacy wall fields
+      // read the same way): on a wall the drape hangs on the wall's line as every hired drape does,
+      // on a side or a rod exactly where the venue's hung.
+      const venueRail = f?.kind === "curtain" ? curtainRail(f) : null;
+      if (!f || !venueRail || !product) return;
+      const rail: Rail = venueRail.type === "wall" ? { type: "wall", wallId: venueRail.wallId, from: venueRail.from, to: venueRail.to } : venueRail;
       const id = uid();
       batch([
         { type: "removeFeatures", featureIds: [featureId] },
         {
           type: "addPlacement",
-          placement: { id, variantId: defaultVariantId(product), layer: product.layer, quantity: 1, rotation: 0, scale: 1, position: { x: f.x, y: f.y }, span: { wallId: f.curtain.wallId, from: f.curtain.from, to: f.curtain.to } },
+          placement: { id, variantId: defaultVariantId(product), layer: product.layer, quantity: 1, rotation: 0, scale: 1, position: { x: f.x, y: f.y }, rail, ...(f.curtain?.dropMm ? { dropMm: f.curtain.dropMm } : {}) },
         },
       ]);
       setSelected([{ kind: "placement", id }]);
@@ -2052,7 +2179,7 @@ export function StudioScreen({
     (r: SelectionRef) => {
       if (r.kind !== "placement") return true;
       const p = doc.placements.find((x) => x.id === r.id);
-      return !!p && !p.tableId && !p.span;
+      return !!p && !p.tableId && !isRailed(p);
     },
     [doc.placements],
   );
@@ -4997,6 +5124,110 @@ export function StudioScreen({
     [docRefs, stackRefs, doc],
   );
 
+  // --- a carpet laid over a surface or a stage (lib/studio/cover.ts) -------------------------------
+  // A venue surface takes no click in the sketch (it is the room), so the verb is where a POINT is
+  // known: the right-click menu over a surface or a stage, and the stage bar's "…". Each lays one of
+  // the studio's `rugs` rows over it, or opens the drawer on a fresh one ("שטיח מותאם…") — a one-off
+  // unpriced row (spec DECIDE 6), laid over the same thing when it is saved.
+  /** What a carpet would be laid over: the link it gets, what to call it, and a first size and place
+   *  for a carpet the settle cannot lay yet. */
+  type CoverAim = { cover: { stageId?: string; featureId?: string }; kind: "stage" | "surface"; name: string; at: DocPoint; box: { widthMm: number; depthMm: number } };
+  // The studio's built-in שטיח (lib/catalog/built-in.ts) IS "שטיח מותאם…": laid to the thing it
+  // covers, no new row per use. So it is not listed again among the rows; a studio from before the
+  // kit (no built-in yet) keeps today's fresh row from the drawer.
+  const kitRug = useMemo(() => builtInRug(catalog), [catalog]);
+  // …and the dance floor among them: a floor laid over a surface or a stage the same way.
+  const rugRows = useMemo(() => catalog.filter((p) => (p.category === "rugs" || p.category === "dance-floors") && !p.archived && p !== kitRug), [catalog, kitRug]);
+  /** The carpet that "שטיח מותאם…" is making a row for — laid over this when the drawer saves. */
+  const coverPending = useRef<CoverAim | null>(null);
+  const layCarpet = useCallback(
+    (aim: CoverAim, variantId: string) => {
+      const id = uid();
+      const fresh: Placement = { id, variantId, layer: "floor", quantity: 1, position: aim.at, rotation: 0, scale: 1, sizeMm: aim.box, cover: aim.cover };
+      act({ type: "addPlacement", placement: layCover(fresh, doc, { structure: plan.structure, deckOf }) });
+      landNew([{ kind: "placement", id }]);
+      setSelected([{ kind: "placement", id }]);
+    },
+    [act, doc, plan.structure, landNew],
+  );
+  const customCarpet = useCallback(
+    (aim: CoverAim) => {
+      // The built-in rug, laid to the thing's size and outline (layCarpet → layCover) in its first
+      // shade — the designer changes the shade on its bar, like any placed rug.
+      if (kitRug) {
+        layCarpet(aim, defaultVariantId(kitRug));
+        return;
+      }
+      const rugs = CATEGORY_BY_ID.rugs;
+      if (!rugs) return;
+      const blank = blankProduct(rugs);
+      coverPending.current = aim;
+      setDrawer({
+        product: {
+          ...blank,
+          name: `שטיח ${aim.kind === "stage" ? "לבמה" : `ל${aim.name}`}`,
+          // Its size is the thing's; its colour the designer's to change; no price (DECIDE 6 — the
+          // quote line stays partial until it is priced), by the square metre when it is.
+          dimensions: { ...blank.dimensions, widthMm: Math.round(aim.box.widthMm), depthMm: Math.round(aim.box.depthMm) },
+          appearance: { ...blank.appearance, shape: "rect", content: "none", style: { fill: "#c8b49a" } },
+          priceUnit: "m2",
+        },
+        mode: "new",
+      });
+    },
+    [kitRug, layCarpet],
+  );
+  const coverLatest = useRef({ layCarpet, customCarpet });
+  coverLatest.current = { layCarpet, customCarpet };
+  /** The verb's rows for one thing: each rug row, then "שטיח מותאם…". `flat` = for the stage bar's
+   *  "…", which has no submenus — the thing named on each row. */
+  const coverItems = useCallback(
+    (aim: CoverAim, flat = false): ContextMenuItem[] => {
+      const on = aim.kind === "stage" ? "על הבמה" : "על המשטח";
+      const rows: ContextMenuItem[] = [
+        ...rugRows.map((product) => ({
+          label: flat ? (product.category === "dance-floors" ? `${product.name} ${on}` : `שטיח ${on}: ${product.name}`) : product.name,
+          icon: RugIcon,
+          onSelect: () => coverLatest.current.layCarpet(aim, defaultVariantId(product)),
+        })),
+        { label: flat ? `שטיח מותאם ${on}…` : "שטיח מותאם…", icon: Plus, onSelect: () => coverLatest.current.customCarpet(aim) },
+      ];
+      return flat ? rows : [{ label: `שטיח ${on}…`, icon: RugIcon, onSelect: () => {}, children: rows }];
+    },
+    [rugRows],
+  );
+  /** A stage as something to lay a carpet over. */
+  const stageAim = useCallback((s: StagePlacement): CoverAim => {
+    const b = footprintBounds({ kind: "custom", outline: s.stage.outline });
+    return { cover: { stageId: s.id }, kind: "stage", name: "הבמה", at: s.position, box: { widthMm: b.w, depthMm: b.h } };
+  }, []);
+  /** Right-click rows about the point: the stage the menu was opened on (or under the pointer), and
+   *  the smallest venue surface under the pointer — a bed inside a lawn is the bed. */
+  const coverMenuAt = useCallback(
+    (point: Point, refs: SelectionRef[]): ContextMenuItem[] => {
+      const out: ContextMenuItem[] = [];
+      const own = refs.length === 1 && refs[0].kind === "placement" ? doc.placements.find((x) => x.id === refs[0].id) : undefined;
+      const stage = (own?.stage ? own : [...doc.placements].reverse().find((x) => x.stage && pointInPolygon(point, stageOutlineInRoom(x as StagePlacement)))) as StagePlacement | undefined;
+      if (stage?.stage) out.push(...coverItems(stageAim(stage)));
+      const arranged = arrangedStructure(plan.structure, doc);
+      let best: { f: StructureFeature; area: number } | null = null;
+      for (const f of arranged.features) {
+        if (!COVERABLE_FEATURES.includes(f.kind)) continue;
+        for (const poly of footprintPolygons(featureFootprint(f), { x: f.x, y: f.y }, f.rotationDeg ?? 0)) {
+          if (!pointInPolygon(point, poly)) continue;
+          const b = footprintBounds(featureFootprint(f));
+          if (!best || b.w * b.h < best.area) best = { f, area: b.w * b.h };
+        }
+      }
+      if (best) {
+        const f = best.f;
+        out.push(...coverItems({ cover: { featureId: f.id }, kind: f.kind === "stage" ? "stage" : "surface", name: featureName(f), at: { x: f.x, y: f.y }, box: { widthMm: f.widthMm, depthMm: f.depthMm } }));
+      }
+      return out;
+    },
+    [doc, plan.structure, coverItems, stageAim],
+  );
+
   // What the eye offers: the zones this event occupies, or — for an event still being booked into
   // one — everything on the property, so the picker is never an empty list next to a drawn plan.
   const zoneOptions = useMemo(() => {
@@ -5105,6 +5336,7 @@ export function StudioScreen({
             alignKeyBox={alignSet ? alignSet[alignKey].box : null}
             alignGuide={alignGuideLine}
             onContextMenu={contextItems}
+            onContextMenuAt={coverMenuAt}
             onResizePlacement={(id, sizeMm, position) => {
               // A stage's handles stretch its OUTLINE — the decks follow on their own. A round one is
               // scaled whole (scaleStage): it stays the curve it is.
@@ -5134,6 +5366,7 @@ export function StudioScreen({
             onBowPlacement={(id, bows) => drag({ type: "setPlacementBows", id, bows })}
             onCornerPlacement={(id, corners) => drag({ type: "setPlacementCorners", id, corners })}
             onSpanPlacement={(id, span) => drag({ type: "setPlacementSpan", id, span })}
+            onRailPlacement={(id, rail) => drag({ type: "setPlacementRail", id, rail })}
             onDropProduct={dropProduct}
             onScale={(v) => {
               mmPerPx.current = v;
@@ -5148,6 +5381,32 @@ export function StudioScreen({
             stageFillActive={stageFill !== null}
             onStageFill={startStageFill}
             drawArea={stageFill?.phase === "draw" || stageTool?.kind === "level"}
+            rodDraw={
+              rodDraw
+                ? {
+                    onFinish: (points) => {
+                      const p = doc.placements.find((x) => x.id === rodDraw);
+                      const was = p ? railOf(p) : null;
+                      setRodDraw(null);
+                      if (!p) return;
+                      // An LED strip drawn free is a RUN between the two ends drawn (spec §7.1) — its
+                      // height kept when it was a run already.
+                      if (isLedStrip(resolve(p.variantId)?.product)) {
+                        const run = ledRunRail(points, was?.type === "run" ? was.heightMm : defaultRailHeight(points[0], sketchRoofOf()));
+                        if (run) act({ type: "setPlacementRail", id: p.id, rail: run });
+                        return;
+                      }
+                      // The height a rod had stays; a new one starts where a rod does (defaultRailHeight).
+                      const heightMm = was?.type === "rod" ? was.heightMm : defaultRailHeight(points[0], sketchRoofOf());
+                      act({ type: "setPlacementRail", id: p.id, rail: { type: "rod", points, heightMm, ...(was?.type === "rod" && was.cantilever ? { cantilever: was.cantilever } : {}) } });
+                    },
+                    onCancel: () => setRodDraw(null),
+                    // An LED strip's free run is its two ends — the second click ends it.
+                    maxPoints: isLedStrip(resolve(doc.placements.find((x) => x.id === rodDraw)?.variantId ?? "")?.product) ? 2 : undefined,
+                  }
+                : undefined
+            }
+            clothDraw={clothDraw ? { id: clothDraw.id, kind: clothDraw.kind, start: clothDraw.start, onFinish: finishClothDraw, onCancel: () => setClothDraw(null) } : undefined}
             areaShape={stageFill?.phase === "draw" && stageTool?.kind !== "level" ? (stageFill.shape ?? "corners") : "corners"}
             onArea={stageTool?.kind === "level" ? addLevel : openStageFill}
             onCancelArea={() => {
@@ -5449,17 +5708,34 @@ export function StudioScreen({
                 renderDesigns={renderDesigns}
                 onScale={(id, scale) => act({ type: "setPlacementScale", id, scale })}
                 onHang={(id, heightMm) => act({ type: "setPlacementHang", id, heightMm })}
+                roofOf={(pt) => sketchRoofOf()(pt)}
                 onCentreOver={centreHung}
                 onSpreadRow={spreadAlongRow}
                 onHangOverDressing={hangOverDressing}
                 onVessel={(ids, vessel) => act({ type: "setPlacementVessel", ids, vessel })}
+                onBorder={(ids, border) => act({ type: "setPlacementBorder", ids, border })}
                 onClimb={(id, edit) => act({ type: "setPlacementClimb", id, ...edit })}
                 onApplyToAllTables={spreadCloth}
                 onVariant={(id, variantId) => act({ type: "setPlacementVariant", id, variantId })}
                 onSpan={(id, span) => act({ type: "setPlacementSpan", id, span })}
+                onRail={(id, rail, dropMm) => act({ type: "setPlacementRail", id, rail, dropMm })}
+                onDrawRod={(id) => {
+                  setRodDraw(id);
+                  // An LED strip is drawn as a free run — its two ends (lib/venues/led.ts ledRunRail).
+                  const drawn = doc.placements.find((x) => x.id === id);
+                  if (drawn && isLedStrip(resolve(drawn.variantId)?.product)) return showHint("לחיצה בתחילת הפס ולחיצה בסופו · Esc לביטול");
+                  showHint("לחיצה לכל עמוד של המוט · Enter או לחיצה כפולה לסיום · Esc לביטול");
+                }}
+                onDrawCloth={(id, kind) => startClothDraw({ kind, placementId: id })}
                 onResize={(id, sizeMm) => act({ type: "resizePlacement", id, sizeMm })}
                 onBows={(id, bows) => act({ type: "setPlacementBows", id, bows })}
                 onCorners={(id, corners) => act({ type: "setPlacementCorners", id, corners })}
+                onCoverInset={(id, insetMm) => {
+                  const cover = doc.placements.find((x) => x.id === id)?.cover;
+                  if (cover) act({ type: "setPlacementCover", id, cover: { ...cover, insetMm } });
+                }}
+                onDetachCover={(id) => act({ type: "setPlacementCover", id, cover: null })}
+                stageCoverItems={soleStage ? coverItems(stageAim(soleStage), true) : undefined}
                 onRenumber={(id, number) => act({ type: "renumberTable", id, number })}
                 onStyleTable={(id, style) => act({ type: "styleTable", id, style })}
                 onDuplicate={duplicate}
@@ -5671,7 +5947,11 @@ export function StudioScreen({
         categories={drawerCategories}
         onSave={(p) => void (drawer?.mode === "new" ? addProduct(p) : drawer?.mode === "composite" ? addComposite(p) : updateProduct(p))}
         // No onDelete: the drawer shows no delete from the studio (see `drawer`).
-        onClose={() => setDrawer(null)}
+        onClose={() => {
+          setDrawer(null);
+          // A "שטיח מותאם…" let go unsaved lays nothing (a save has already taken it — addProduct).
+          coverPending.current = null;
+        }}
       />
     </div>
   );
@@ -5694,6 +5974,20 @@ export function StudioScreen({
   }
 
   async function addProduct(p: Product) {
+    // "שטיח מותאם…" (lib/studio/cover.ts): the new rug was made for a surface or a stage, and is laid
+    // over it once saved — not armed. Read before the save: the drawer's close clears it.
+    const aim = coverPending.current;
+    coverPending.current = null;
+    if (aim) {
+      if (await saveProduct(p)) {
+        setAddedIds((ids) => [p.id, ...ids]);
+        layCarpet(aim, defaultVariantId(p));
+        showHint(`${p.name} נוסף לקטלוג והונח ${aim.kind === "stage" ? "על הבמה" : `על ${aim.name}`} — המחיר נקבע בקטלוג`);
+      } else {
+        showHint("ההוספה לקטלוג נכשלה — נסו שוב");
+      }
+      return;
+    }
     if (await saveProduct(p)) {
       setAddedIds((ids) => [p.id, ...ids]);
       // Armed straight away: the reason it was made, mid-meeting, is to put it on the plan.

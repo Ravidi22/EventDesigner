@@ -30,6 +30,9 @@ import {
   Waves,
   type LucideIcon,
 } from "lucide-react";
+import { Monitor, Zap } from "lucide-react";
+// A pergola's posts and slats (lib/venues/pergola.ts) — the catalog's own icon for its pergolas.
+import { Columns3 } from "lucide-react";
 
 import {
   PLANT_SPECIES,
@@ -94,6 +97,10 @@ export const FEATURE_ICON: Record<FeatureKind, LucideIcon> = {
   // The catalog's own for its fountains (lib/catalog/categories.ts).
   fountain: Droplets,
   curtain: Blinds,
+  // The catalog's own for its LED strips and screens (lib/catalog/categories.ts).
+  led: Zap,
+  screen: Monitor,
+  pergola: Columns3,
 };
 
 /** The icon an add-element entry wears, keyed by its feature kind — or by "entrance" for the one

@@ -1,5 +1,16 @@
 import type { DesignDocumentContent, DesignGroup, DesignTable, Placement } from "../design-document/types";
+import { railMoved, type Rail } from "./rail";
+import { sailIsFree } from "./ceiling-cloth";
 import { isMain } from "../self-check";
+
+/** A rail made of its own points — a rod, a run, a canopy — names nothing in the room. */
+function ownsItsRail(p: Pick<Placement, "rail">): boolean {
+  const t: Rail["type"] | undefined = p.rail?.type;
+  // …and a sail standing on its own posts (lib/studio/ceiling-cloth.ts) — one tied to a wall or a
+  // thing names it, and is not copied, as a curtain on a wall is not.
+  if (p.rail?.type === "sail") return sailIsFree(p.rail);
+  return t === "rod" || t === "run" || t === "canopy";
+}
 
 // The studio's clipboard: what Ctrl+C took, and what Ctrl+V has to do to it before it can be added
 // to a document.
@@ -65,10 +76,13 @@ export function copySelection(
   const placementIds = new Set(refs.filter((r) => r.kind === "placement").map((r) => r.id));
   const tables = doc.tables.filter((t) => tableIds.has(t.id));
   const placements = doc.placements.filter((p) => {
-    if (anchoredToWall(p.variantId)) return false;
+    // …but a curtain on a rod of its own (lib/studio/rail.ts) names no wall and no thing: it is
+    // copied, and pasted a step along like any free item.
+    if (anchoredToWall(p.variantId) && !ownsItsRail(p)) return false;
     // A stage's banquette dressing comes with the stage, as a table's dressing comes with the table —
     // and so does what hangs OVER the table (Placement.over).
-    return (p.tableId !== undefined && tableIds.has(p.tableId)) || (p.over !== undefined && tableIds.has(p.over)) || (p.perch !== undefined && placementIds.has(p.perch.stageId)) || placementIds.has(p.id);
+    // …and the carpet laid over a stage (Placement.cover), as what lies on it.
+    return (p.tableId !== undefined && tableIds.has(p.tableId)) || (p.over !== undefined && tableIds.has(p.over)) || (p.perch !== undefined && placementIds.has(p.perch.stageId)) || (p.cover?.stageId !== undefined && placementIds.has(p.cover.stageId)) || placementIds.has(p.id);
   });
   return wholeGroups({ tables, placements, groups: doc.groups ?? [] });
 }
@@ -170,6 +184,12 @@ export function pasteInto(
     // A table-layer item's `position` is an offset within its table, not a point on the plan, so it
     // must NOT take the paste delta — the renderer clusters those onto the table itself.
     position: p.tableId === undefined ? { x: p.position.x + opts.dx, y: p.position.y + opts.dy } : p.position,
+    // A rail of its own points (a rod) moves with the paste; one on a wall or a thing stays on it.
+    ...(p.rail ? { rail: railMoved(p.rail, opts.dx, opts.dy) } : {}),
+    // A carpet laid over a stage that came along lies over the copy; over anything else (a venue
+    // surface, a stage left behind) it pastes DETACHED — the shape it was laid in, a step along — or
+    // the reducer's settle would put it straight back on its surface (lib/studio/cover.ts).
+    ...(p.cover === undefined ? {} : { cover: p.cover.stageId && remapP.has(p.cover.stageId) ? { ...p.cover, stageId: remapP.get(p.cover.stageId)! } : undefined }),
     // Never born locked (see the tables above).
     locked: undefined,
   }));
@@ -264,6 +284,26 @@ if (isMain(import.meta.url)) {
   // A drape is never copied, even when it is what was selected.
   const drape = copySelection(doc, [{ kind: "placement", id: "p-drape" }], isDrape);
   assert(clipCount(drape) === 0, "a wall-anchored drape has no second wall and is not copied");
+  const rodDoc: DesignDocumentContent = { ...doc, placements: [{ ...free("p-rod", "curtain", 0, 0), rail: { type: "rod", points: [{ x: 0, y: 0 }, { x: 3000, y: 0 }], heightMm: 2400 } }] };
+  const rodClip = copySelection(rodDoc, [{ kind: "placement", id: "p-rod" }], isDrape);
+  const rodPasted = pasteInto(rodClip, { dx: 500, dy: 200, firstNumber: 1, newId: () => "n" });
+  const pastedRail = rodPasted.placements[0]?.rail;
+  assert(clipCount(rodClip) === 1 && pastedRail?.type === "rod" && pastedRail.points[1].x === 3500 && pastedRail.points[1].y === 200, "a curtain on its own rod is copied, and its rod pasted a step along");
+  // Cloth in the air (lib/studio/ceiling-cloth.ts): a run and a sail on posts of its own copy and move;
+  // a sail tied to a wall names that wall, and stays.
+  const posts = [{ x: 0, y: 0 }, { x: 3000, y: 0 }, { x: 1500, y: 2000 }].map((p) => ({ p, heightMm: 3000, to: { kind: "post" as const } }));
+  const clothDoc: DesignDocumentContent = {
+    ...doc,
+    placements: [
+      { ...free("p-run", "curtain", 0, 0), rail: { type: "run", a: { x: 0, y: 0 }, b: { x: 4000, y: 0 }, heightMm: 3500, widthMm: 900 } },
+      { ...free("p-sail", "curtain", 0, 0), rail: { type: "sail", ties: posts } },
+      { ...free("p-tied", "curtain", 0, 0), rail: { type: "sail", ties: [{ ...posts[0], to: { kind: "wall", wallId: "w", t: 0.5 } }, posts[1], posts[2]] } },
+    ],
+  };
+  const clothClip = copySelection(clothDoc, ["p-run", "p-sail", "p-tied"].map((id) => ({ kind: "placement" as const, id })), isDrape);
+  const clothPasted = pasteInto(clothClip, { dx: 100, dy: 0, firstNumber: 1, newId: () => "n" }).placements.map((p) => p.rail);
+  assert(clipCount(clothClip) === 2 && clothPasted[0]?.type === "run" && clothPasted[0].a.x === 100 && clothPasted[0].widthMm === 900, "a run is copied and moved with its width");
+  assert(clothPasted[1]?.type === "sail" && clothPasted[1].ties[2].p.x === 1600, "a sail on its own posts is copied and moved; a tied one is not");
 
   // Selecting a table AND one of its items copies that item once, not twice.
   const both = copySelection(doc, [{ kind: "table", id: "t1" }, { kind: "placement", id: "p-vase" }], isDrape);
@@ -398,6 +438,28 @@ if (isMain(import.meta.url)) {
   assert(nextPasteStep() === 1 && nextPasteStep() === 2, "repeated pastes step further out");
   holdClip(one);
   assert(nextPasteStep() === 1, "a fresh copy starts the count again");
+
+  // A carpet laid over a stage comes with the stage and lies over the copy; one laid over a venue
+  // surface, or over a stage left behind, pastes detached — its shape kept (lib/studio/cover.ts).
+  {
+    const ring = [{ x: -500, y: -500 }, { x: 500, y: -500 }, { x: 500, y: 500 }, { x: -500, y: 500 }];
+    const covers: DesignDocumentContent = {
+      calibration: { mmPerUnit: 1 },
+      tables: [],
+      placements: [
+        { ...free("st", "deck", 0, 0), stage: { outline: ring, front: 0, decks: [] } },
+        { ...free("on-stage", "rug", 0, 0), cover: { stageId: "st" }, outline: ring },
+        { ...free("on-lawn", "rug", 5000, 0), cover: { featureId: "lawn" }, outline: ring },
+      ],
+    };
+    let k = 0;
+    const withStage = pasteInto(copySelection(covers, [{ kind: "placement", id: "st" }], isDrape), { dx: 100, dy: 0, firstNumber: 1, newId: () => `n${k++}` });
+    const copiedStage = withStage.placements.find((p) => p.stage)!;
+    const copiedRug = withStage.placements.find((p) => !p.stage);
+    assert(!!copiedRug && copiedRug.cover?.stageId === copiedStage.id, "a stage copied brings its carpet, laid over the copy");
+    const alone = pasteInto(copySelection(covers, [{ kind: "placement", id: "on-lawn" }, { kind: "placement", id: "on-stage" }], isDrape), { dx: 100, dy: 0, firstNumber: 1, newId: () => `m${k++}` });
+    assert(alone.placements.every((p) => !p.cover && p.outline === ring), "a carpet copied without what it covers pastes detached, its shape kept");
+  }
 
   console.log("clipboard self-check passed");
 }

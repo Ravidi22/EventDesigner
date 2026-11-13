@@ -11,9 +11,18 @@ import { ChairBlock } from "@/components/chair-block";
 import { CompositionPieces } from "@/components/composition-drawing";
 import { benchIsNumbered, standaloneBench } from "@/lib/design-document/bench";
 import { catalogVersion } from "@/lib/catalog/storage";
-import { resolveSpan, wallSegment, wallTrack, nearestWall } from "@/lib/studio/anchor";
+import { wallSegment, wallTrack, nearestWall } from "@/lib/studio/anchor";
+import { isRailed, nearestSideRail, railClothLine, railLines, railOf, rodPath, rodPointMoved, sideCandidates, sketchRailContext, type Rail, type RailLine } from "@/lib/studio/rail";
+import { RodMarks } from "@/components/curtain-cloth";
+import { RodDrawPane } from "@/components/rod-draw-pane";
+import { LedStripNode } from "./led-strip-node";
+import { isLedStrip, ledSideCandidates } from "@/lib/venues/led";
+import { CeilingClothNode, TIE_SNAP_PX, useClothTies } from "./ceiling-cloth-node";
+import { clothView, SAIL_MAX_TIES } from "@/lib/studio/ceiling-cloth";
+import { curtainStyleOf } from "@/lib/catalog/symbols";
 import { toLocalFrame, fromLocalFrame, outlinePathD, rotatedExtent } from "@/lib/studio/geometry";
 import { bowFromPoint, bowHandle, cornerFromPoint, cornerHandle, inwardOf, rugOutline, rugShapeOf, withBow, withCorner, type RugBows, type RugCorners } from "@/lib/studio/rug-shape";
+import { carpetFootprint, carpetPathD, carpetShape } from "@/lib/studio/cover";
 import { nudgeApart, overlappingAtStart, pushApart, type SolidBox } from "@/lib/studio/collide";
 import { featureFootprint, featureMovable, type VenueStructure } from "@/lib/venues/structure";
 import { resolveFootprint, resolveContent, footprintBounds, catalogBox, clampSize, resizeAxes, type Footprint } from "@/lib/studio/footprint";
@@ -30,12 +39,15 @@ import { VesselMark } from "@/components/vessel-mark";
 import { tableAreaMm2 } from "@/lib/studio/geometry";
 import { clampToTable, fromTableFrame, toTableFrame } from "@/lib/design-document/dressing";
 import { ClothDrape, ItemSymbol, RugPattern, SeatChair, SofaCushions } from "@/components/item-symbol";
+import { DanceFloorPattern } from "@/components/dance-floor";
+import { borderOf } from "@/lib/catalog/border";
 import { DrapePleatsAlong } from "@/components/curtain-cloth";
 import { WalkingLine, slopeTextSize } from "@/components/climb-glyph";
 import { EdgeItemHandles } from "@/components/stage-edge-handles";
 import { ItemSurface } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
+import { pergolaFromStyle, pergolaGeometry, pergolaPostOf, postSquare, type Pergola } from "@/lib/venues/pergola";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { labelAnchor } from "@/lib/studio/label-anchor";
@@ -227,6 +239,7 @@ export function CanvasStage({
   onBowPlacement,
   onCornerPlacement,
   onSpanPlacement,
+  onRailPlacement,
   onDropProduct,
   onScale,
   clearance,
@@ -236,6 +249,8 @@ export function CanvasStage({
   stageFillActive,
   onStageFill,
   drawArea,
+  rodDraw,
+  clothDraw,
   areaShape = "corners",
   onArea,
   onCancelArea,
@@ -263,6 +278,7 @@ export function CanvasStage({
   stairPick,
   onPickStair,
   onContextMenu,
+  onContextMenuAt,
   dressingTableId,
   onFocusTable,
   onExitDressing,
@@ -320,6 +336,10 @@ export function CanvasStage({
   onCornerPlacement?: (id: string, corners: RugCorners | null) => void;
   /** A drape's run along its wall, after dragging one of its ends. */
   onSpanPlacement: (id: string, span: WallSpan) => void;
+  /** A drape's RAIL after dragging one of its grips (lib/studio/rail.ts) — a wall's or a side's
+   *  stretch, a rod's post. Absent = a host that only knows walls: a wall rail goes to
+   *  onSpanPlacement, any other is not offered grips. */
+  onRailPlacement?: (id: string, rail: Rail) => void;
   onDropProduct: (productId: string, x: number, y: number) => void;
   /** The current zoom, in world mm per screen pixel. Reported up so the catalog rail can draw the
    *  thing being dragged at the size it will actually land — see catalog-rail.tsx. */
@@ -339,6 +359,14 @@ export function CanvasStage({
   onStageFill: () => void;
   /** Drawing the area: every click on the plan is a corner, whatever is under it. */
   drawArea: boolean;
+  /** Drawing a drape's free-standing ROD ("וילון על מוט", components/rod-draw-pane.tsx): every click
+   *  a post, Enter or a double-click ends it. Absent = not drawing one. */
+  /** `maxPoints` ends the drawing at that many clicks — an LED strip's free run is two. */
+  rodDraw?: { onFinish: (points: Point[]) => void; onCancel: () => void; maxPoints?: number };
+  /** Drawing a SAIL's ties (snapped to walls and corners), a ceiling drape's RUN (two clicks) or a
+   *  CANOPY's area (closed) — the rod tool's pane with its options (lib/studio/ceiling-cloth.ts).
+   *  `id` re-mounts the pane for a new drawing; `start` is the drop that began it. */
+  clothDraw?: { id: number; kind: "sail" | "run" | "canopy"; start?: Point; onFinish: (points: Point[]) => void; onCancel: () => void };
   /** …or, for a round stage, a centre and a size (a disc), a box (an oval), or a chord and a side (a
    *  half-round). Absent = corners. */
   areaShape?: AreaShape;
@@ -413,6 +441,10 @@ export function CanvasStage({
   /** The right-click menu for a set of things: the thing under the pointer (selected first, when
    *  it was not), or the whole selection when it was one of them or the click landed on floor. */
   onContextMenu?: (refs: SelectionRef[]) => ContextMenuItem[];
+  /** Rows about WHERE the right-click landed, whatever is selected — a venue surface takes no click
+   *  in the sketch, so "a carpet on this lawn" is only reachable through the point (lib/studio/
+   *  cover.ts). Put before the selection's rows; the menu opens on bare floor too when it has any. */
+  onContextMenuAt?: (point: Point, refs: SelectionRef[]) => ContextMenuItem[];
   /** The table being dressed (its focus mode): framed, the room held back behind a scrim, and the
    *  items on it free to be dragged about its top. Null = the whole plan, as usual. A table in a
    *  GROUP brings the whole block with it — framed as the one table the block is, every member and
@@ -540,6 +572,12 @@ export function CanvasStage({
   // drawn where they put it — and a drape still measures itself against the WALL, which nothing here
   // can move. Identity-stable when the event arranged nothing, which is most events.
   const structure = useMemo(() => arrangedStructure(plan.structure, doc), [plan.structure, doc]);
+  // What a drape's rail is read against (lib/studio/rail.ts): the property's walls, and a side rail's
+  // thing — a hired stage or backdrop of this document, else the venue's feature as arranged here.
+  const railCtx = useMemo(() => sketchRailContext(doc, plan.structure, structure, (v) => resolve(v)?.product), [doc, plan.structure, structure]);
+  // What a sail's ties are snapped against while one is dragged or drawn (./ceiling-cloth-node.tsx):
+  // stable, read at the moment of the gesture.
+  const clothTies = useClothTies(doc, plan.structure, structure);
 
   // Three bands rather than two, once the eye is pointed somewhere: the zone being worked in, the
   // event's other zones, and the property around them. Held back by opacity, never hidden — placing
@@ -649,6 +687,9 @@ export function CanvasStage({
     const s = new Set<string>();
     for (const t of doc.tables) if (t.locked) s.add(`table:${t.id}`);
     for (const p of doc.placements) if (p.locked) s.add(`placement:${p.id}`);
+    // A carpet laid over a surface or a stage goes where that goes (lib/studio/cover.ts): no knob, no
+    // resize, never carried by a group drag of its own.
+    for (const p of doc.placements) if (p.cover) s.add(`placement:${p.id}`);
     return s;
   }, [doc.tables, doc.placements]);
   const isLocked = (r: SelectionRef) => lockedKeys.has(`${r.kind}:${r.id}`);
@@ -717,6 +758,8 @@ export function CanvasStage({
           if (f.kind === "surface") continue;
           // Nor a curtain: it is the wall's face, not a thing to align a table to.
           if (f.kind === "curtain") continue;
+          // …nor an LED strip: a line of light on a wall or an edge, not furniture.
+          if (f.kind === "led") continue;
           out.push({
             ref: { kind: "feature", id: f.id },
             // Through its real shape, like everything else here: the venue's round bar is a
@@ -1762,6 +1805,10 @@ export function CanvasStage({
     cornerPlacement: (id: string, corners: RugCorners | null) => onCornerPlacement?.(id, corners),
     selectPlacement: (id: string, additive: boolean) => onSelect({ kind: "placement", id }, additive),
     spanPlacement: (id: string, span: WallSpan) => onSpanPlacement(id, span),
+    railPlacement: (id: string, rail: Rail) => {
+      if (onRailPlacement) onRailPlacement(id, rail);
+      else if (rail.type === "wall") onSpanPlacement(id, { wallId: rail.wallId, from: rail.from, to: rail.to });
+    },
   };
   const hostRef = useRef(hostNow);
   useLayoutEffect(() => {
@@ -1777,6 +1824,7 @@ export function CanvasStage({
       cornerPlacement: (id: string, corners: RugCorners | null) => hostRef.current.cornerPlacement(id, corners),
       selectPlacement: (id: string, additive: boolean) => hostRef.current.selectPlacement(id, additive),
       spanPlacement: (id: string, span: WallSpan) => hostRef.current.spanPlacement(id, span),
+      railPlacement: (id: string, rail: Rail) => hostRef.current.railPlacement(id, rail),
     }),
     [],
   );
@@ -1836,11 +1884,11 @@ export function CanvasStage({
       selected={[]}
       onSelect={() => onSelect(null, false)}
       contextMenuItems={
-        onContextMenu
-          ? () => {
+        onContextMenu || onContextMenuAt
+          ? (point: Point) => {
               const refs = contextRefs.current ?? selection;
               contextRefs.current = null;
-              return refs.length ? onContextMenu(refs) : [];
+              return [...(onContextMenuAt?.(point, refs) ?? []), ...(refs.length && onContextMenu ? onContextMenu(refs) : [])];
             }
           : undefined
       }
@@ -2188,9 +2236,11 @@ export function CanvasStage({
                 <CarpetNode
                   placement={p}
                   selected={isSel("placement", p.id)}
-                  locked={p.locked}
+                  // A carpet laid OVER a surface or a stage (Placement.cover) is where that is: it
+                  // selects and opens like a pinned one, and takes no drag or grip.
+                  locked={p.locked || !!p.cover}
                   ctx={ctx}
-                  drag={nodeProps({ kind: "placement", id: p.id }, !p.locked)}
+                  drag={nodeProps({ kind: "placement", id: p.id }, !p.locked && !p.cover)}
                   onResize={stable.resizePlacement}
                   onBow={onBowPlacement ? stable.bowPlacement : undefined}
                   onCorner={onCornerPlacement ? stable.cornerPlacement : undefined}
@@ -2412,22 +2462,63 @@ export function CanvasStage({
             {/* Drapes, over the wall they hang on — they are overhead (the ceiling layer), and a
                 wall drawn on top of a curtain would read as the curtain being behind it. */}
             {layerVisible.ceiling &&
-              sorted.drapes.map((p) => (
-                <DrapeNode
-                  key={p.id}
-                  placement={p}
-                  // The property's own walls, NOT the arranged copy: a curtain hangs on a wall, and
-                  // no arrangement on this surface can move a wall. Reading the arranged structure
-                  // here would be true but misleading about what a drape is anchored to.
-                  structure={plan.structure}
-                  selected={isSel("placement", p.id)}
-                  locked={p.locked}
-                  ctx={ctx}
-                  onSelect={stable.selectPlacement}
-                  onSpan={stable.spanPlacement}
-                  onEndSpan={stable.endGesture}
-                />
-              ))}
+              sorted.drapes.map((p) => {
+                const rail = railOf(p);
+                if (!rail) return null;
+                // An LED strip rides the same rail but is a line of light, not cloth (spec §7.1).
+                if (isLedStrip(resolve(p.variantId)?.product))
+                  return (
+                    <LedStripNode
+                      key={p.id}
+                      placement={p}
+                      rail={rail}
+                      lines={railLines(rail, railCtx)}
+                      selected={isSel("placement", p.id)}
+                      locked={p.locked || !onRailPlacement}
+                      ctx={ctx}
+                      onSelect={stable.selectPlacement}
+                      onRail={stable.railPlacement}
+                      onEndSpan={stable.endGesture}
+                    />
+                  );
+                // A SAIL or a CEILING DRAPE (lib/studio/ceiling-cloth.ts) — its own node, by its category.
+                const cloth = clothView(resolve(p.variantId)?.product.category, rail, railCtx);
+                if (cloth)
+                  return (
+                    <CeilingClothNode
+                      key={p.id}
+                      placement={p}
+                      rail={rail}
+                      cloth={cloth}
+                      selected={isSel("placement", p.id)}
+                      grabbable={activeLayer === "ceiling"}
+                      locked={p.locked || !onRailPlacement}
+                      ctx={ctx}
+                      ties={clothTies}
+                      onSelect={stable.selectPlacement}
+                      onRail={stable.railPlacement}
+                      onEnd={stable.endGesture}
+                    />
+                  );
+                return (
+                  <DrapeNode
+                    key={p.id}
+                    placement={p}
+                    rail={rail}
+                    // Read against the property's own walls, NOT the arranged copy (no arrangement
+                    // on this surface moves a wall), and a side rail's thing where this event stood
+                    // it (railCtx). Remembered per rail, so an untouched drape keeps its lines.
+                    lines={railLines(rail, railCtx)}
+                    selected={isSel("placement", p.id)}
+                    // A host that knows only walls (onSpanPlacement) is offered no grips on any other rail.
+                    locked={p.locked || (!onRailPlacement && rail.type !== "wall")}
+                    ctx={ctx}
+                    onSelect={stable.selectPlacement}
+                    onRail={stable.railPlacement}
+                    onEndSpan={stable.endGesture}
+                  />
+                );
+              })}
 
             {/* OVERHEAD, and therefore last. A chandelier is not standing on the floor: nothing down
                 there can be in front of it, so it is drawn after everything, outside the floor stack.
@@ -2504,7 +2595,28 @@ export function CanvasStage({
             </g>
           )}
 
-          {armed && onPlaceArmed && !placeGhost && !drawArea && !stairPick && (
+          {rodDraw && <RodDrawPane ctx={ctx} maxPoints={rodDraw.maxPoints} onFinish={rodDraw.onFinish} onCancel={rodDraw.onCancel} />}
+          {clothDraw && (
+            <RodDrawPane
+              key={clothDraw.id}
+              ctx={ctx}
+              start={clothDraw.start}
+              onFinish={clothDraw.onFinish}
+              onCancel={clothDraw.onCancel}
+              closed={clothDraw.kind !== "run"}
+              maxPoints={clothDraw.kind === "run" ? 2 : clothDraw.kind === "sail" ? SAIL_MAX_TIES : undefined}
+              snap={
+                clothDraw.kind === "sail"
+                  ? (raw, free) => {
+                      const tie = clothTies.snap(raw, ctx.mm(TIE_SNAP_PX), free);
+                      return { p: tie.p, tied: tie.to.kind !== "post" };
+                    }
+                  : undefined
+              }
+            />
+          )}
+
+          {armed && onPlaceArmed && !placeGhost && !drawArea && !stairPick && !rodDraw && (
             <ArmedPane
               product={armed}
               size={armedSize ?? undefined}
@@ -2987,54 +3099,95 @@ function swatchOf(r: Resolved | undefined, fallback = "var(--color-surface)"): s
   return r?.swatch ?? fallback;
 }
 
-// A drape hung on a wall (F: curtains). Drawn as a band lying along the wall's own line, thick
-// enough to read at plan scale — a curtain is a surface you see, not a hairline. Selecting it puts
-// a handle on each end; dragging one slides that end along the wall, which is the whole vocabulary
-// this thing needs (its other dimension is the wall's, and its height is the product's).
+// A drape hung on its RAIL (F: curtains; lib/studio/rail.ts): a wall's stretch as it always was, a
+// stretch of one side of a tall thing, or a free-standing rod. Drawn as a band lying along the line,
+// thick enough to read at plan scale — a curtain is a surface you see, not a hairline — on the wall's
+// own line (a sketch drape has always straddled it), on the side it hangs out to for a side rail, and
+// under its rod for a rod, the rod's posts marked. Selecting it puts a grip on each end: on a wall or
+// a side the end slides along it, on a rod each post moves (a ר's arm held to its reach). Its other
+// dimension is the line's, and its height the rail's.
 const DRAPE_MM = 220; // drawn thickness of the band, in plan millimetres
+
+/** Where a dragged grip of a drape puts its rail — the one vocabulary the end grips need. */
+function railGripped(rail: Rail, line: RailLine, which: number, p: Point): Rail | null {
+  if (rail.type === "wall" && line.wall) {
+    const t = line.wall.track.nearestT(p);
+    const lo = Math.min(rail.from, rail.to);
+    const hi = Math.max(rail.from, rail.to);
+    return which === 0 ? { ...rail, from: t, to: hi } : { ...rail, from: lo, to: t };
+  }
+  if (rail.type === "side" && line.side) {
+    const side = line.side.side;
+    let best = { d: Infinity, s: 0 };
+    for (let k = 0; k < side.points.length - 1; k++) {
+      const a = side.points[k];
+      const b = side.points[k + 1];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const l2 = dx * dx + dy * dy;
+      const u = l2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
+      const d = Math.hypot(p.x - (a.x + dx * u), p.y - (a.y + dy * u));
+      if (d < best.d) best = { d, s: side.cum[k] + u * Math.sqrt(l2) };
+    }
+    const t = side.L > 0 ? best.s / side.L : 0;
+    const lo = Math.min(rail.from, rail.to);
+    const hi = Math.max(rail.from, rail.to);
+    return which === 0 ? { ...rail, from: t, to: hi } : { ...rail, from: lo, to: t };
+  }
+  if (rail.type === "rod") return rodPointMoved(rail, which, p);
+  return null;
+}
 
 const DrapeNode = memo(function DrapeNode({
   placement,
-  structure,
+  rail,
+  lines,
   selected,
   locked,
   ctx,
   onSelect,
-  onSpan,
+  onRail,
   onEndSpan,
 }: {
   placement: Placement;
-  structure: VenueStructure;
+  /** Its rail, read once (railOf) — the legacy span as a wall rail. */
+  rail: Rail;
+  /** The rail resolved (lib/studio/rail.ts) — remembered per rail, so a drape that did not move is
+   *  handed the same array frame after frame and this node is not redrawn. */
+  lines: RailLine[];
   selected: boolean;
   /** Pinned on this plan (Placement.locked): selected, but its end grips are not offered. */
   locked?: boolean;
   ctx: CanvasLayerContext;
   onSelect: (id: string, additive: boolean) => void;
-  onSpan: (id: string, span: WallSpan) => void;
+  onRail: (id: string, rail: Rail) => void;
   /** The end of one slide along the wall — the host closes its history entry here. */
   onEndSpan: () => void;
 }) {
-  // A drape whose wall was deleted at the venue draws nothing. It is not lost — it still lists and
-  // prices, and the inspector offers it a new wall — but there is no honest place to put it here.
-  const span = placement.span;
-  const resolved = span ? resolveSpan(structure, span) : null;
-  if (!span || !resolved) return null;
+  // A drape whose wall (or thing) was deleted draws nothing. It is not lost — it still lists and
+  // prices, and the inspector says so — but there is no honest place to put it here.
+  const line = lines[0];
+  if (!line) return null;
 
   const r = resolve(placement.variantId);
   const colour = swatchOf(r, "var(--color-accent-tint)");
-  const { from, to } = resolved;
+  const style = curtainStyleOf(r?.product);
+  // The cloth's middle line: the rail's own line when it straddles it, a half band out on its side.
+  const cloth = railClothLine(line, DRAPE_MM);
+  // The grips: the two ends of the stretch on a wall or a side; every post (and a cantilevered tip)
+  // on a rod.
+  const grips: Point[] = rail.type === "rod" ? rodPath(rail) : [line.path[0], line.path[line.path.length - 1]];
 
-  const dragEnd = (which: "from" | "to") => ({
+  const dragGrip = (which: number) => ({
     onPointerDown: (e: React.PointerEvent) => {
       e.stopPropagation();
       onSelect(placement.id, false);
       startPointerGesture(e, {
         onMove: (ev) => {
-          // Slid along the wall itself — round the bow on a curved one (lib/studio/anchor.ts).
-          const track = wallTrack(structure, span.wallId);
-          if (!track) return;
-          const t = track.nearestT(ctx.clientToMm(ev.clientX, ev.clientY));
-          onSpan(placement.id, which === "from" ? { ...span, from: t } : { ...span, to: t });
+          // Slid along the wall itself — round the bow on a curved one, round a curved side — or a
+          // rod's post carried to the pointer.
+          const next = railGripped(rail, line, which, ctx.clientToMm(ev.clientX, ev.clientY));
+          if (next) onRail(placement.id, next);
         },
         onEnd: (_ev, moved) => {
           if (moved) onEndSpan();
@@ -3044,8 +3197,8 @@ const DrapeNode = memo(function DrapeNode({
     onClick: (e: React.MouseEvent) => e.stopPropagation(),
   });
 
-  // The run along the wall itself: two points on a straight wall, the bow followed on a curved one.
-  const run = resolved.path.map((q) => `${q.x},${q.y}`).join(" ");
+  const run = cloth.map((q) => `${q.x},${q.y}`).join(" ");
+  const where = rail.type === "wall" ? "על הקיר" : rail.type === "side" ? "על הצד" : "על מוט";
   return (
     <g>
       <polyline
@@ -3058,7 +3211,7 @@ const DrapeNode = memo(function DrapeNode({
         opacity={0.9}
         tabIndex={0}
         role="button"
-        aria-label={`${r?.label ?? "וילון"} — ${(resolved.lengthMm / 1000).toFixed(1)} מטר על הקיר`}
+        aria-label={`${r?.label ?? "וילון"} — ${(line.lengthMm / 1000).toFixed(1)} מטר ${where}`}
         className="cursor-pointer touch-none focus:outline-none"
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => {
@@ -3066,8 +3219,11 @@ const DrapeNode = memo(function DrapeNode({
           onSelect(placement.id, isAdditiveClick(e));
         }}
       />
-      {/* Its pleats — the fabric gathered on the rail — so a drape reads as cloth, not as paint. */}
-      <DrapePleatsAlong line={resolved.path} depthMm={DRAPE_MM} ink={isDark(colour) ? "#ffffff" : "var(--color-ink)"} opacity={isDark(colour) ? 0.45 : 0.35} />
+      {/* Its pleats — the fabric gathered on the rail, in the row's style — so a drape reads as
+          cloth, not as paint. */}
+      <DrapePleatsAlong line={cloth} depthMm={DRAPE_MM} ink={isDark(colour) ? "#ffffff" : "var(--color-ink)"} opacity={isDark(colour) ? 0.45 : 0.35} style={style} />
+      {/* A rod's own marks: the rod and a post at every end and bend but a cantilevered tip. */}
+      {line.posts && <RodMarks path={line.path} posts={line.posts} postMm={ctx.mm(6)} ink="var(--color-ink-soft)" />}
       {/* The selection outline is a second stroke rather than a colour change: a drape's whole
           point is the colour it is, and highlighting must not repaint it. */}
       <polyline
@@ -3080,10 +3236,7 @@ const DrapeNode = memo(function DrapeNode({
         className="pointer-events-none"
       />
       {selected && !locked &&
-        ([
-          ["from", from],
-          ["to", to],
-        ] as const).map(([which, p]) => (
+        grips.map((p, which) => (
           <circle
             key={which}
             cx={p.x}
@@ -3095,21 +3248,21 @@ const DrapeNode = memo(function DrapeNode({
             vectorEffect="non-scaling-stroke"
             tabIndex={0}
             role="slider"
-            aria-label={which === "from" ? "תחילת הווילון על הקיר" : "סוף הווילון על הקיר"}
-            aria-valuenow={Math.round((which === "from" ? span.from : span.to) * 100)}
-            aria-valuemin={0}
-            aria-valuemax={100}
+            aria-label={rail.type === "rod" ? `עמוד ${which + 1} של המוט` : which === 0 ? "תחילת הווילון" : "סוף הווילון"}
             className="cursor-ew-resize touch-none focus:outline-none"
             onKeyDown={(e) => {
-              const step = (e.shiftKey ? 0.1 : 0.02) * (e.key === "ArrowLeft" ? -1 : 1);
-              if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+              // On a wall the arrows slide the end along it, as before (2% a step, 10% with Shift).
+              if (rail.type !== "wall" || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
               e.preventDefault();
-              const at = which === "from" ? span.from : span.to;
+              const step = (e.shiftKey ? 0.1 : 0.02) * (e.key === "ArrowLeft" ? -1 : 1);
+              const lo = Math.min(rail.from, rail.to);
+              const hi = Math.max(rail.from, rail.to);
+              const at = which === 0 ? lo : hi;
               const next = Math.max(0, Math.min(1, at + step));
-              onSpan(placement.id, which === "from" ? { ...span, from: next } : { ...span, to: next });
+              onRail(placement.id, which === 0 ? { ...rail, from: next, to: hi } : { ...rail, from: lo, to: next });
               onEndSpan();
             }}
-            {...dragEnd(which)}
+            {...dragGrip(which)}
           />
         ))}
     </g>
@@ -3149,10 +3302,15 @@ const CarpetNode = memo(function CarpetNode({
   const halfW = size.widthMm / 2;
   const halfD = size.depthMm / 2;
   const rot = placement.rotation || 0;
+  // A carpet laid to an OUTLINE — over a surface or a stage, or let go from one (lib/studio/cover.ts):
+  // that shape, its holes cut, centred on its box; no bows or rounded corners of its own (those are a
+  // rectangle's), and while it is laid OVER something no grip at all — its caller passes `locked`.
+  const carpet = carpetShape(placement);
+  const carpetFp = carpet ? carpetFootprint(carpet) : undefined;
   // Curved sides and rounded corners (lib/studio/rug-shape.ts): the same rug, about the same centre,
   // with the outline's sides bowed and its corners cut to arcs. The surface and picture are drawn
   // through a footprint the seams recentre on its bounds, so they are carried back by `centre`.
-  const rugShape = rugShapeOf(placement);
+  const rugShape = carpet ? undefined : rugShapeOf(placement);
   const bows = rugShape?.bows;
   const corners = rugShape?.corners;
   const bowed = rugShape ? rugOutline(size.widthMm, size.depthMm, rugShape) : null;
@@ -3182,30 +3340,42 @@ const CarpetNode = memo(function CarpetNode({
 
   return (
     <g transform={rot ? `rotate(${rot} ${x} ${y})` : undefined}>
-      {bowed ? (
+      {carpet ? (
+        <path {...shape} transform={`translate(${x} ${y})`} d={carpetPathD(carpet)} fillRule="evenodd" />
+      ) : bowed ? (
         <path {...shape} transform={`translate(${x} ${y})`} d={outlinePathD(bowed.outline, bowed.edgeCurves)} />
       ) : (
-        <rect {...shape} x={x - halfW} y={y - halfD} width={size.widthMm} height={size.depthMm} rx={Math.min(size.widthMm, size.depthMm) * 0.03} />
+        <rect {...shape} x={x - halfW} y={y - halfD} width={size.widthMm} height={size.depthMm} rx={r?.product.category === "dance-floors" ? 0 : Math.min(size.widthMm, size.depthMm) * 0.03} />
       )}
       {/* A lawn runner, a sisal mat, a printed rug: what it is woven of (or the designer's own
           picture of it), tinted by its shade. Over the rect (which keeps the pointer), under the
           border and the handles. */}
       {anySurface(r?.product.appearance) && (
         <g transform={`translate(${x + (bowed?.centre.x ?? 0)} ${y + (bowed?.centre.y ?? 0)})`} className="pointer-events-none">
-          <ItemSurface appearance={r?.product.appearance} footprint={bowed?.footprint ?? { kind: "rect", widthMm: size.widthMm, depthMm: size.depthMm }} color={r?.swatch ?? r?.product.appearance?.style?.fill} seed={placement.id} />
+          <ItemSurface appearance={r?.product.appearance} footprint={carpetFp ?? bowed?.footprint ?? { kind: "rect", widthMm: size.widthMm, depthMm: size.depthMm }} color={r?.swatch ?? r?.product.appearance?.style?.fill} seed={placement.id} />
         </g>
       )}
       {/* A rug's border and fringe — the two things that make a rectangle on the floor a rug. On a
           rug with curved sides they follow the curves. */}
       {r?.product.category === "rugs" && (
         <g transform={`translate(${x} ${y})`}>
-          <RugPattern w={size.widthMm} h={size.depthMm} shape={rugShape} />
+          {/* Its contour (lib/catalog/border.ts) — this plan's, else its row's — in place of the woven
+              line; on a plain rug laid inside the rectangle's own rounded corners. */}
+          <RugPattern w={size.widthMm} h={size.depthMm} shape={rugShape} border={borderOf(placement, r?.product)} rx={Math.min(size.widthMm, size.depthMm) * 0.03} footprint={carpetFp} />
+        </g>
+      )}
+      {/* A dance floor (lib/catalog/dance-floor.ts): its panels over its fill, cut to its outline —
+          bowed, rounded, or laid over a surface or a stage with its holes. Its row's picture switch
+          (MapAppearance.symbol) brings back the plain fill, as the card shows. */}
+      {r?.product.category === "dance-floors" && r.product.appearance?.symbol !== false && (
+        <g transform={`translate(${x} ${y})`}>
+          <DanceFloorPattern w={size.widthMm} h={size.depthMm} shape={rugShape} footprint={carpetFp} holes={carpet?.holes} tone={swatchOf(r, style.fill)} />
         </g>
       )}
       {/* The middle of each side: pull it and the side curves, like the shape canvas's diamond. A
           double-click straightens that side again. */}
       {selected && !locked &&
-        onBow &&
+        onBow && !carpet &&
         [0, 1, 2, 3].map((side) => {
           const h = bowHandle(size.widthMm, size.depthMm, rugShape, side);
           const at = { x: x + h.x, y: y + h.y };
@@ -3260,7 +3430,7 @@ const CarpetNode = memo(function CarpetNode({
           squares that corner. It rides the arc's middle, a few pixels in, clear of the resize grip
           on the corner itself. */}
       {selected && !locked &&
-        onCorner &&
+        onCorner && !carpet &&
         [0, 1, 2, 3].map((i) => {
           const inset = ctx.mm(14);
           const g = inwardOf(i);
@@ -3439,7 +3609,7 @@ const MIN_CARPET_MM = 300; // a rug you can still grab a corner of
  *  put on a table or hung on a wall, and is therefore not standing on the floor whatever its
  *  category says. */
 function solidKindOf(p: Placement): string | undefined {
-  if (p.tableId || p.span) return undefined;
+  if (p.tableId || isRailed(p)) return undefined;
   return resolve(p.variantId)?.solid;
 }
 
@@ -3641,7 +3811,7 @@ const TableNode = memo(function TableNode({
         e.preventDefault();
       }}
     >
-      {clothColour && !overflow && <ClothDrape footprint={footprint} colour={clothColour} />}
+      {clothColour && !overflow && <ClothDrape footprint={footprint} colour={clothColour} border={cloth ? borderOf(cloth, resolve(cloth.variantId)?.product) : undefined} />}
       <FootprintShape footprint={footprint} {...shape} />
       {/* Bare (no cloth, no overflow warning) a table shows what it is made of — a farm table's
           planks, a marble top, each of its shapes in its own — over its fill, and its edge drawn
@@ -4197,6 +4367,19 @@ function samePlacementProps<P extends object>(a: P, b: P): boolean {
 
 const PlacementNode = memo(PlacementNodeView, samePlacementProps);
 
+/** What takes the pointer on an unselected pergola: a band along its outline and its posts. */
+function PergolaHit({ footprint, pergola }: { footprint: Footprint; pergola: Pergola }) {
+  const g = pergolaGeometry(footprint, pergola);
+  return (
+    <>
+      <FootprintShape footprint={footprint} fill="none" stroke="transparent" strokeWidth={14} vectorEffect="non-scaling-stroke" style={{ pointerEvents: "stroke" }} />
+      {g?.posts.map((p, i) => (
+        <polygon key={i} points={postSquare(p, g.postMm).map((q) => `${q.x},${q.y}`).join(" ")} fill="transparent" stroke="transparent" strokeWidth={10} vectorEffect="non-scaling-stroke" />
+      ))}
+    </>
+  );
+}
+
 function PlacementNodeView({
   placement,
   x,
@@ -4401,14 +4584,23 @@ function PlacementNodeView({
           overhead={overhead}
           chairStyle={chairStyleOf(product)}
           drawStyle={drawStyleOf(product)}
+          postMm={pergolaPostOf(product)}
           rise={rise}
           turnDeg={rise ? placement.rotation : undefined}
           mirrored={rise ? placement.mirrored : undefined}
           textMm={rise ? ctx.mm(11) : undefined}
           bench={bench ?? undefined}
+          border={symbol === "runner" ? borderOf(placement, product) : undefined}
+          // An LED screen writes its row's name behind it (components/led-glyph.tsx).
+          label={symbol === "screen" ? product.name : undefined}
         />
       )}
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} />}
+      {/* A PERGOLA (lib/venues/pergola.ts) has tables standing under it: until it is selected it is
+          taken by its posts and a finger-wide band along its outline alone, never by the floor
+          inside it — the chandelier's rule (`grabbable`), for the same reason. Selected, its whole
+          footprint is its handle again (the invisible fill below). */}
+      {symbol === "pergola" && !selected && product && <PergolaHit footprint={footprint} pergola={pergolaFromStyle(drawStyleOf(product), pergolaPostOf(product))} />}
       {bench && showLabel && (benchNumber !== null || benchSeats > 0) && (
         // At the band's own label point for a shaped banquette (mid-band on a crescent, not the box
         // centre in the air it curves round) — a straight strip's is (0,0).
@@ -4434,7 +4626,7 @@ function PlacementNodeView({
           overhead={overhead}
           fill="#ffffff"
           fillOpacity={0}
-          className={overhead && !grabbable ? "pointer-events-none" : undefined}
+          className={(overhead && !grabbable) || (symbol === "pergola" && !selected) ? "pointer-events-none" : undefined}
           stroke={selected ? "var(--color-accent)" : overhead ? style.stroke : "none"}
           strokeOpacity={selected ? 1 : style.strokeOpacity}
           strokeWidth={selected ? 2 : 1}
@@ -5437,7 +5629,14 @@ function ArmedPane({
   const footprint: Footprint = size ? { kind: "rect", ...size } : resolveFootprint(product);
   const table = onTable && at ? tableUnder(doc.tables, at) : undefined;
   const near = onWall && at ? nearestWall(structure, at) : null;
-  const wall = near ? wallTrack(structure, near.wallId) : null;
+  // …or the side of a tall thing, when that is nearer — where the drop will hang it (lib/studio/rail.ts,
+  // the studio's dropProduct reads the same two).
+  const arrangedNow = onWall && at ? arrangedStructure(structure, doc) : null;
+  // A strip runs along any side with height (a 40cm deck's edge); a curtain needs a tall one.
+  const sidesOf = isLedStrip(product) ? ledSideCandidates : sideCandidates;
+  const side = arrangedNow && at ? nearestSideRail(sidesOf(arrangedNow.features, doc, (v) => resolve(v)?.product), at) : null;
+  const sideLine = side && (!near || side.distanceMm < near.distanceMm) && arrangedNow ? railLines(side.rail, sketchRailContext(doc, structure, arrangedNow, (v) => resolve(v)?.product))[0] : undefined;
+  const wall = near && !sideLine ? wallTrack(structure, near.wallId) : null;
   const ghost = (p: Point, faint = false) => (
     <g className="pointer-events-none" transform={`translate(${p.x} ${p.y})`} opacity={faint ? 0.45 : 1}>
       {/* A composite lands as its parts, about this point: they are what follows the pointer. */}
@@ -5509,6 +5708,18 @@ function ArmedPane({
         </>
       )}
       {at && onTable && !table && ghost(at, true)}
+      {at && onWall && sideLine && (
+        <polyline
+          className="pointer-events-none"
+          points={sideLine.path.map((q) => `${q.x},${q.y}`).join(" ")}
+          fill="none"
+          stroke="var(--color-accent)"
+          strokeOpacity={0.55}
+          strokeWidth={10}
+          strokeLinecap="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
       {at && onWall && wall && (
         <polyline
           className="pointer-events-none"
