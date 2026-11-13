@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, type ReactNode } from "react";
 import { Button } from "./button";
-import { CloseButton } from "./close-button";
+import { TriangleAlert } from "lucide-react";
+import { MODAL_CLASS, ModalHeader } from "./modal-frame";
 
 // The question asked before something is destroyed.
 //
@@ -47,16 +48,19 @@ export function ConfirmDialog({
       ref={ref}
       onClose={onClose}
       onCancel={onClose}
-      className="modal m-auto max-h-none rounded-lg border border-border bg-surface p-0 text-ink shadow-dialog"
+      className={MODAL_CLASS}
     >
-      <div className="w-[min(92vw,25rem)] p-5 text-right">
-        <div className="flex items-start justify-between gap-3">
-          <h2 className="font-display text-base leading-snug text-ink">{title}</h2>
-          {/* tabIndex -1: showModal() focuses the first focusable element, and that must stay
-              ביטול (see the footer). The ✕ is for the pointer; Escape is the keyboard's way out. */}
-          <CloseButton tabIndex={-1} className="-me-1 -mt-1" onClick={onClose} />
-        </div>
-        {body && <div className="mt-2 text-sm leading-relaxed text-ink-soft">{body}</div>}
+      <div className="w-[min(92vw,25rem)] text-right">
+        {/* tabIndex -1 on the ✕: showModal() focuses the first focusable element, and that must stay
+            ביטול (see the footer). The ✕ is for the pointer; Escape is the keyboard's way out. */}
+        <ModalHeader
+          tile={<TriangleAlert className="h-[18px] w-[18px] text-alert" strokeWidth={1.75} />}
+          title={<span className="whitespace-normal leading-snug">{title}</span>}
+          onClose={onClose}
+          closeTabIndex={-1}
+        />
+        <div className="p-5">
+        {body && <div className="text-sm leading-relaxed text-ink-soft">{body}</div>}
 
         {/* ⚠ THE ORDER IS LOAD-BEARING. showModal() focuses the first focusable element, so ביטול is
             first — a dialog that appears under someone's hands must not be able to destroy anything
@@ -76,6 +80,7 @@ export function ConfirmDialog({
           >
             {confirmLabel}
           </button>
+        </div>
         </div>
       </div>
     </dialog>

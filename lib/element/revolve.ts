@@ -99,6 +99,16 @@ export function cleanRevolve(points: readonly RevolvePoint[]): RevolvePoint[] {
   return pts;
 }
 
+/** The profile rescaled so its widest ring is exactly 1 — an envelope's own reading (`profileAt`:
+ *  the plan's circle is the widest ring), so the silhouette drawn on the view is the one the room
+ *  builds. Shape kept; already reaching 1, it is just made sound. */
+export function normalisedRevolve(points: readonly RevolvePoint[]): RevolvePoint[] {
+  const pts = cleanRevolve(points);
+  const widest = Math.max(...pts.map((p) => p.r));
+  if (widest >= 1 || widest <= 0) return pts;
+  return cleanRevolve(pts.map((p) => ({ r: p.r / widest, z: p.z })));
+}
+
 /** Which preset a profile is, or null for a designer's own. */
 export function revolveFormOf(points: readonly RevolvePoint[] | undefined): RevolveForm | null {
   if (!points) return null;
@@ -225,5 +235,10 @@ if (isMain(import.meta.url)) {
   assert(profileTop(ball, 0.05)!.z === 1 && profileTop(ball, 1.2) === null, "over the axis the top is the top; past the widest ring there is none");
   const tower = [{ r: 0.8, z: 0 }, { r: 1, z: 0.9 }, { r: 0.6, z: 1 }];
   assert(profileTop(tower, 0.5)!.z === 1 && Math.abs(profileTop(tower, 0.8)!.z - 0.95) < 1e-9, "a flat top is level; the shoulder slopes off it");
+  // An envelope's widest ring is the plan's circle (review F3).
+  const narrow = [{ r: 0.4, z: 0 }, { r: 0.8, z: 0.5 }, { r: 0.2, z: 1 }];
+  const fixed = normalisedRevolve(narrow);
+  assert(Math.max(...fixed.map((q) => q.r)) === 1 && fixed.length === 3 && fixed[0].r === 0.5 && fixed[2].r === 0.25 && fixed[1].z === 0.5, "a profile whose widest ring is 0.8 is rescaled to reach 1, its shape kept");
+  assert(JSON.stringify(normalisedRevolve(REVOLVE_PRESETS.vase)) === JSON.stringify(cleanRevolve(REVOLVE_PRESETS.vase)), "a profile already reaching 1 is unchanged");
   console.log("revolve self-check passed");
 }

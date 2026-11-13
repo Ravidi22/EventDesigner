@@ -7,13 +7,13 @@ import type { DeckType, MissingPiece } from "@/lib/studio/stage-fill";
 import { congruent, normal, pieceName, type PieceInfo } from "@/lib/studio/stage-rim";
 import { Button } from "@/components/button";
 import { Note } from "@/components/inspector-bar";
-import { Popover } from "@/components/popover";
 
 // "חסר בקטלוג" — the rim pieces a stage needs and the studio does not have (layStage `missing`,
 // lib/studio/stage-rim.ts): a quarter-round, a deck with a curved side, a triangle. One entry per
 // SHAPE, with how many of it, drawn small so the designer sees what is meant; each one either a
 // piece the catalog already has that this stage was not built from ("להשתמש") or one to add.
-// Shared by the fill tool's bar and the stage's own bar.
+// The body of the end-panel group of that name, in the fill tool's groups and the stage's: the
+// group is its frame (its title, and `missingSummary` its summary).
 
 /** The shape a missing piece is, small: its outline fitted to a box, as it stands on the stage. */
 function PieceGlyph({ outline }: { outline: Point[] }) {
@@ -47,6 +47,11 @@ function ownedFit(m: MissingPiece, types: readonly DeckType[], chosen: readonly 
 const ellipse = (w: number, d: number): Point[] =>
   Array.from({ length: 48 }, (_, k) => ({ x: (w / 2) * Math.cos((2 * Math.PI * k) / 48), y: (d / 2) * Math.sin((2 * Math.PI * k) / 48) }));
 
+/** "3 פלטות בצורה" — what "חסר בקטלוג" reads back, as a chip's value or a group's summary. */
+export function missingSummary(missing: readonly MissingPiece[]): string {
+  return `${missing.length} ${missing.length === 1 ? "פלטה" : "פלטות"} בצורה`;
+}
+
 export function MissingPieces({
   missing,
   types,
@@ -71,7 +76,7 @@ export function MissingPieces({
   });
   const toAdd = groups.filter((g) => !g.have);
   return (
-    <Popover label="חסר בקטלוג" icon={PackagePlus} tone="warn" value={`${missing.length} ${missing.length === 1 ? "פלטה" : "פלטות"} בצורה`} panelClassName="w-80">
+    <>
       <ul className="space-y-2">
         {groups.map((g) => (
           <li key={g.shape} className="flex items-center gap-2.5">
@@ -101,6 +106,6 @@ export function MissingPieces({
         קשתות ופינות משופעות נבנות מפלטות בצורה, לא מחיתוך פלטות. מה שחסר מסומן בתוכנית בקו מקווקו; הוספה לקטלוג
         בוחרת את הפלטה לבמה, ואפשר לתת לה מחיר ושם בקטלוג.
       </Note>
-    </Popover>
+    </>
   );
 }

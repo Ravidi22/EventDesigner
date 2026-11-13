@@ -814,8 +814,12 @@ export function StructureFeatures({
   onContextMenu: onContextMenuAny,
   onCurtainEnd,
   interactive,
+  minSizeMm,
 }: {
   structure: VenueStructure;
+  /** The least a resize grip leaves a feature, mm (default MIN_FEATURE_MM, 200). The catalog's
+   *  elevation view draws thin boxes — a 4 cm shelf — and passes its own, smaller floor. */
+  minSizeMm?: number;
   /** One end of a curtain slid along its wall. Same opt-in rule as onResize: absent = no end grips. */
   onCurtainEnd?: (id: string, end: "from" | "to", p: { x: number; y: number }) => void;
   mm: (px: number) => number;
@@ -929,6 +933,7 @@ export function StructureFeatures({
             onCommit={onCommit && stable.onCommit}
             clientToMm={clientToMm && stable.clientToMm}
             onContextMenu={onContextMenu && stable.onContextMenu}
+            minSizeMm={minSizeMm}
           />
         );
       })}
@@ -1039,7 +1044,8 @@ const FeatureNode = memo(function FeatureNode({
   onCommit,
   clientToMm,
   onContextMenu,
-}: FeatureHandlers & { f: StructureFeature; selected: boolean; labelPx?: number; mm?: (px: number) => number; activeEdgeItem?: string | null; wallDistance?: WallDistance; pieces?: CurtainPiece[]; ends?: CurtainEnds }) {
+  minSizeMm,
+}: FeatureHandlers & { f: StructureFeature; minSizeMm?: number; selected: boolean; labelPx?: number; mm?: (px: number) => number; activeEdgeItem?: string | null; wallDistance?: WallDistance; pieces?: CurtainPiece[]; ends?: CurtainEnds }) {
         // A locked feature (StructureFeature.locked) keeps its click and its right-click — that is how
         // it gets unlocked — and loses every gesture that would change it. The GROUND does one more
         // thing: a surface moves only once it is already selected. It is the biggest thing on the
@@ -1214,10 +1220,12 @@ const FeatureNode = memo(function FeatureNode({
                 ) : f.kind === "fountain" ? (
                   // A fountain: the catalog's own picture (components/item-symbol.tsx) — the basin
                   // in the pool's water, the bowl and the spout — tinted by the feature's fill, with
-                  // the same dashed selection outline a plant gets and no name.
+                  // the same dashed selection outline a plant gets and no name. The picture takes no
+                  // pointer (ItemSymbol is pointer-events-none), so the footprint under it is the
+                  // hit area — without it a fountain answered only a band (2026-11-09, the user).
                   <>
                     <ItemSymbol kind="fountain" footprint={featureFootprint(f)} count={1} tone={f.style?.fill} ink={selected ? "var(--color-accent)" : undefined} />
-                    {selected && <FootprintShape footprint={featureFootprint(f)} fill="none" stroke="var(--color-accent)" strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />}
+                    <FootprintShape footprint={featureFootprint(f)} fill="transparent" stroke={selected ? "var(--color-accent)" : "none"} strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
                   </>
                 ) : f.kind === "pergola" ? (
                   // A pergola (lib/venues/pergola.ts): its posts, its roof across them and any
@@ -1340,7 +1348,7 @@ const FeatureNode = memo(function FeatureNode({
                     ([[1, 1], [-1, 1], [-1, -1], [1, -1]] as const).map(([sx, sy]) => (
                       <ResizeHandle
                         key={`r${sx}${sy}`}
-                        {...resizableRadius(f, onResize, onCommit, clientToMm)}
+                        {...resizableRadius(f, onResize, onCommit, clientToMm, minSizeMm)}
                         cursor={sx === sy ? "cursor-nwse-resize" : "cursor-nesw-resize"}
                         label={`שינוי גודל של ${f.label} — גרירה`}
                         cx={f.x + (sx * f.widthMm * Math.SQRT1_2) / 2}
@@ -1350,7 +1358,7 @@ const FeatureNode = memo(function FeatureNode({
                     ))
                   ) : (
                     <ResizeHandle
-                      {...resizableRadius(f, onResize, onCommit, clientToMm)}
+                      {...resizableRadius(f, onResize, onCommit, clientToMm, minSizeMm)}
                       cursor="cursor-nesw-resize"
                       label={`שינוי קוטר של ${f.label} — גרירה`}
                       cx={f.x + f.widthMm / 2}
@@ -1376,7 +1384,7 @@ const FeatureNode = memo(function FeatureNode({
                     {([[1, 1], [-1, 1], [-1, -1], [1, -1]] as const).map(([sx, sy]) => (
                       <ResizeHandle
                         key={`c${sx}${sy}`}
-                        {...resizableCorner(f, sx, sy, onResize, onCommit, clientToMm)}
+                        {...resizableCorner(f, sx, sy, onResize, onCommit, clientToMm, minSizeMm)}
                         cursor={sx === sy ? "cursor-nwse-resize" : "cursor-nesw-resize"}
                         label={`שינוי גודל של ${f.label} — גרירה · Shift לשמירה על יחס הממדים`}
                         cx={f.x + (sx * f.widthMm) / 2}
@@ -1387,7 +1395,7 @@ const FeatureNode = memo(function FeatureNode({
                     {([1, -1] as const).map((sign) => (
                       <ResizeHandle
                         key={`w${sign}`}
-                        {...resizable(f, "width", sign, onResize, onCommit, clientToMm)}
+                        {...resizable(f, "width", sign, onResize, onCommit, clientToMm, minSizeMm)}
                         cursor="cursor-ew-resize"
                         label={`שינוי רוחב של ${f.label} — גרירה · Shift לשמירה על יחס הממדים`}
                         cx={f.x + sign * (f.widthMm / 2)}
@@ -1398,7 +1406,7 @@ const FeatureNode = memo(function FeatureNode({
                     {([1, -1] as const).map((sign) => (
                       <ResizeHandle
                         key={`d${sign}`}
-                        {...resizable(f, "depth", sign, onResize, onCommit, clientToMm)}
+                        {...resizable(f, "depth", sign, onResize, onCommit, clientToMm, minSizeMm)}
                         cursor="cursor-ns-resize"
                         label={`שינוי עומק של ${f.label} — גרירה · Shift לשמירה על יחס הממדים`}
                         cx={f.x}
@@ -1524,6 +1532,7 @@ function resizable(
   onResize?: (id: string, patch: { widthMm: number; depthMm: number; x: number; y: number }) => void,
   onCommit?: () => void,
   clientToMm?: (clientX: number, clientY: number) => { x: number; y: number },
+  minMm: number = MIN_FEATURE_MM,
 ) {
   if (!onResize || !clientToMm) return {};
   return {
@@ -1532,7 +1541,7 @@ function resizable(
       const ratio = f.widthMm / f.depthMm;
       startPointerGesture(e, {
         onMove: (ev) => {
-          const { sizeMm, center } = resizeFromEdge(f, axis, sign, clientToMm(ev.clientX, ev.clientY), MIN_FEATURE_MM);
+          const { sizeMm, center } = resizeFromEdge(f, axis, sign, clientToMm(ev.clientX, ev.clientY), minMm);
           let widthMm = f.widthMm;
           let depthMm = f.depthMm;
           if (axis === "width") widthMm = sizeMm; else depthMm = sizeMm;
@@ -1541,7 +1550,7 @@ function resizable(
           // centred — a feature is stored as centre+size, so growing depthMm without moving y already
           // expands it evenly on both sides for free.
           if (ev.shiftKey) {
-            const other = Math.max(MIN_FEATURE_MM, Math.round(axis === "width" ? sizeMm / ratio : sizeMm * ratio));
+            const other = Math.max(minMm, Math.round(axis === "width" ? sizeMm / ratio : sizeMm * ratio));
             if (axis === "width") depthMm = other; else widthMm = other;
           }
           onResize(f.id, { widthMm, depthMm, x: center.x, y: center.y });
@@ -1588,6 +1597,7 @@ function resizableCorner(
   onResize?: (id: string, patch: { widthMm: number; depthMm: number; x: number; y: number }) => void,
   onCommit?: () => void,
   clientToMm?: (clientX: number, clientY: number) => { x: number; y: number },
+  minMm: number = MIN_FEATURE_MM,
 ) {
   if (!onResize || !clientToMm) return {};
   return {
@@ -1600,12 +1610,12 @@ function resizableCorner(
           const centre = { x: f.x, y: f.y };
           const p = toLocalFrame(clientToMm(ev.clientX, ev.clientY), centre, rot);
           const anchor = { x: (-sx * f.widthMm) / 2, y: (-sy * f.depthMm) / 2 };
-          let widthMm = Math.max(MIN_FEATURE_MM, Math.round(sx * (p.x - anchor.x)));
-          let depthMm = Math.max(MIN_FEATURE_MM, Math.round(sy * (p.y - anchor.y)));
+          let widthMm = Math.max(minMm, Math.round(sx * (p.x - anchor.x)));
+          let depthMm = Math.max(minMm, Math.round(sy * (p.y - anchor.y)));
           if (ev.shiftKey) {
             // The larger of the two stretches wins, so the corner still tracks the pointer on one axis.
-            if (widthMm / ratio > depthMm) depthMm = Math.max(MIN_FEATURE_MM, Math.round(widthMm / ratio));
-            else widthMm = Math.max(MIN_FEATURE_MM, Math.round(depthMm * ratio));
+            if (widthMm / ratio > depthMm) depthMm = Math.max(minMm, Math.round(widthMm / ratio));
+            else widthMm = Math.max(minMm, Math.round(depthMm * ratio));
           }
           const c = fromLocalFrame({ x: anchor.x + (sx * widthMm) / 2, y: anchor.y + (sy * depthMm) / 2 }, centre, rot);
           onResize(f.id, { widthMm, depthMm, x: Math.round(c.x), y: Math.round(c.y) });
@@ -1625,6 +1635,7 @@ function resizableRadius(
   onResize?: (id: string, patch: { widthMm: number; depthMm: number; x: number; y: number }) => void,
   onCommit?: () => void,
   clientToMm?: (clientX: number, clientY: number) => { x: number; y: number },
+  minMm: number = MIN_FEATURE_MM,
 ) {
   if (!onResize || !clientToMm) return {};
   return {
@@ -1633,7 +1644,7 @@ function resizableRadius(
       startPointerGesture(e, {
         onMove: (ev) => {
           const p = clientToMm(ev.clientX, ev.clientY);
-          const d = Math.max(MIN_FEATURE_MM, Math.round(Math.hypot(p.x - f.x, p.y - f.y) * 2));
+          const d = Math.max(minMm, Math.round(Math.hypot(p.x - f.x, p.y - f.y) * 2));
           onResize(f.id, { widthMm: d, depthMm: d, x: f.x, y: f.y });
         },
         onEnd: (_ev, moved) => {

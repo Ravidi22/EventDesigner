@@ -27,6 +27,7 @@ import { isAdditiveClick, isTypingTarget } from "@/lib/keyboard";
 import { cancelAllGestures, startPointerGesture, swallowNextClick } from "@/lib/studio/gesture";
 import { resolveStyle } from "@/lib/element-style";
 import { IconButton } from "@/components/icon-button";
+import { segmentClass, segmentFrameClass } from "@/components/segmented";
 import type { SelectedKind, SelectedRef } from "@/lib/studio/use-outline-editor";
 
 export type StructureDragType = "entrance" | "stage" | "bar";
@@ -390,6 +391,7 @@ export function PlanCanvas({
   backdrop,
   overlay,
   topmost,
+  underlay,
   graph,
   onMoveGraphNode,
   onCurveGraphWall,
@@ -489,6 +491,11 @@ export function PlanCanvas({
   // the tape, the guides. For the handles a measurement must never cover: the rotate knob sat under
   // a wall's length label (which took its click) and under a hung item's ties (the user, 2026-10-17).
   topmost?: CanvasLayer;
+  // HTML drawn BEHIND the plan — a picture of the same world (the shape editor's room seen from the
+  // front, components/scene/ortho-underlay.tsx). Laid out against the SETTLED view's world box and
+  // carried to the live view by the HUD's CSS transform, so a pan or a zoom re-renders nothing. Pass
+  // a stable function (useCallback): it is called again only when it or the settled view changes.
+  underlay?: (view: { minX: number; minY: number; w: number; h: number }) => ReactNode;
   // A connected wall graph, drawn and reshaped alongside `outline`. Its nodes join the snap
   // references, so tracing a new wing aligns to the walls already on the plan.
   graph?: CanvasGraph;
@@ -597,6 +604,8 @@ export function PlanCanvas({
   const gridRef = useRef<SVGPatternElement>(null);
   const gridPathRef = useRef<SVGPathElement>(null);
   const hudRef = useRef<HTMLDivElement>(null);
+  // The underlay rides with the HUD: laid out against the settled view, carried by the same transform.
+  const underlayRef = useRef<HTMLDivElement>(null);
   const gridId = useId();
   // Last known pointer position in CLIENT px, kept alongside cursorRaw (which is in world mm and
   // only updates on an actual pointermove): the edge-autopan loop below still needs to know where
@@ -767,7 +776,9 @@ export function PlanCanvas({
       grid.setAttribute("height", String(cell));
       gridPathRef.current?.setAttribute("d", `M ${cell} 0 L 0 0 0 ${cell}`);
     }
-    if (hudRef.current) hudRef.current.style.transform = hudTransform(settledRef.current, v, w, h);
+    const carry = hudTransform(settledRef.current, v, w, h);
+    if (hudRef.current) hudRef.current.style.transform = carry;
+    if (underlayRef.current) underlayRef.current.style.transform = carry;
     markMoving();
   }, [markMoving]);
   // Fold the live camera into React state. Only the settled view re-renders anything, so this is
@@ -1433,6 +1444,10 @@ export function PlanCanvas({
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (isTypingTarget()) return; // the value box owns its own keys — Backspace there must not eat a vertex
+      // A canvas its host keeps mounted but hidden (the shape editor's plan while a side view shows,
+      // and the side view while the plan does) takes no keys: + would zoom it unseen, M arm its tape.
+      const svg = svgRef.current;
+      if (svg && typeof svg.checkVisibility === "function" && !svg.checkVisibility({ visibilityProperty: true })) return;
       if (e.code === "Space") { e.preventDefault(); setSpaceHeld(true); return; }
       // Alt is tracked in both modes — it releases the angle lock while drawing and the 5°
       // rotation lock while editing. preventDefault keeps Chrome's menu bar out of it.
@@ -1529,6 +1544,11 @@ export function PlanCanvas({
   const backdropNode = useMemo(() => (typeof backdrop === "function" ? backdrop(layerCtx) : backdrop), [backdrop, layerCtx]);
   const overlayNode = useMemo(() => (typeof overlay === "function" ? overlay(layerCtx) : overlay), [overlay, layerCtx]);
   const topmostNode = useMemo(() => (typeof topmost === "function" ? topmost(layerCtx) : topmost), [topmost, layerCtx]);
+  // The underlay, at the settled view's world box — a pan or a zoom carries it by CSS and calls nothing.
+  const underlayNode = useMemo(
+    () => (underlay && hasRect ? underlay({ minX: vb.minX, minY: vb.minY, w: vb.w, h: vb.h }) : null),
+    [underlay, hasRect, vb.minX, vb.minY, vb.w, vb.h],
+  );
 
   const entryOpen = entry !== null;
   useEffect(() => {
@@ -1601,6 +1621,11 @@ export function PlanCanvas({
 
   return (
     <>
+    {underlay && (
+      <div ref={underlayRef} className="pointer-events-none absolute inset-0" style={{ transformOrigin: "0 0" }}>
+        {underlayNode}
+      </div>
+    )}
     <svg
       ref={svgRef}
       tabIndex={-1}
@@ -1613,6 +1638,9 @@ export function PlanCanvas({
         // select-none on the root, not on each <text>: it inherits, so it also covers whatever a
         // host draws into backdrop/overlay. A drawing surface has nothing worth text-selecting, and
         // a drag across a label that highlights it instead of moving the plan reads as broken.
+        // Over an underlay the <svg> is positioned too, so it paints above it (a later positioned
+        // sibling paints over an earlier one); a host with none keeps the static <svg> it had.
+        (underlay ? "relative " : "") +
         "h-full w-full touch-none select-none focus:outline-none " +
         (spaceHeld || panTool
           ? "cursor-grab [&_*]:cursor-grab!"
@@ -3528,24 +3556,20 @@ export function SegmentedToggle<T extends string | number | boolean>({
   options,
   onChange,
   ariaLabel,
+  fill = false,
 }: {
   value: T;
   options: { value: T; label: string }[];
   onChange: (value: T) => void;
   ariaLabel?: string;
+  /** In a panel group: the full width, every option the same width. Otherwise the quick bar's
+   *  compact row. Both wear components/segmented.tsx's look. */
+  fill?: boolean;
 }) {
   return (
-    <div role="group" aria-label={ariaLabel} className="flex h-10 shrink-0 items-center gap-1 rounded-md border border-border p-1">
+    <div role="group" aria-label={ariaLabel} className={segmentFrameClass(!fill)}>
       {options.map((o) => (
-        <button
-          key={String(o.value)}
-          type="button"
-          aria-pressed={o.value === value}
-          onClick={() => onChange(o.value)}
-          className={`flex h-full items-center rounded-sm px-2.5 text-xs font-semibold transition-colors ${
-            o.value === value ? "bg-accent text-canvas" : "text-ink-soft hover:bg-bg"
-          }`}
-        >
+        <button key={String(o.value)} type="button" aria-pressed={o.value === value} onClick={() => onChange(o.value)} className={segmentClass(o.value === value, !fill)}>
           {o.label}
         </button>
       ))}

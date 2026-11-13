@@ -56,18 +56,24 @@ export interface ScenePaneProps {
   emptyText: string;
 }
 
-export function ScenePane({ subject, open, onClose, emptyText }: ScenePaneProps) {
-  // The subject as a SNAPSHOT that changes identity only when its key does, then let settle.
-  // React's own pattern for state derived from a prop ("storing information from previous
-  // renders"): adjusted during the render that sees the change, never in an effect.
+/** The room a subject builds, once it has SETTLED: the subject is held as a snapshot that changes
+ *  identity only when its key does (React's own pattern for state derived from a prop — "storing
+ *  information from previous renders": adjusted during the render that sees the change, never in an
+ *  effect), then let rest `SCENE_PANE_SETTLE_MS` and never built while a button is held (useSettled).
+ *  `pending`: a subject is there whose latest key has not been built yet. Shared by this pane and the
+ *  shape editor's side views (elevation-canvas.tsx). */
+export function useSettledScene(subject: SceneSubject | null): { scene: Scene | null; focus: Viewpoint | null; pending: boolean } {
   const key = subject?.key ?? "";
   const [snap, setSnap] = useState(() => ({ key, subject }));
   if (snap.key !== key) setSnap({ key, subject });
   const settled = useSettled(snap.key === key ? snap : { key, subject }, SCENE_PANE_SETTLE_MS);
-  const [device] = useState(() => (typeof window !== "undefined" ? detectDevice() : undefined));
   const built = useMemo(() => (settled.subject ? settled.subject.build() : null), [settled]);
-  const scene = built?.scene ?? null;
-  const focus = built?.focus ?? null;
+  return { scene: built?.scene ?? null, focus: built?.focus ?? null, pending: !!subject && settled.key !== key };
+}
+
+export function ScenePane({ subject, open, onClose, emptyText }: ScenePaneProps) {
+  const { scene, focus, pending } = useSettledScene(subject);
+  const [device] = useState(() => (typeof window !== "undefined" ? detectDevice() : undefined));
   const viewpoints = useMemo(() => (focus ? [focus] : []), [focus]);
   // The designer orbited away: the camera is theirs until the subject is another.
   const [leftId, setLeftId] = useState<string | null>(null);
@@ -142,7 +148,7 @@ export function ScenePane({ subject, open, onClose, emptyText }: ScenePaneProps)
         />
       ) : (
         <div className="flex h-full w-full items-center justify-center bg-inset px-4 text-center text-caption text-muted">
-          {subject && settled.key !== key ? "בונה את החלל…" : emptyText}
+          {pending ? "בונה את החלל…" : emptyText}
         </div>
       )}
       <div className="absolute top-2 end-2 rounded-pill bg-surface/90 p-0.5 shadow-lifted">

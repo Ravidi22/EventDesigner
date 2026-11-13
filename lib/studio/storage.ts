@@ -47,22 +47,29 @@ export function saveScratch(content: DesignDocumentContent): boolean {
 
 // --- the 3D pane beside the sketch -----------------------------------------------------------------
 //
-// Whether the studio's 3D pane (app/(app)/studio/scene-preview.tsx) is open, in which layout and how
-// wide. Per-DEVICE UI position like the active event, not studio data: a designer who works with the
+// Whether the studio's 3D card (app/(app)/studio/scene-preview.tsx) is open and how wide. Per-DEVICE UI position like the active event, not studio data: a designer who works with the
 // room beside the plan on the big screen and without it on the laptop gets each back as they left
 // it. Through this module like every other localStorage read in the app.
 
-export type ScenePreviewLayout = "corner" | "split";
+// There is no layout any more (the split is gone, 2026-11-09): a stored "split" is simply read as
+// the card — `loadScenePreview` takes `open`, the width and where it was dragged, and ignores the rest.
 export interface ScenePreviewPrefs {
   open: boolean;
-  layout: ScenePreviewLayout;
-  /** The corner pane's width; its height follows (the pane's aspect). */
+  /** The card's width; its picture's height follows (the card's aspect). */
   widthPx: number;
+  /** Where its header was dragged to (lib/studio/scene-card.ts); absent = the bottom-left corner. */
+  pos?: SceneCardPos;
 }
-/** What the corner pane's grip may drag its width between. */
+/** The card's end-bottom corner: px from the canvas card's end edge (left on a Hebrew screen) and its
+ *  foot. Held inside the area as it is drawn, so a spot stored on a wider screen still comes back. */
+export interface SceneCardPos {
+  end: number;
+  bottom: number;
+}
+/** What the card's grip may drag its width between. */
 export const SCENE_PREVIEW_MIN_PX = 260;
 export const SCENE_PREVIEW_MAX_PX = 760;
-export const DEFAULT_SCENE_PREVIEW: ScenePreviewPrefs = { open: false, layout: "corner", widthPx: 400 };
+export const DEFAULT_SCENE_PREVIEW: ScenePreviewPrefs = { open: false, widthPx: 300 };
 const SCENE_PREVIEW_KEY = storageKey("studio.scene-preview");
 
 export function loadScenePreview(): ScenePreviewPrefs {
@@ -72,10 +79,11 @@ export function loadScenePreview(): ScenePreviewPrefs {
     if (!raw) return DEFAULT_SCENE_PREVIEW;
     const p = JSON.parse(raw) as Partial<ScenePreviewPrefs>;
     const width = typeof p.widthPx === "number" && Number.isFinite(p.widthPx) ? p.widthPx : DEFAULT_SCENE_PREVIEW.widthPx;
+    const pos = p.pos && Number.isFinite(p.pos.end) && Number.isFinite(p.pos.bottom) ? { end: Math.round(p.pos.end), bottom: Math.round(p.pos.bottom) } : undefined;
     return {
       open: p.open === true,
-      layout: p.layout === "split" ? "split" : "corner",
       widthPx: Math.min(SCENE_PREVIEW_MAX_PX, Math.max(SCENE_PREVIEW_MIN_PX, Math.round(width))),
+      ...(pos ? { pos } : {}),
     };
   } catch {
     return DEFAULT_SCENE_PREVIEW;
@@ -86,6 +94,34 @@ export function saveScenePreview(prefs: ScenePreviewPrefs): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(SCENE_PREVIEW_KEY, JSON.stringify(prefs));
+  } catch {
+    // A blocked or full store loses a UI preference, nothing more.
+  }
+}
+
+// --- the end panel (components/end-panel.tsx) ------------------------------------------------------
+//
+// Whether a screen's end panel is open — per device, like the 3D pane: a laptop that closes it for
+// room to draw gets it closed again, the big screen keeps it. Keyed by screen (studio, halls), so
+// closing it in one does not close it in the other.
+
+const endPanelKey = (screen: string) => storageKey(`shell.end-panel.${screen}`);
+
+/** Null when nothing is stored yet (or storage is unavailable) — the caller's default stands. */
+export function loadEndPanelOpen(screen: string): boolean | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(endPanelKey(screen));
+    return raw === "1" ? true : raw === "0" ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveEndPanelOpen(screen: string, open: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(endPanelKey(screen), open ? "1" : "0");
   } catch {
     // A blocked or full store loses a UI preference, nothing more.
   }

@@ -56,8 +56,10 @@ export function alignItems(align: AlignPanel): MenuItem[] {
 }
 
 /** "יישור" — line the selection up by one of its own members (lib/studio/align.ts). Every row is
- *  one action and one undo. The key is named in the last rows and drawn on the plan. */
-export function AlignMenu({ align }: { align: AlignPanel | null }) {
+ *  one action and one undo. The key is named in the last rows and drawn on the plan. `trigger`
+ *  "chip" writes the word on it — the studio's quick bar for several things, where the one outline
+ *  pill is the bar's mode verb (קיבוץ); the icon alone otherwise. */
+export function AlignMenu({ align, trigger = "icon" }: { align: AlignPanel | null; trigger?: "icon" | "chip" }) {
   if (!align) return null;
-  return <Menu label={`יישור — לפי ${align.keyLabel}`} icon={AlignCenterVertical} side="top" items={alignItems(align)} />;
+  return <Menu label={`יישור — לפי ${align.keyLabel}`} icon={AlignCenterVertical} side="top" trigger={trigger} triggerText={trigger === "chip" ? "יישור" : undefined} items={alignItems(align)} />;
 }

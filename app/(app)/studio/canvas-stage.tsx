@@ -6,7 +6,7 @@ import { chuppahDrawOf } from "@/lib/catalog/chuppah";
 import type { DesignDocumentContent, DesignTable, Placement, WallSpan } from "@/lib/design-document/types";
 import type { Plane } from "@/lib/studio/planes";
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
-import { seatsAround, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
+import { seatsAround, seatTransform, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { blockSeats } from "@/lib/design-document/block";
 import { benchOf, chairBlockOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
 import { ChairBlock } from "@/components/chair-block";
@@ -32,7 +32,7 @@ import type { Point } from "@/lib/studio/hall";
 import type { EventPlan } from "@/lib/events/plan";
 import { zoneBounds } from "@/lib/venues/zone";
 import { isDark, resolveStyle } from "@/lib/element-style";
-import { isAdditiveClick } from "@/lib/keyboard";
+import { isAdditiveClick, isTypingTarget } from "@/lib/keyboard";
 import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
 import { FootprintShape, blockLabelRoom, dressBlockOf, dressingSpots, pointOnTable, type DressBlock, sameFootprint, tableBlock, tableBlockedSides, tableBox, tableFootprint, tableUnder, placementFootprint, productStyle, type DressingSpot } from "@/components/footprint-shape";
 import { startPointerGesture } from "@/lib/studio/gesture";
@@ -55,7 +55,7 @@ import { climbRise } from "@/lib/studio/climb-item";
 import { labelAnchor } from "@/lib/studio/label-anchor";
 import { PlanCanvas, RotateHandle, rotateKnobPoint, type CanvasFocus, type CanvasLayerContext, type ContextMenuItem, type MarqueeMode, type MeasureTarget } from "@/components/plan-canvas";
 import { IconButton } from "@/components/icon-button";
-import { Grid2x2Plus, ShieldAlert } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
 import { lengthSnapper, type LengthSnap, type MissingPiece } from "@/lib/studio/stage-fill";
 import { clipToWalls, crossesWalls, wallPolylines } from "@/lib/studio/wall-clip";
 import { boundsOf, deckBox, snapDeck } from "@/lib/studio/deck-move";
@@ -247,9 +247,8 @@ export function CanvasStage({
   clearance,
   showClearance,
   onToggleClearance,
+  stripExtras,
   onResizeTable,
-  stageFillActive,
-  onStageFill,
   drawArea,
   rodDraw,
   clothDraw,
@@ -281,6 +280,11 @@ export function CanvasStage({
   onPickStair,
   onContextMenu,
   onContextMenuAt,
+  onFloorMenu,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
   dressingTableId,
   onFocusTable,
   onExitDressing,
@@ -298,7 +302,7 @@ export function CanvasStage({
   spin: SpinMode;
   /** The layer being worked in, or null for "all of them" — see the note on `isLive` below. */
   activeLayer: Plane | null;
-  /** The zone the designer asked to be shown (the toolbar's eye). Frames it and holds everything
+  /** The zone the designer asked to be shown (the view cluster's zone chip). Frames it and holds everything
    *  else back; null = the whole event, which is what the surface opens on. */
   focusZoneId: string | null;
   /** A plain click replaces the selection (null clears it); `additive` is shift/ctrl, which toggles. */
@@ -353,12 +357,11 @@ export function CanvasStage({
    *  switch off by switching off the view it lives in is not a warning. */
   showClearance: boolean;
   onToggleClearance: () => void;
+  /** The host's own view controls at the strip's end, after a hairline — the studio's 3D toggle. */
+  stripExtras?: ReactNode;
   /** A resizable table stretched by a handle: its new size, and the centre that keeps the edge
    *  opposite the handle where it was. */
   onResizeTable: (id: string, sizeMm: { widthMm: number; depthMm: number }, position: Point) => void;
-  /** The "מילוי במות" tool: whether it is open at all (lights its button), and the button itself. */
-  stageFillActive: boolean;
-  onStageFill: () => void;
   /** Drawing the area: every click on the plan is a corner, whatever is under it. */
   drawArea: boolean;
   /** Drawing a drape's free-standing ROD ("וילון על מוט", components/rod-draw-pane.tsx): every click
@@ -447,6 +450,16 @@ export function CanvasStage({
    *  in the sketch, so "a carpet on this lawn" is only reachable through the point (lib/studio/
    *  cover.ts). Put before the selection's rows; the menu opens on bare floor too when it has any. */
   onContextMenuAt?: (point: Point, refs: SelectionRef[]) => ContextMenuItem[];
+  /** Rows for a right-click that landed on nothing of the sketch's own — bare floor, a venue surface
+   *  — whatever is selected: the document's verbs (paste). Put first; the menu opens with nothing
+   *  selected too when it has any. */
+  onFloorMenu?: (point: Point) => ContextMenuItem[];
+  /** The history, on the canvas strip's own undo/redo pair (PlanCanvas draws it only when both
+   *  handlers are given). The keyboard's Ctrl+Z / Ctrl+Y are the host's, as before. */
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
   /** The table being dressed (its focus mode): framed, the room held back behind a scrim, and the
    *  items on it free to be dragged about its top. Null = the whole plan, as usual. A table in a
    *  GROUP brings the whole block with it — framed as the one table the block is, every member and
@@ -469,13 +482,13 @@ export function CanvasStage({
    *  the delta of a client's proposal (components/sketch-delta.tsx), for its two hosts. */
   extraOverlay?: (ctx: CanvasLayerContext) => ReactNode;
 }) {
-  // THE PLANES FOLLOW THE HAND. With no plane chosen on the toolbar, the one being worked in is read
+  // THE PLANES FOLLOW THE HAND. With no plane chosen (the end panel's list), the one being worked in is read
   // off the gesture: dragging a table (or a stage, a rug — anything standing on the floor) holds
   // back the ceiling and what is laid on tables; carrying a centrepiece holds back the floor and the
   // ceiling, since only a table can take it; placing a chandelier holds back everything below it;
   // drawing a stage, placing stairs or a saved stage are floor work. The planes that cannot be the
-  // gesture's target dim and stop taking the pointer, exactly as choosing one on the toolbar does —
-  // and come back the moment the pointer lifts. A plane chosen on the toolbar still wins: that is
+  // gesture's target dim and stop taking the pointer, exactly as choosing one in the list does —
+  // and come back the moment the pointer lifts. A plane chosen in the list still wins: that is
   // the designer saying so, this is the canvas guessing well.
   const [gesturePlane, setGesturePlane] = useState<Plane | null>(null);
   /** What a drag is carrying, keyed `kind:id` — PAINTED LAST in the floor pass, over everything it
@@ -1048,6 +1061,12 @@ export function CanvasStage({
   useEffect(() => {
     if (!drawArea) return;
     const onKey = (e: KeyboardEvent) => {
+      // A field has the keys (the end panel's groups stay up while the tool draws — the sketch's
+      // name, numbering's start, a level's height) and so does a dialog over the plan: digits are
+      // typed, Backspace takes a character, Enter is the field's. Escape goes on to the studio's
+      // handler, which only blurs the field (lib/keyboard.ts escapeLeavesField); the next one is the
+      // tool's.
+      if (isTypingTarget() || (e.target instanceof Element && !!e.target.closest("dialog"))) return;
       if (/^[0-9.]$/.test(e.key) && areaPts.length > 0) {
         setAreaTyped((t) => (t.length < 6 ? t + e.key : t));
       } else if (e.key === "Enter" && areaShape !== "corners") {
@@ -1886,14 +1905,25 @@ export function CanvasStage({
       selected={[]}
       onSelect={() => onSelect(null, false)}
       contextMenuItems={
-        onContextMenu || onContextMenuAt
+        onContextMenu || onContextMenuAt || onFloorMenu
           ? (point: Point) => {
-              const refs = contextRefs.current ?? selection;
+              // A node's own contextmenu (contextFor) runs first on the same event and names what it
+              // is about; nothing named = the press landed on no thing of the sketch's.
+              const hit = contextRefs.current;
+              const refs = hit ?? selection;
               contextRefs.current = null;
-              return [...(onContextMenuAt?.(point, refs) ?? []), ...(refs.length && onContextMenu ? onContextMenu(refs) : [])];
+              return [
+                ...(hit ? [] : (onFloorMenu?.(point) ?? [])),
+                ...(onContextMenuAt?.(point, refs) ?? []),
+                ...(refs.length && onContextMenu ? onContextMenu(refs) : []),
+              ];
             }
           : undefined
       }
+      onUndo={onUndo}
+      onRedo={onRedo}
+      canUndo={canUndo}
+      canRedo={canRedo}
       onAddVertex={() => {}}
       onCloseOutline={() => {}}
       onMoveVertex={() => {}}
@@ -1916,13 +1946,12 @@ export function CanvasStage({
           >
             <ShieldAlert className="h-4 w-4" strokeWidth={2} />
           </IconButton>
-          <IconButton
-            label={stageFillActive ? "סגירת מילוי הבמות · Esc" : "מילוי אזור בבמות — סימון האזור על התוכנית"}
-            onClick={onStageFill}
-            pressed={stageFillActive}
-          >
-            <Grid2x2Plus className="h-4 w-4" strokeWidth={2} />
-          </IconButton>
+          {stripExtras && (
+            <>
+              <div className="mx-0.5 h-5 w-px bg-border" />
+              {stripExtras}
+            </>
+          )}
         </>
       }
       // The box, not the hits: everything selectable on this surface is drawn by this file, so this
@@ -3538,7 +3567,7 @@ const CarpetNode = memo(function CarpetNode({
  *  the hairline holds a constant screen width, which is what keeps a room of 400 legible zoomed out. */
 function Chair({ seat }: { seat: Seat }) {
   return (
-    <g transform={`translate(${seat.x} ${seat.y}) rotate(${seat.facingDeg})`}>
+    <g transform={seatTransform(seat)}>
       <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} />
     </g>
   );

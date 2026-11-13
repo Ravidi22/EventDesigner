@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, type RefObject } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
-import { Copy, Heart, MousePointerClick, Pencil, Plus, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import { Copy, Grid2x2Plus, Heart, MousePointerClick, Pencil, Plus, SlidersHorizontal, Sparkles, Wrench, X } from "lucide-react";
 import { Pin } from "lucide-react";
 import { canDuplicate, railBuiltIns, shownGroups } from "@/lib/catalog/built-in";
 import { Menu } from "@/components/menu";
@@ -13,7 +13,7 @@ import { catalogBox } from "@/lib/studio/footprint";
 import { ChairBlock } from "@/components/chair-block";
 import { CompositionPieces, compositionBox } from "@/components/composition-drawing";
 import type { Product } from "@/lib/catalog/types";
-import { CATEGORY_BY_ID, CATEGORY_GROUPS, LAYER_LABEL, categoryInPass, styleTagsOf, type CategoryGroupId } from "@/lib/catalog/categories";
+import { CATEGORY_BY_ID, CATEGORY_GROUPS, categoryInPass, styleTagsOf, type CategoryGroupId } from "@/lib/catalog/categories";
 import { formatDimensions } from "@/lib/catalog/format";
 import { fetchFolder, fetchImages } from "@/lib/gallery/actions";
 import { likedProductIds } from "@/lib/gallery/folder-logic";
@@ -42,6 +42,7 @@ export function CatalogRail({
   products: all = [],
   groups,
   pass,
+  passLabel,
   hint,
   mmPerPx,
   onAddProduct,
@@ -51,12 +52,16 @@ export function CatalogRail({
   armedId = null,
   onArm,
   eventFolder = true,
+  onStageFill,
+  stageFillActive = false,
 }: {
   products?: Product[];
   groups?: CategoryGroupId[];
   /** The drawing pass this rail serves: its scope is the pass's (categoryInPass — a rug is the hall's
    *  though its department is not), the departments offered `groups`. Absent = `groups` alone. */
   pass?: "hall" | "design";
+  /** The pass's name, shown beside the header's title ("סקיצת אולם" / "סקיצה עיצובית"). Absent = none. */
+  passLabel?: string;
   hint?: string;
   /** The canvas's current zoom, in world mm per screen pixel — a ref the canvas writes and this rail
    *  reads once, at the moment a drag starts, so the picture under the pointer is the item at the
@@ -82,6 +87,11 @@ export function CatalogRail({
   /** Pin the open event's liked products ("בתיק האירוע"). Off where no event is being drawn — the
    *  catalog's composition editor, which builds an item for every event. */
   eventFolder?: boolean;
+  /** The stage fill tool, offered as a card under "מובנים" (it used to be a canvas toolbar button).
+   *  Absent = no card. */
+  onStageFill?: () => void;
+  /** The fill tool is open — the card wears its pressed look. */
+  stageFillActive?: boolean;
 } = {}) {
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [showFilters, setShowFilters] = useState(false);
@@ -158,12 +168,52 @@ export function CatalogRail({
     return chair;
   }, [products, allowedGroups, filters]);
 
-  const empty = added.length === 0 && pinned.length === 0 && liked.length === 0 && rest.length === 0 && !rowsChair;
+  // The fill tool's card: a tool, not a product, so it is found by the words it answers to and is
+  // hidden by a category filter that is not the stages'.
+  const fillCard = useMemo(() => {
+    if (!onStageFill) return false;
+    if (filters.category && filters.category !== "grp-stages") return false;
+    const q = filters.search.trim();
+    return !q || FILL_WORDS.some((w) => w.includes(q) || q.includes(w));
+  }, [onStageFill, filters.category, filters.search]);
+
+  // One heading per department, in the departments' own order, each with how many rows it holds.
+  // A row whose category is unknown to the lookup lands in a last "אחר".
+  const departments = useMemo(() => {
+    const byGroup = new Map<string, Product[]>();
+    for (const p of rest) {
+      const g = CATEGORY_BY_ID[p.category]?.group ?? "other";
+      const list = byGroup.get(g);
+      if (list) list.push(p);
+      else byGroup.set(g, [p]);
+    }
+    const ordered = CATEGORY_GROUPS.filter((g) => byGroup.has(g.id)).map((g) => ({ id: g.id as string, label: g.label, items: byGroup.get(g.id)! }));
+    const other = byGroup.get("other");
+    return other ? [...ordered, { id: "other", label: "אחר", items: other }] : ordered;
+  }, [rest]);
+
+  const empty = added.length === 0 && pinned.length === 0 && liked.length === 0 && rest.length === 0 && !rowsChair && !fillCard;
   const active = hasActiveFilters(filters);
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-e border-border bg-surface">
-      <div className="flex flex-col gap-2 border-b border-border p-3">
+    <aside className="flex w-[272px] shrink-0 flex-col border-e border-border bg-surface">
+      <div className="flex flex-col gap-2.5 border-b border-border p-3">
+        <div className="flex items-center gap-2">
+          <h2 className="text-[13px] font-bold text-ink">קטלוג</h2>
+          {passLabel && <span className="min-w-0 truncate text-xs text-muted">{passLabel}</span>}
+          {onAddProduct && (
+            <button
+              type="button"
+              onClick={onAddProduct}
+              aria-label="הוספת פריט חדש לקטלוג"
+              title="הוספת פריט חדש לקטלוג"
+              className="ms-auto inline-flex shrink-0 items-center gap-1 rounded-pill bg-accent-tint px-2.5 py-1 text-xs font-bold text-accent transition-colors hover:bg-accent-wash"
+            >
+              <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+              מוצר
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-1.5">
           <SearchInput
             value={filters.search}
@@ -190,17 +240,6 @@ export function CatalogRail({
               <span className="absolute -end-0.5 -top-0.5 h-2 w-2 rounded-full bg-accent" aria-hidden />
             )}
           </button>
-          {onAddProduct && (
-            <button
-              type="button"
-              onClick={onAddProduct}
-              aria-label="הוספת פריט חדש לקטלוג"
-              title="הוספת פריט חדש לקטלוג"
-              className="shrink-0 rounded-md border border-border p-2 text-muted transition-colors hover:border-accent-line hover:bg-accent-tint hover:text-accent"
-            >
-              <Plus className="h-4 w-4" strokeWidth={1.75} />
-            </button>
-          )}
         </div>
 
         {showFilters && (
@@ -241,6 +280,21 @@ export function CatalogRail({
       </div>
 
       <div className="scroll-slim flex-1 overflow-y-auto p-2">
+        {/* The TOOLS first — "מילוי במות" and "שורות כיסאות" make things rather than pick a row, and
+            under eleven pinned built-ins the fill tool sat below the fold where nobody found it (the
+            user, 2026-11-10: "where is the stage fill-out feature"). */}
+        {(fillCard || !!rowsChair) && (
+          <>
+            <SectionLabel>
+              <Wrench className="h-3.5 w-3.5 text-accent" strokeWidth={2} />
+              כלים
+            </SectionLabel>
+            <ul className="mb-4 flex flex-col gap-1">
+              {fillCard && <FillCard active={stageFillActive} onClick={onStageFill} />}
+              {rowsChair && <RowsCard chair={rowsChair} mmPerPx={mmPerPx} armed={armedId === rowsToolId(rowsChair.id)} onArm={onArm} />}
+            </ul>
+          </>
+        )}
         {added.length > 0 && (
           <>
             <SectionLabel>
@@ -274,21 +328,26 @@ export function CatalogRail({
               בתיק האירוע
               <span className="nums text-muted">{liked.length}</span>
             </SectionLabel>
-            <ul className="flex flex-col gap-1">
+            <ul className="mb-4 flex flex-col gap-1">
               {liked.map((p) => (
                 <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} armed={p.id === armedId} onArm={onArm} onEdit={onEditProduct} onDuplicate={onDuplicateProduct} />
               ))}
             </ul>
-            <SectionLabel className="mt-4">כל הקטלוג</SectionLabel>
           </>
         )}
-        {(added.length > 0 || pinned.length > 0) && liked.length === 0 && (rest.length > 0 || !!rowsChair) && <SectionLabel>כל הקטלוג</SectionLabel>}
-        <ul className="flex flex-col gap-1">
-          {rowsChair && <RowsCard chair={rowsChair} mmPerPx={mmPerPx} armed={armedId === rowsToolId(rowsChair.id)} onArm={onArm} />}
-          {rest.map((p) => (
-            <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} armed={p.id === armedId} onArm={onArm} onEdit={onEditProduct} onDuplicate={onDuplicateProduct} />
-          ))}
-        </ul>
+        {departments.map((d) => (
+          <section key={d.id} aria-label={d.label}>
+            <SectionLabel>
+              {d.label}
+              <span className="nums text-muted">{d.items.length}</span>
+            </SectionLabel>
+            <ul className="mb-4 flex flex-col gap-1">
+              {d.items.map((p) => (
+                <ProductRow key={p.id} product={p} mmPerPx={mmPerPx} armed={p.id === armedId} onArm={onArm} onEdit={onEditProduct} onDuplicate={onDuplicateProduct} />
+              ))}
+            </ul>
+          </section>
+        ))}
         {empty && <p className="p-4 text-center text-sm text-muted">אין תוצאות</p>}
       </div>
       <p className="border-t border-border px-3 py-2 text-xs leading-relaxed text-muted">
@@ -370,6 +429,7 @@ function compositeGlyph(product: Product, mmPerPx: number): { node: React.ReactN
 }
 
 const ROWS_WORDS = ["שורות", "כיסא", "כיסאות", "חופה", "טקס"];
+const FILL_WORDS = ["מילוי במות", "במה", "במות", "מילוי", "אזור"];
 
 /** The block's drag image: its chairs at the canvas's zoom, kept between 30 and 240 px on its longest
  *  side like any item's (plan-glyph.tsx), held by its centre. */
@@ -456,8 +516,8 @@ function RowsCard({
           (armed ? "border-accent-line bg-accent-tint" : "border-transparent hover:border-border hover:bg-bg")
         }
       >
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-canvas">
-          <svg viewBox={`${-t.widthMm / 2 - pad} ${-t.depthMm / 2 - pad} ${t.widthMm + pad * 2} ${t.depthMm + pad * 2}`} className="h-10 w-10" aria-hidden>
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-sm bg-inset">
+          <svg viewBox={`${-t.widthMm / 2 - pad} ${-t.depthMm / 2 - pad} ${t.widthMm + pad * 2} ${t.depthMm + pad * 2}`} className="h-9 w-9" aria-hidden>
             <ChairBlock product={chair} spec={thumb} />
           </svg>
         </div>
@@ -472,9 +532,40 @@ function RowsCard({
             <MousePointerClick className="h-3.5 w-3.5" strokeWidth={2} />
             מניחים
           </span>
-        ) : (
-          <span className="shrink-0 rounded-sm bg-bg px-1.5 py-0.5 text-xs text-ink-soft">לחופה</span>
-        )}
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
+/** The stage fill tool as a card: a tool, not a product — it arms nothing, it opens the area tool on
+ *  the plan (and a second click closes it). Pressed while the tool is open. */
+function FillCard({ active, onClick }: { active: boolean; onClick?: () => void }) {
+  return (
+    <li>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-pressed={active}
+        title={active ? "סגירת מילוי הבמות · Esc" : "מילוי אזור בבמות — סימון האזור על התוכנית"}
+        onClick={onClick}
+        onKeyDown={(e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          onClick?.();
+        }}
+        className={
+          "group flex cursor-pointer items-center gap-2.5 rounded-md border p-1.5 transition-colors " +
+          (active ? "border-accent-line bg-accent-tint" : "border-transparent hover:border-border hover:bg-bg")
+        }
+      >
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-inset text-accent">
+          <Grid2x2Plus className="h-[18px] w-[18px]" strokeWidth={1.4} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className={"truncate text-sm font-medium " + (active ? "text-accent" : "text-ink")}>מילוי במות</p>
+          <p className="truncate text-xs text-muted">סימון אזור על התוכנית</p>
+        </div>
       </div>
     </li>
   );
@@ -539,7 +630,7 @@ function ProductRow({
           (armed ? "border-accent-line bg-accent-tint" : "border-transparent hover:border-border hover:bg-bg")
         }
       >
-        <div className="h-11 w-11 shrink-0 overflow-hidden rounded-md border border-border">
+        <div className="h-10 w-10 shrink-0 overflow-hidden rounded-sm bg-inset">
           <ProductImage product={p} />
         </div>
         <div className="min-w-0 flex-1">
@@ -551,9 +642,9 @@ function ProductRow({
             <MousePointerClick className="h-3.5 w-3.5" strokeWidth={2} />
             מניחים
           </span>
-        ) : (
-          <span className="shrink-0 rounded-sm bg-bg px-1.5 py-0.5 text-xs text-ink-soft">{p.composition ? "מורכב" : LAYER_LABEL[p.layer]}</span>
-        )}
+        ) : p.composition ? (
+          <span className="shrink-0 rounded-sm bg-bg px-1.5 py-0.5 text-xs text-ink-soft">מורכב</span>
+        ) : null}
         {(onEdit || onDuplicate) && (
           // The row is itself a button (it arms): the menu's clicks and keys stop here, so opening
           // it, or choosing from it with Enter, never arms the item as well.

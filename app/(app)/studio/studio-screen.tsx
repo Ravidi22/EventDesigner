@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { amend, apply as applyAction, dispatch, undo, redo, initHistory, type Action, type History, type RetypedTable } from "@/lib/design-document/actions";
 import { deleteSketchTemplate, fetchSketchTemplateContent, fetchSketchTemplates, saveSketchTemplate, setSketchPhoto } from "@/lib/studio/sketch-actions";
 import { uploadFile } from "@/lib/files/upload";
@@ -107,7 +107,7 @@ import { MIN_EDGE_ITEM_MM, isRoundPiece, isShapedPiece, pieceOutline, placeEdgeI
 /** The room as a frame: what a stage's pieces are carried into to stand in room coordinates
  *  (the fill tool keeps its hand-placed decks there, see StageFillState.pieces). */
 const ROOM_FRAME: Frame = { position: { x: 0, y: 0 }, rotation: 0 };
-import { StageDrawBar, StageFillPanel, sameDeckRef, type DeckAction, type DeckRef, type PickedDeck, type StageFillState } from "./stage-fill-panel";
+import { StageDrawBar, StageFillPanel, sameDeckRef, type DeckAction, type DeckRef, type PickedDeck, type StageFillPanelProps, type StageFillState } from "./stage-fill-panel";
 import { boundsOf, deckBox, snapDeck } from "@/lib/studio/deck-move";
 import { catalogBox, clampSize, footprintBounds, resizeAxes, resizeSpecOf, sizedFootprint } from "@/lib/studio/footprint";
 import { chipBox, dressBlockOf, dressingSpots, tableBlock, tableBox, tableFootprint, tableUnder } from "@/components/footprint-shape";
@@ -128,13 +128,14 @@ import { Frame as RugIcon, Plus } from "lucide-react";
 import { centreOver, hangHeightOf } from "@/lib/studio/hang";
 import { autoStack, floorStack, isStackable, landOnTop, restackTo, type StackBox, type StackEntry, type StackKind, type StackRef } from "@/lib/design-document/stacking";
 import { clipCount, copySelection, heldClip, holdClip, nextPasteStep, pasteInto, type Clip } from "@/lib/studio/clipboard";
-import { hasTextSelection, isShortcut, isTypingTarget } from "@/lib/keyboard";
-import { Toolbar } from "./toolbar";
+import { escapeLeavesField, hasTextSelection, isShortcut, isTypingTarget } from "@/lib/keyboard";
 import { CatalogRail } from "./catalog-rail";
+import { HintPill, HintRow, SavePill, ViewCluster } from "@/components/canvas-chrome";
+import { Menu } from "@/components/menu";
 import { ProductDrawer, blankProduct } from "../catalog/product-drawer";
 import { clipOf, compositeShell, fromSelection, isTableSet } from "@/lib/catalog/composition";
-import { Inspector, type BenchPanel, type BenchPatch, type BenchSidePatch, type EdgeKindId, type LockPanel, type StageEdgeRow, type StageGroupPanel, type StagePanel, type SwapPanel } from "./inspector";
-import { AlignCenterVertical, BringToFront, Copy, FlipHorizontal2, Group, Lock, LockOpen, PackagePlus, Pin, PinOff, RotateCw, SendToBack, Square, Trash2, Ungroup, X } from "lucide-react";
+import { Inspector, type BenchPanel, type BenchPatch, type BenchSidePatch, type EdgeKindId, type InspectorProps, type LockPanel, type StageEdgeRow, type StageGroupPanel, type StagePanel, type SwapPanel } from "./inspector";
+import { AlignCenterVertical, Box, BringToFront, ClipboardPaste, Copy, FlipHorizontal2, Group, Lock, LockOpen, PackagePlus, Pin, PinOff, RotateCw, ScanEye, SendToBack, Square, Trash2, Ungroup, X } from "lucide-react";
 import { alignItems, type AlignPanel } from "./align-menu";
 import { ProposalReview } from "./proposal-review";
 import { fetchSubmittedProposal, resolveProposal, type SubmittedProposal } from "@/lib/proposals/actions";
@@ -145,6 +146,37 @@ import { CanvasStage, type SelectionKind, type SelectionRef, type SpinMode } fro
 import type { ContextMenuItem, MarqueeMode } from "@/components/plan-canvas";
 import { VenueAccessNotice, VenueUnsetNotice } from "@/components/venue-access-notice";
 import { ScenePreview } from "./scene-preview";
+import { HoldWhileDragging } from "./hold-while-dragging";
+import { EndPanel, openEndPanel, PanelGroups, PanelList, PanelListFolded, PanelListHeading, PanelListRow, type PanelGroup } from "@/components/end-panel";
+import { Note } from "@/components/inspector-bar";
+import { listCrumb, planListRows, type PlanListRow } from "@/lib/studio/plan-list";
+import { groupMemory } from "@/lib/studio/panel-groups";
+import { clearanceRows, missingRows, type CheckRow } from "@/lib/studio/plan-checks";
+import { missingByShape } from "@/lib/design-document/stage";
+import { pieceName } from "@/lib/studio/stage-rim";
+import { NumberingFields, RemovedFeaturesList, SketchList } from "./document-groups";
+import { ArchiveRestore, Armchair, ArrowLeftRight, Circle, Flower2, Lamp, Layers, LayoutTemplate, ListOrdered, Puzzle, ShieldAlert, TriangleAlert, type LucideIcon } from "lucide-react";
+
+/** The end panel's list: a small glyph per plane for a row with no shade of its own. */
+const PLANE_ICON: Record<Plane, LucideIcon> = { tables: Circle, table: Flower2, floor: Square, ceiling: Lamp };
+
+/** A row's figure at its end: how many, and what else the list knows about them — "3 · 48 מושבים"
+ *  for lone tables of one type. A block's "2 שולחנות", a stage's size and a quantity's "×4" already
+ *  say how many, so they stand alone. */
+function rowFigure(row: PlanListRow): string | number {
+  if (!row.meta) return row.count;
+  return row.plane === "tables" && !row.key.startsWith("block:") ? `${row.count} · ${row.meta}` : row.meta;
+}
+
+/** A read-only figure in an end-panel group: what it is, and how many. */
+function FactRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="flex min-h-8 items-center justify-between gap-3 text-[13px]">
+      <span className="text-ink-soft">{label}</span>
+      <span className="nums font-semibold text-ink">{value}</span>
+    </div>
+  );
+}
 
 const uid = () => crypto.randomUUID();
 
@@ -165,7 +197,7 @@ const PASTE_STEP_PX = 34;
  *
  *  The passes are a RAIL filter now and nothing else. They used to also switch the toolbar's table
  *  buttons off during the design pass, so that a table could not be dropped in while the tables were
- *  being dressed; those buttons are gone (see toolbar.tsx) and the rail already enforces the same
+ *  being dressed; those buttons are gone (and the toolbar with them) and the rail enforces the same
  *  thing better — seating is not in DESIGN_PASS_GROUPS, so there is no table on screen to drag. */
 export type StudioMode = "full" | "hall" | "design";
 
@@ -264,7 +296,7 @@ export function StudioScreen({
    *  and where the hook falls back to fetching for itself. */
   initialProducts?: Product[];
   /** The autosave's state, reported up as it changes. The meeting's footer asks before leaving a
-   *  stage whose last edit failed to save — it cannot see this screen's toolbar from outside. */
+   *  stage whose last edit failed to save — it cannot see this screen's save pill from outside. */
   onSaveState?: (state: "saving" | "saved" | "error") => void;
 }) {
   // Held once here, for the whole studio: it fills the rail below AND primes the synchronous cache
@@ -334,9 +366,8 @@ export function StudioScreen({
   // across a corner of the hall is how you get hold of them. One selected thing is the ordinary
   // case and still the only one the inspector has fields for.
   const [selected, setSelected] = useState<SelectionRef[]>([]);
-  // The 3D pane beside the sketch (./scene-preview.tsx) — whether it is up, in a corner or a half,
-  // how wide: this DEVICE's preference (lib/studio/storage.ts), read once the screen is on the
-  // client (null until then, so the default is never written over what was stored). `sceneMounted`
+  // The 3D card on the sketch (./scene-preview.tsx) — whether it is up and how wide: this DEVICE's
+  // preference (lib/studio/storage.ts), read once the screen is on the client (null until then, so the default is never written over what was stored). `sceneMounted`
   // is a one-way latch: from its first opening the pane stays mounted and closing only hides it,
   // because its viewer's shaders compile once per GL context (see the pane's header).
   const [scenePrefs, setScenePrefs] = useState<ScenePreviewPrefs | null>(null);
@@ -350,6 +381,9 @@ export function StudioScreen({
     if (scenePrefs) saveScenePreview(scenePrefs);
   }, [scenePrefs]);
   const scenePane = scenePrefs ?? DEFAULT_SCENE_PREVIEW;
+  // The canvas column: where a drag holds the end panel still (./hold-while-dragging.tsx), and whose
+  // start edge — the catalog rail's — the 3D card is never dragged past.
+  const columnRef = useRef<HTMLDivElement>(null);
   const patchScene = useCallback((patch: Partial<ScenePreviewPrefs>) => setScenePrefs((cur) => ({ ...(cur ?? DEFAULT_SCENE_PREVIEW), ...patch })), []);
   const toggleScene = useCallback(() => {
     setSceneMounted(true);
@@ -1384,7 +1418,7 @@ export function StudioScreen({
     }
     // The venue's own features go out of THIS event's room only (FeaturePlacement.removed) — and
     // only the ones the venue lets a sketch move, which are the only ones a sketch can select. The
-    // property keeps them; the toolbar's "פריטי מתחם שהוסרו" brings them back.
+    // property keeps them; the end panel's "פריטי מתחם שהוסרו" brings them back.
     const venueOut = featureRefs(selected)
       .map((r) => plan.structure.features.find((f) => f.id === r.id))
       .filter((f): f is NonNullable<typeof f> => !!f && featureMovable(f))
@@ -1734,7 +1768,9 @@ export function StudioScreen({
       items: placements.length,
       seats: groupSeats(doc, soleGroup),
       seated: groupSeated(doc, soleGroup),
-      tableIds: tables.map((t) => t.id),
+      // Counted from the right along the block, as the dressing bar names a member ("שולחן 1 מתוך 2")
+      // — the panel's member rows read in this order.
+      tableIds: [...tables].sort((a, b) => blockMemberIndex(doc, a) - blockMemberIndex(doc, b)).map((t) => t.id),
       unnumbered: tables.length > 0 && tables.every((t) => t.unnumbered),
     };
   }, [doc, soleGroup]);
@@ -1847,8 +1883,13 @@ export function StudioScreen({
     const f = plan.structure.features.find((x) => x.id === sole.id);
     if (!f) return null;
     const here = arrangedFeature(doc, f);
-    // A curtain offers the catalog's own curtains to hang in its place (lib/venues/curtain.ts).
-    const drapes = f.kind === "curtain" ? catalog.filter((p) => !p.archived && CATEGORY_BY_ID[p.category]?.anchor === "wall") : [];
+    // A curtain offers the catalog's own curtains to hang in its place (lib/venues/curtain.ts) — the
+    // drapes alone: an LED strip, a sail and a ceiling cloth hang on a rail too (anchor "wall"), but
+    // none of them is a curtain to swap the venue's for.
+    const drapes =
+      f.kind === "curtain"
+        ? catalog.filter((p) => !p.archived && CATEGORY_BY_ID[p.category]?.anchor === "wall" && !isLedStrip(p) && !isCeilingClothCategory(p.category))
+        : [];
     const curtainSwap: SwapPanel | null = drapes.length ? { kind: "items", count: 1, current: null, similar: 0, options: drapes } : null;
     return { id: f.id, label: f.label, kind: f.kind, rotationDeg: here.rotationDeg ?? 0, moved: isFeatureMoved(doc, f.id), curtainSwap };
   }, [sole, plan.structure, doc, catalog]);
@@ -2758,15 +2799,24 @@ export function StudioScreen({
     },
     [stageShape, stageLayout],
   );
-  /** A deck clicked: picked, or — picked already — let go of. Null clears the pick. */
+  /** A deck clicked: picked, or — picked already — let go of. Null clears the pick. A pick opens the
+   *  end panel's ״פלטה״ group, where its verbs are (the chip it replaced was in view in the bar). */
   const pickDeck = useCallback(
-    (ref: DeckRef | null) =>
+    (ref: DeckRef | null) => {
+      // A deck picked opens ITS group (פלטה: every verb on it) — and the end panel with it, when the
+      // panel was put away: otherwise the pick changed nothing anyone could see. Not on the
+      // toggle-off (the picked deck pressed again lets it go).
+      if (ref && !(stageFill?.phase === "pick" && sameDeckRef(stageFill.picked, ref))) {
+        groupMemory.open("studio:fill", "deck");
+        openEndPanel("studio");
+      }
       setStageFill((cur) => {
         if (cur?.phase !== "pick") return cur;
         const { picked: _was, ...rest } = cur;
         return ref === null || sameDeckRef(cur.picked, ref) ? rest : { ...rest, picked: ref };
-      }),
-    [],
+      });
+    },
+    [stageFill],
   );
   /** The deck's right-click menu: the bar's verbs, the sizes as a submenu. */
   const deckMenu = useCallback(
@@ -3493,6 +3543,7 @@ export function StudioScreen({
     if (!placing) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      if (escapeLeavesField(e)) return;
       e.preventDefault();
       e.stopPropagation();
       setPlacing(null);
@@ -3603,6 +3654,8 @@ export function StudioScreen({
       if (e.key !== "Escape") return;
       // A dialog over the plan (the add-product form) owns its own Escape.
       if (e.target instanceof Element && e.target.closest("dialog")) return;
+      // A field in the end panel has the focus: this Escape leaves the field, the arm stays.
+      if (escapeLeavesField(e)) return;
       e.preventDefault();
       e.stopPropagation();
       setArmedId(null);
@@ -3615,11 +3668,23 @@ export function StudioScreen({
    *  banquettes — the stages' and the standalone ones, chairs and sofa seats alike. */
   const seating = useMemo(() => {
     let tables = 0;
+    // …and how many of the tables' places are spoken for — a block's as the one table it is.
+    let seated = 0;
     for (const u of numberedUnits(doc)) {
-      if (u.kind === "group") tables += groupSeats(doc, u.id);
-      else if (u.kind === "table") tables += doc.tables.find((t) => t.id === u.tableIds[0])?.seats ?? 0;
+      if (u.kind === "group") {
+        tables += groupSeats(doc, u.id);
+        seated += groupSeated(doc, u.id);
+      } else if (u.kind === "table") {
+        const t = doc.tables.find((x) => x.id === u.tableIds[0]);
+        tables += t?.seats ?? 0;
+        seated += t?.seated ?? 0;
+      }
     }
-    return { tables, benches: benchSeats(doc.placements, deckOf) + standaloneBenchSeats(doc.placements, benchOf) };
+    // A standalone banquette's own typed note (BenchSpec.seated) — its seats are in the places below,
+    // so its people are in `seated` too, or the summary reads two bases. (A stage's edge banquette
+    // carries no such note: `seated` is a standalone banquette's only.)
+    for (const p of doc.placements) if (p.bench?.seated && standaloneBench(p, benchOf)) seated += p.bench.seated;
+    return { tables, seated, benches: benchSeats(doc.placements, deckOf) + standaloneBenchSeats(doc.placements, benchOf) };
   }, [doc]);
 
   /** Every bare stretch of open edge covered with `kind` — a flight or a banquette where there is
@@ -4016,7 +4081,7 @@ export function StudioScreen({
       // Its faces onto the base are edges too, and like every other side they start bare (2026-10-30).
       patchStage(p.id, (s) => ({ ...s, levels: [...(s.levels ?? []), level] }));
       setSelected([{ kind: "placement", id: p.id }]);
-      showHint("נוסף מפלס מוגבה — את הגובה שלו קובעים בסרגל הבמה, תחת ״גובה״");
+      showHint("נוסף מפלס מוגבה — את הגובה שלו קובעים בלוח שבצד, תחת ״גובה ומפלסים״");
     },
     [toolStage, patchStage],
   );
@@ -4075,6 +4140,7 @@ export function StudioScreen({
     if (stageTool?.kind !== "stair") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      if (escapeLeavesField(e)) return;
       e.preventDefault();
       e.stopPropagation();
       setStageTool(null);
@@ -4203,6 +4269,66 @@ export function StudioScreen({
     );
     showHint(`${renumbering.length} שולחנות מוספרו מחדש`);
   }, [renumbering, batch, doc.placements]);
+
+  // ── The end panel (components/end-panel.tsx) ─────────────────────────────────────────────────
+  // What is on the plan, per plane (lib/studio/plan-list.ts), read off the drawing as it SETTLES
+  // (./use-settled.ts): a drag moves things without changing what is on the plan, and the
+  // missing-piece check lays every stage's decks — which never runs on the live value (the fill
+  // tool's rule). The pass's drawing, not the document: the hall pass lists what it draws.
+  const listDoc = useSettled(canvasDoc, STAGE_SETTLE_MS);
+  const planRows = useMemo(
+    () =>
+      // What THIS event put on the plan — never the venue's own bars, pools and stages: they are the
+      // property's, already drawn, and listing them crowded out the event's own (the user, 2026-11-10).
+      planListRows(listDoc, { resolve }),
+    // The catalog: resolve() reads the cache it primes, so a list read before it landed reads again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [listDoc, catalog],
+  );
+  const planTotal = useMemo(() => PLANES.reduce((n, { id }) => n + planRows[id].reduce((m, r) => m + r.count, 0), 0), [planRows]);
+  /** While a table is dressed, the list picks only what is on it or hangs over it (its whole
+   *  block's): a row reaching behind the scrim selected room items nobody could see — Ctrl+A cannot
+   *  (selectAll) — and Delete then removed them unseen. Such a row is listed, dimmed, and inert. */
+  const behindScrim = useCallback(
+    (refs: readonly SelectionRef[]) =>
+      dressingIds.size > 0 &&
+      !refs.every((r) => {
+        if (r.kind === "table") return dressingIds.has(r.id);
+        if (r.kind !== "placement") return false;
+        const p = doc.placements.find((x) => x.id === r.id);
+        return !!p && ((p.layer === "table" && !!p.tableId && dressingIds.has(p.tableId)) || (p.layer === "ceiling" && !!p.over && dressingIds.has(p.over)));
+      }),
+    [dressingIds, doc.placements],
+  );
+  // The stages' pieces the catalog lacks (layStage `missing`, worded by shape).
+  const missingChecks = useMemo(
+    () =>
+      missingRows(
+        listDoc.placements.flatMap((p) =>
+          p.stage ? [{ id: p.id, label: "במה", missing: missingByShape(layStage(p.stage, deckOf).missing).map((m) => ({ name: pieceName(m.info), count: m.count })) }] : [],
+        ),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [listDoc, catalog],
+  );
+  // בדיקות: every breach of a safety distance, then every stage with a piece missing — each a row
+  // that selects what it describes. A venue feature's own label may be empty; its kind names it.
+  const checkRows = useMemo<CheckRow[]>(() => {
+    const labels = new Map(clearance.subjects.map((s) => [s.key, s.label]));
+    const labelOf = (key: string) => {
+      const label = labels.get(key);
+      if (label) return label;
+      const feature = key.startsWith("feature:") ? plan.structure.features.find((f) => `feature:${f.id}` === key) : undefined;
+      return feature ? FEATURE_KIND_LABEL[feature.kind] : undefined;
+    };
+    return [...clearanceRows(clearance.issues, labelOf), ...missingChecks];
+  }, [clearance, missingChecks, plan.structure]);
+  // The list folds to one line while something is selected (the selection's groups go under it);
+  // its folded row unfolds it for THAT selection, and a new pick folds it again (halls' pattern).
+  const [unfoldedFor, setUnfoldedFor] = useState<SelectionRef[] | null>(null);
+  // While the fill tool has an area (its groups take the panel), the list folds as for a selection.
+  const listOpen = (selected.length === 0 && stageFill?.phase !== "pick") || unfoldedFor === selected;
+  const selectedKeys = useMemo(() => new Set(selected.map((r) => `${r.kind}:${r.id}`)), [selected]);
 
   const changeQuantity = (id: string, delta: number) => {
     const p = doc.placements.find((x) => x.id === id);
@@ -4984,6 +5110,10 @@ export function StudioScreen({
       // number and pressing Ctrl+Z has to take back the digit, not the whole plan — the field owns
       // its own undo stack and the browser is already about to use it.
       // The fill tool's picked deck takes its keys first (deckKey) — the arrows, R, Ctrl+D, Delete.
+      if (e.key === "Escape" && escapeLeavesField(e)) {
+        // Field-first: with a field focused, Escape leaves the field and nothing behind it.
+        return;
+      }
       if (!typing && deckKey(e)) {
         e.preventDefault();
       } else if (mod && !typing && isShortcut(e, "z")) {
@@ -5002,6 +5132,14 @@ export function StudioScreen({
       } else if (mod && !typing && isShortcut(e, "v")) {
         e.preventDefault();
         paste();
+      } else if (mod && !typing && !e.shiftKey && !e.altKey && isShortcut(e, "d")) {
+        // The quick bar's copy button, on the keyboard (after deckKey, so a picked deck in the
+        // fill tool still takes its own Ctrl+D). The browser would bookmark the page. Not with stairs,
+        // a banquette or a barrier picked out on a stage: its bar has no copy, and the selection
+        // under it is the whole stage — Ctrl+D there doubled the stage (Delete takes the item first
+        // for the same reason).
+        e.preventDefault();
+        if (!activeEdge && docRefs(selected).length > 0) duplicate();
       } else if (mod && !typing && isShortcut(e, "g")) {
         e.preventDefault();
         if (e.shiftKey) ungroupSelection();
@@ -5053,15 +5191,23 @@ export function StudioScreen({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [deleteSelection, copy, cut, paste, groupAny, ungroupSelection, selectAll, restack, selected, docRefs, toggleLock, activeEdge, removeStair, stageFill, deckKey, pickDeck, dressing, nudgeDressing, backToGroup]);
+  }, [deleteSelection, copy, cut, paste, duplicate, groupAny, ungroupSelection, selectAll, restack, selected, docRefs, toggleLock, activeEdge, removeStair, stageFill, deckKey, pickDeck, dressing, nudgeDressing, backToGroup]);
 
   // --- the right-click menu ------------------------------------------------------------------------
   // The same verbs the bar offers, where the pointer already is. The menu is built the instant the
   // button goes down, before React has re-rendered with whatever the canvas just selected under it
   // — so each row reaches for the LATEST handlers through a ref rather than closing over this
   // render's, which would act on the selection as it was a click ago.
-  const latest = useRef({ restack, duplicate, deleteSelection, groupSelection: groupAny, ungroup: ungroupSelection, align: alignPanel, compose: composeFromSelection, lock: lockPanel });
-  latest.current = { restack, duplicate, deleteSelection, groupSelection: groupAny, ungroup: ungroupSelection, align: alignPanel, compose: composeFromSelection, lock: lockPanel };
+  const latest = useRef({ restack, duplicate, deleteSelection, groupSelection: groupAny, ungroup: ungroupSelection, align: alignPanel, compose: composeFromSelection, lock: lockPanel, paste });
+  latest.current = { restack, duplicate, deleteSelection, groupSelection: groupAny, ungroup: ungroupSelection, align: alignPanel, compose: composeFromSelection, lock: lockPanel, paste };
+  /** A right-click on nothing of the sketch's: paste, while the clip holds something. There is no
+   *  header any more and no document ⋯ (the user's note 1) — so besides Ctrl+V this is where a paste
+   *  lives: it happens with nothing selected, so it cannot be a verb on any selection's bar. The clip
+   *  is a module variable, read the instant the menu opens. */
+  const floorMenu = useCallback(
+    (): ContextMenuItem[] => (clipCount(heldClip()) > 0 ? [{ label: "הדבקה · Ctrl+V", icon: ClipboardPaste, onSelect: () => latest.current.paste() }] : []),
+    [],
+  );
   const contextItems = useCallback(
     (refs: SelectionRef[]): ContextMenuItem[] => {
       const own = docRefs(refs);
@@ -5238,60 +5384,217 @@ export function StudioScreen({
   // held: fall back to the whole property rather than framing a box that no longer exists.
   const focusZoneId = zoneOptions.some((z) => z.id === zoneFocus) ? zoneFocus : null;
 
-  // Not memoised, on purpose: `heldClip()` is the same module variable `canPaste` below reads
-  // straight off at render, and the render that follows a copy (its only writer) already happens
-  // because copy() also sets the hint. What the inspector's dressing button needs beyond `canPaste`
-  // is whether the one held table actually brought dressing along, and how many of the currently
-  // selected tables that dressing would land on.
+  // Not memoised, on purpose: `heldClip()` is a module variable read straight off at render, and the
+  // render that follows a copy (its only writer) already happens because copy() also sets the hint.
+  // What the inspector's dressing button needs is whether the one held table actually brought
+  // dressing along, and how many of the currently selected tables that dressing would land on.
   const dressCandidateCount = copyTargets.length;
+
+  // The selection's two parts — the quick bar in the dock and the groups in the end panel — are ONE
+  // component rendered twice over this ONE object, so each kind's derived numbers live in one place.
+  const inspectorProps: Omit<InspectorProps, "part"> = {
+    selection: sole,
+    selectedCount: selected.length,
+    feature: featurePanel,
+    onResetFeature: resetFeature,
+    onSwapCurtain: swapCurtain,
+    facing: sharedFacing,
+    onFace: faceSelection,
+    spin,
+    onSpin: setSpin,
+    canRestack: stackRefs(selected).length > 0,
+    onRestack: restack,
+    // A block is one table to the seat count's "ל־N שולחנות", as to setSeatsForSelection.
+    selectedTables: new Set(selected.filter((r) => r.kind === "table").map((r) => unitOf(units, r.id)?.key ?? r.id)).size,
+    selectedTableIds: selected.filter((r) => r.kind === "table").map((r) => r.id),
+    onSeatsForSelection: setSeatsForSelection,
+    onChairForSelection: setChairForSelection,
+    onChair: (id, variantId) => act({ type: "setTableChair", ids: [id], variantId }),
+    group: groupPanel,
+    onGroup: groupAny,
+    onUngroup: ungroupSelection,
+    onRenumberGroup: (groupId, number) => act({ type: "renumberGroup", groupId, number }),
+    onSeats: (id, seats) => act({ type: "setTableSeats", id, seats }),
+    onSeated: (id, seated) => act({ type: "setTableSeated", id, seated }),
+    onBlockedSides: (id, sides) => act({ type: "setTableBlockedSides", id, sides }),
+    // One number for the block, laid back over the tables it is made of — one history
+    // entry, because from the designer's side it was one number typed once.
+    onGroupSeated: (groupId, seated) =>
+      batch(spreadSeated(doc, groupId, seated).map((x) => ({ type: "setTableSeated" as const, id: x.id, seated: x.seated }))),
+    onGroupSeats: (groupId, seats) =>
+      batch(spreadSeats(doc, groupId, seats).map((x) => ({ type: "setTableSeats" as const, id: x.id, seats: x.seats }))),
+    doc,
+    structure: plan.structure,
+    onClose: () => setSelected([]),
+    onQuantity: changeQuantity,
+    onDelete: deleteSelection,
+    onDressTable: mode === "hall" ? undefined : dressTable,
+    onTablesNumbered: (tableIds, numbered) => act({ type: "setTablesNumbered", tableIds, numbered }),
+    renderPattern,
+    renderDesigns,
+    onScale: (id, scale) => act({ type: "setPlacementScale", id, scale }),
+    onHang: (id, heightMm) => act({ type: "setPlacementHang", id, heightMm }),
+    roofOf: (pt) => sketchRoofOf()(pt),
+    onCentreOver: centreHung,
+    onSpreadRow: spreadAlongRow,
+    onHangOverDressing: hangOverDressing,
+    onVessel: (ids, vessel) => act({ type: "setPlacementVessel", ids, vessel }),
+    onBorder: (ids, border) => act({ type: "setPlacementBorder", ids, border }),
+    onClimb: (id, edit) => act({ type: "setPlacementClimb", id, ...edit }),
+    onApplyToAllTables: spreadCloth,
+    onVariant: (id, variantId) => act({ type: "setPlacementVariant", id, variantId }),
+    onSpan: (id, span) => act({ type: "setPlacementSpan", id, span }),
+    onRail: (id, rail, dropMm) => act({ type: "setPlacementRail", id, rail, dropMm }),
+    onDrawRod: (id) => {
+      setRodDraw(id);
+      // An LED strip is drawn as a free run — its two ends (lib/venues/led.ts ledRunRail).
+      const drawn = doc.placements.find((x) => x.id === id);
+      if (drawn && isLedStrip(resolve(drawn.variantId)?.product)) return showHint("לחיצה בתחילת הפס ולחיצה בסופו · Esc לביטול");
+      showHint("לחיצה לכל עמוד של המוט · Enter או לחיצה כפולה לסיום · Esc לביטול");
+    },
+    onDrawCloth: (id, kind) => startClothDraw({ kind, placementId: id }),
+    onResize: (id, sizeMm) => act({ type: "resizePlacement", id, sizeMm }),
+    onBows: (id, bows) => act({ type: "setPlacementBows", id, bows }),
+    onCorners: (id, corners) => act({ type: "setPlacementCorners", id, corners }),
+    onCoverInset: (id, insetMm) => {
+      const cover = doc.placements.find((x) => x.id === id)?.cover;
+      if (cover) act({ type: "setPlacementCover", id, cover: { ...cover, insetMm } });
+    },
+    onDetachCover: (id) => act({ type: "setPlacementCover", id, cover: null }),
+    stageCoverItems: soleStage ? coverItems(stageAim(soleStage), true) : undefined,
+    onRenumber: (id, number) => act({ type: "renumberTable", id, number }),
+    onStyleTable: (id, style) => act({ type: "styleTable", id, style }),
+    onDuplicate: duplicate,
+    onRemovePlacement: (id) => act({ type: "removePlacement", id }),
+    zoneFocused: !!focusZoneId,
+    onSelectInZone: selectInZone,
+    layerActive: activeLayer !== null,
+    onSelectLayer: selectLayer,
+    scopeLabel:
+      [
+        focusZoneId && `אזור: ${zoneOptions.find((z) => z.id === focusZoneId)?.name ?? ""}`,
+        activeLayer && `שכבה: ${PLANES.find((pl) => pl.id === activeLayer)?.label ?? ""}`,
+      ]
+        .filter(Boolean)
+        .join(" · ") || undefined,
+    onClearScope: () => {
+      setZoneFocus(null);
+      setActiveLayer(null);
+    },
+    onSelectSimilar: selectSimilar,
+    canDistribute,
+    onDistribute: distributeEvenly,
+    align: alignPanel,
+    lock: lockPanel,
+    dressCandidateCount,
+    onCopyDressing: copyDressingToSelection,
+    onMirror: canMirror ? mirrorSelection : undefined,
+    breaches,
+    sizePanel,
+    onSize: resizeSole,
+    spacing,
+    onSpace: spaceSelection,
+    stagePanel,
+    onEditStage: editStage,
+    onExplodeStage: explodeStage,
+    onStageHeight: setStageHeightMm,
+    onStairStep: setStairStep,
+    onStageSize: setStageSize,
+    onAddStagePieces: (infos) => {
+      if (soleStage) void addStagePieces(infos, soleStage.id);
+    },
+    onUseStagePieces: (ids) => {
+      if (soleStage) patchStage(soleStage.id, (s) => ({ ...s, decks: [...s.decks, ...ids.filter((id) => !s.decks.includes(id))] }));
+    },
+    onLevelHeight: setLevelHeight,
+    onRemoveLevel: removeLevel,
+    onAddLevel: startLevel,
+    onAddEdge: startEdge,
+    onFillEdges: fillEdges,
+    onSelectEdge: setActiveEdge,
+    onRemoveStair: removeStair,
+    onStairChange: changeStair,
+    benchPanel,
+    onBench: changeBench,
+    onChairRows: changeChairRows,
+    onStageSurface: setSurface,
+    onStageCorners: setCorners,
+    onStageExceed: setExceed,
+    onSaveTemplate: (name) => void saveTemplate(name),
+    stageGroup,
+    onGroupStageHeight: setGroupStageHeight,
+    onGroupFillEdges: fillGroupEdges,
+    onGroupStageSurface: setGroupSurface,
+    onGroupStageCorners: setGroupCorners,
+    onGroupStageExceed: setGroupExceed,
+    onGroupSaveTemplate: (name) => void saveGroupTemplates(name),
+    onGroupExplode: explodeGroup,
+    onPickStage: (id) => setSelected([{ kind: "placement", id }]),
+    onBackToGroup: backToGroup,
+    onStickStages: selectedStages.length >= 2 ? stickStages : undefined,
+    onMergeStages: selectedStages.length >= 2 ? mergeSelectedStages : undefined,
+    onMakeStage: makeStage,
+    swap: swapPanel,
+    onSwap: swapSelection,
+    onEditProduct: editProduct,
+    onSaveComposite: composeFromSelection,
+    clothOptions,
+    onReplaceCloth: (id, productId) => {
+      const product = productById(productId);
+      if (product) replaceItems([id], product);
+    },
+    onBlockCloth: (tableIds, op) => {
+      const covers = tableIds.map((id) => coverOn(doc, id)).filter((c): c is Placement => !!c);
+      if (op === "remove") batch(covers.map((c) => ({ type: "removePlacement" as const, id: c.id })));
+      else if ("variantId" in op) batch(covers.filter((c) => c.variantId !== op.variantId).map((c) => ({ type: "setPlacementVariant" as const, id: c.id, variantId: op.variantId })));
+      else {
+        const product = productById(op.productId);
+        if (product) replaceItems(covers.map((c) => c.id), product);
+      }
+    },
+    onStyleTables: (ids, style) => batch(ids.map((id) => ({ type: "styleTable" as const, id, style }))),
+    onCopy: copy,
+    onCut: cut,
+    onSelectItems: (refs) => pickMany(refs, false),
+  };
+  // While the stage fill tool is out its own bars take the dock (StageDrawBar, StageFillPanel), and
+  // the selection's groups stand down with the selection's bar.
+  const fillToolOut = (stageFill?.phase === "draw" && stageTool?.kind !== "level") || stageFill?.phase === "pick";
+  // The fill tool's pick phase is, like the selection, ONE component rendered twice over ONE object:
+  // its quick bar in the dock, its groups in the end panel (in place of the selection's).
+  const fillProps: StageFillPanelProps | null =
+    stageFill?.phase === "pick"
+      ? {
+          state: stageFill,
+          types: deckTypes,
+          layout: stageLayout,
+          onChange: setStageFill,
+          overlaps: stageShape?.overlaps ?? false,
+          onRedraw: () => setStageFill((cur) => ({ phase: "draw", chosen: cur?.chosen, editing: cur?.editing, shape: cur?.shape, pieces: cur?.pieces })),
+          onResize: resizeStageArea,
+          onCommit: commitStageFill,
+          picked: pickedDeck,
+          pinnedCount: stageFill.pieces?.length ?? 0,
+          onDeck: (action) => deckAction(action),
+          onAddPieces: (infos) => void addStagePieces(infos),
+          onClose: () => setStageFill(null),
+        }
+      : null;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <Toolbar
-        canUndo={history.past.length > 0}
-        canRedo={history.future.length > 0}
-        onUndo={() => setHistory(undo)}
-        onRedo={() => setHistory(redo)}
-        canCopy={selected.length > 0}
-        onCopy={copy}
-        onCut={cut}
-        // ponytail: read at render rather than mirrored into state. The clip is a module variable,
-        // and its only writer is copy()/cut() — both of which set the hint, so the render that
-        // enables the button is already happening.
-        canPaste={clipCount(heldClip()) > 0}
-        onPaste={paste}
-        layerVisible={layerVisible}
-        onToggleLayer={(l) => setLayerVisible((v) => ({ ...v, [l]: !v[l] }))}
-        activeLayer={activeLayer}
-        onActivateLayer={(l) => setActiveLayer((cur) => (cur === l ? null : l))}
-        zones={zoneOptions}
-        focusZoneId={focusZoneId}
-        onFocusZone={setZoneFocus}
-        canRenumber={renumbering.length > 0}
-        onRenumber={renumberAll}
-        numbering={numbering}
-        onNumbering={setNumbering}
-        renumberCount={renumbering.length}
-        sketches={sketches}
-        sketchEmpty={doc.tables.length + doc.placements.length === 0}
-        onSaveSketch={(name) => void saveSketch(name)}
-        onLoadSketch={(id, mode) => void loadSketch(id, mode)}
-        onDeleteSketch={(id) => void deleteSketch(id)}
-        onSketchPhoto={(id, file) => void sketchPhoto(id, file)}
-        saveState={saveState}
-        onRetrySave={retrySave}
-        removedFeatures={removedVenueFeatures}
-        onRestoreFeatures={restoreFeatures}
-        sceneOn={scenePane.open}
-        onToggleScene={toggleScene}
-      />
-      {/* `relative`: the 3D pane's corner layout is positioned against this row, so it sits in the
-          canvas's corner whatever the rail is doing, and its split layout is the row's last column. */}
+      {/* No header (the "Studio + Halls" board, 1b — everything floats): history is on the canvas
+          strip, the view (zone, 3D) in the top-start cluster, the save state a pill in the
+          bottom-start corner, the clipboard on the keys and the right-click menu, and the document's
+          own questions — numbering, saved sketches, removed venue features — are end-panel groups.
+          The canvas card's three columns: the catalog rail | the canvas (and the 3D pane beside it)
+          | the end panel. */}
       <div className="relative flex min-h-0 flex-1">
         <CatalogRail
           products={catalog}
           groups={RAIL[mode].groups}
           pass={mode === "hall" || mode === "design" ? mode : undefined}
+          passLabel={mode === "hall" ? "סקיצת אולם" : mode === "design" ? "סקיצה עיצובית" : undefined}
           hint={RAIL[mode].hint}
           mmPerPx={mmPerPx}
           onAddProduct={() => setDrawer({ product: blankProduct(railCategories[0]), mode: "new" })}
@@ -5300,8 +5603,13 @@ export function StudioScreen({
           addedIds={addedIds}
           armedId={armed ? armedId : null}
           onArm={arm}
+          onStageFill={startStageFill}
+          stageFillActive={stageFill !== null}
         />
-        <div className="relative min-w-0 flex-1">
+        {/* `relative`: the 3D card is positioned against this column (its bottom-start corner, above
+            the quick bar), so it sits on the canvas whatever the rail and the end panel are doing —
+            and its width is held to this column's. */}
+        <div ref={columnRef} className="relative min-w-0 flex-1">
           <CanvasStage
             doc={canvasDoc}
             plan={plan}
@@ -5337,6 +5645,12 @@ export function StudioScreen({
             alignGuide={alignGuideLine}
             onContextMenu={contextItems}
             onContextMenuAt={coverMenuAt}
+            onFloorMenu={floorMenu}
+            // The strip's own undo/redo pair — the keyboard's Ctrl+Z / Ctrl+Y stay this screen's.
+            onUndo={() => setHistory(undo)}
+            onRedo={() => setHistory(redo)}
+            canUndo={history.past.length > 0}
+            canRedo={history.future.length > 0}
             onResizePlacement={(id, sizeMm, position) => {
               // A stage's handles stretch its OUTLINE — the decks follow on their own. A round one is
               // scaled whole (scaleStage): it stays the curve it is.
@@ -5374,12 +5688,28 @@ export function StudioScreen({
             clearance={clearance}
             showClearance={showClearance}
             onToggleClearance={() => setShowClearance((on) => !on)}
+            // The room in 3D (./scene-preview.tsx): the strip's last control, NAMED — a lone cube in the
+            // top-start corner went unseen (the user, 2026-11-10: "the 3D toggle cannot be seen — also
+            // relocate it"). Pressed, in the segment look, while the card is up.
+            stripExtras={
+              <button
+                type="button"
+                onClick={toggleScene}
+                aria-pressed={scenePane.open}
+                title={scenePane.open ? "סגירת התלת־ממד" : "התלת־ממד של הסקיצה — עוקב אחרי מה שנבחר"}
+                className={
+                  "inline-flex h-8 items-center gap-1.5 rounded-sm px-2.5 text-[13px] font-bold transition-colors " +
+                  (scenePane.open ? "bg-accent-wash text-accent-deep" : "text-accent hover:bg-accent-tint")
+                }
+              >
+                <Box className="h-4 w-4" strokeWidth={2} aria-hidden />
+                תלת־ממד
+              </button>
+            }
             onResizeTable={(id, sizeMm, position) => {
               drag({ type: "resizeTable", id, sizeMm });
               drag({ type: "moveTable", id, position });
             }}
-            stageFillActive={stageFill !== null}
-            onStageFill={startStageFill}
             drawArea={stageFill?.phase === "draw" || stageTool?.kind === "level"}
             rodDraw={
               rodDraw
@@ -5503,23 +5833,8 @@ export function StudioScreen({
             onArrangeDressing={(tableId, positions) => drag({ type: "arrangeDressing", tableId, positions })}
             onArrangeBlock={(positions) => drag({ type: "arrangeOnTables", positions })}
           />
-          {/* A client sent changes: the line that says so, and the review over the canvas. */}
-          {proposal && !reviewing && !dressingTable && (
-            <div className="pointer-events-none absolute inset-x-3 top-3 z-20 flex justify-center">
-              <div className="pointer-events-auto flex items-center gap-3 rounded-md border border-accent-line bg-surface py-1.5 ps-4 pe-1.5 shadow-floating">
-                <span className="text-[13px] text-ink">
-                  <span className="font-bold">{proposal.submittedBy}</span> הציע/ה {diffDocuments(proposal.base, proposal.content).length} שינויים בסקיצה
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setReviewing(true)}
-                  className="rounded-pill bg-accent px-4 py-1.5 text-[13px] font-bold text-canvas transition-colors hover:bg-accent-hover"
-                >
-                  לסקירה
-                </button>
-              </div>
-            </div>
-          )}
+          {/* A client sent changes: the review over the canvas (the line that says so is in the hint
+              row, below). */}
           {proposal && reviewing && (
             <ProposalReview
               proposal={proposal}
@@ -5545,10 +5860,66 @@ export function StudioScreen({
               }}
             />
           )}
-          {/* The table being dressed: how its items stand, and which tables should look like it. */}
-          {dressingTable && (
-            <div className="pointer-events-none absolute inset-x-3 top-3 flex justify-center">
-              <div className="pointer-events-auto flex min-w-0 justify-center">
+          {/* The inspector is a BAR along the bottom of the canvas now, centred — the shape the
+              venue plan's inspector already has, and the shape that keeps a selection's controls
+              from eating a column of the plan. It is centred rather than tucked into a corner
+              because its own popovers open upwards and centred on their chip: from a corner, half
+              of them would open past the edge of the plane. The dock is /halls' (`ps-[124px]`
+              keeps the bar clear of the save pill in the bottom-start corner). */}
+          <div className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex justify-center ps-[124px]">
+            <div className="pointer-events-auto flex min-w-0 justify-center">
+              {stageFill?.phase === "draw" && stageTool?.kind !== "level" ? (
+                <StageDrawBar
+                  shape={stageFill.shape ?? "corners"}
+                  onShape={(shape: AreaShape) => setStageFill((cur) => (cur?.phase === "draw" ? { ...cur, shape } : cur))}
+                  templates={templates}
+                  onTemplate={(id) => {
+                    const t = templates.find((x) => x.id === id);
+                    if (!t) return;
+                    setStageFill(null);
+                    setPlacing(t);
+                  }}
+                  onRemoveTemplate={(id) => void removeTemplate(id)}
+                  onClose={() => setStageFill(null)}
+                />
+              ) : fillProps ? (
+                <StageFillPanel part="bar" {...fillProps} />
+              ) : (
+              <Inspector part="bar" {...inspectorProps} />
+              )}
+            </div>
+          </div>
+          {/* Which part of the property to work in — top-start, the canvas strip's twin across the top
+              line. It FRAMES rather than filters: the rest of the plan stays drawn and reachable, held
+              back so the חופה reads as the thing being designed while the hall it opens onto is still
+              visible behind it. A property with one zone has nothing to choose between, so the cluster
+              isn't drawn at all. No venue chip (the venue is the event's, chosen in its details); the
+              3D toggle is the strip's. */}
+          {zoneOptions.length > 1 && (
+            <ViewCluster>
+              {/* The board's "zone ▾": the chip the view cluster is made for (components/menu.tsx), the
+                  toolbar's height. The chip names the zone being worked in. */}
+              <Menu
+                trigger="chip"
+                align="start"
+                icon={ScanEye}
+                label="התמקדות באזור"
+                triggerText={focusZoneId ? zoneOptions.find((z) => z.id === focusZoneId)?.name || "אזור ללא שם" : "כל המתחם"}
+                items={[
+                  { label: "כל המתחם", onSelect: () => setZoneFocus(null) },
+                  ...zoneOptions.map((z) => ({ label: z.name || "אזור ללא שם", onSelect: () => setZoneFocus(z.id) })),
+                ]}
+              />
+            </ViewCluster>
+          )}
+          {/* Everything that is not a tool and not the selection, in ONE row under the corners'
+              line: the standing notices first, then what the armed tool waits for. */}
+          <HintRow>
+            {/* The table being dressed: how its items stand, and which tables should look like it.
+                Its bar leads the row (the hint row's own line, top-[68px], centred); the hints and
+                notices stack under it. */}
+            {dressingTable && (
+              <div className="pointer-events-auto flex max-w-full min-w-0 justify-center">
                 <DressingBar
                   title={dressingIds.size > 1 ? `עיצוב ${tableLabel(doc, dressingTable)} · שולחן ${blockMemberIndex(doc, dressingTable) + 1} מתוך ${dressingIds.size}` : `עיצוב ${tableLabel(doc, dressingTable)}`}
                   // What the bar counts, arranges and spreads is the WHOLE block being dressed.
@@ -5591,12 +5962,45 @@ export function StudioScreen({
                   onClose={() => setDressing(null)}
                 />
               </div>
-            </div>
-          )}
-          {/* What the area tool is waiting for, where the tape says what IT is waiting for. */}
-          {stageFill?.phase === "draw" && (
-            <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center">
-              <span className="rounded-full border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
+            )}
+            {/* The event is booked into a property this designer was never granted. The canvas stays
+                usable — items can still be placed and the meeting can go on — but the blank ground
+                under them gets a reason instead of being mistaken for an undrawn hall. The notice is
+                a card of its own (a heading and a paragraph — the same words on the placement map
+                and the quote), so it stands in the row as it is rather than squeezed into a pill. */}
+            {plan.access === "denied" && (
+              <div className="pointer-events-auto">
+                <VenueAccessNotice />
+              </div>
+            )}
+            {/* The other blank plane: an event with no property chosen yet. Common on a first meeting
+                (the event is opened before anyone has decided where the wedding is) and, until this
+                said so, indistinguishable from a hall nobody had drawn. */}
+            {venueUnset && (
+              <div className="pointer-events-auto">
+                <VenueUnsetNotice />
+              </div>
+            )}
+            {/* A client sent changes: the line that says so; the review opens over the canvas. */}
+            {proposal && !reviewing && !dressingTable && (
+              <HintPill tone="quiet" interactive>
+                <span className="flex items-center gap-3">
+                  <span className="min-w-0">
+                    <span className="font-bold text-ink">{proposal.submittedBy}</span> הציע/ה {diffDocuments(proposal.base, proposal.content).length} שינויים בסקיצה
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setReviewing(true)}
+                    className="-my-1 -me-2.5 shrink-0 rounded-pill bg-accent px-3.5 py-1 text-[13px] font-bold text-canvas transition-colors hover:bg-accent-hover"
+                  >
+                    לסקירה
+                  </button>
+                </span>
+              </HintPill>
+            )}
+            {/* What the area tool is waiting for. */}
+            {stageFill?.phase === "draw" && (
+              <HintPill>
                 {stageFill.shape === "circle"
                   ? "לחצו על מרכז הבמה ואז על השפה · הקלדת מספר ו־Enter קובעת קוטר בס״מ · Alt בלי עיגול ל־10 ס״מ · Esc ליציאה"
                   : stageFill.shape === "ellipse"
@@ -5604,315 +6008,71 @@ export function StudioScreen({
                     : stageFill.shape === "half"
                       ? "סמנו את שני קצות הקוטר (מספר ו־Enter קובע אורך בס״מ), ואז לחצו בצד שאליו הקשת פונה · Esc ליציאה"
                       : "סמנו את פינות האזור · הקלדת מספר ו־Enter קובעת אורך בס״מ · Alt לקו חופשי · לחיצה כפולה או Enter לסגירה · Esc ליציאה"}
-              </span>
-            </div>
-          )}
-          {stageFill?.phase === "pick" && (
-            <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center">
-              <span className="rounded-full border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
+              </HintPill>
+            )}
+            {stageFill?.phase === "pick" && (
+              <HintPill>
                 {stageFill.smooth?.length
-                  ? "הקו הרציף הוא חזית הבמה · לשינוי הצורה — ״סימון מחדש״, ואחרי ההוספה — ״מידות״ בסרגל הבמה או הידיות"
+                  ? "הקו הרציף הוא חזית הבמה · לשינוי הצורה — ״סימון מחדש״, ואחרי ההוספה — הרוחב והעומק בסרגל הבמה, או הידיות"
                   : stageShape?.shapedOutline
-                    ? "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · הרדיוס והקימור נקבעים ב״פינות״ בסרגל; רדיוס 0 וחזית 0 מחזירים את ידיות הפינות"
+                    ? "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · הרדיוס והקימור נקבעים ב״פינות״ בלוח שבצד; רדיוס 0 וחזית 0 מחזירים את ידיות הפינות"
                     : "הקו הרציף הוא חזית הבמה — לחיצה על צד אחר מעבירה אותה · גררו פינה או צד לשינוי הצורה · גררו פלטה למקומה, לחצו עליה להחלפה או סיבוב · Shift שומר על זוויות ישרות · לחיצה כפולה על צד מפצלת אותו, על פינה מוחקת אותה · Alt בלי הצמדה"}
-              </span>
-            </div>
-          )}
-          {stageTool && (
-            <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center">
-              <span className="rounded-full border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
+              </HintPill>
+            )}
+            {stageTool && (
+              <HintPill>
                 {stageTool.kind === "level"
                   ? "סמנו את פינות המפלס על הבמה · הקלדת מספר ו־Enter קובעת אורך בס״מ · לחיצה כפולה או Enter לסגירה · Esc ליציאה"
                   : `לחצו על צד של הבמה או של מפלס — שם ${stageTool.edgeKind === "bench" ? "יעמוד הבנקט" : stageTool.edgeKind === "barrier" ? "יעמוד המחסום" : "יעמדו המדרגות"} · לחיצה על קטע פתוח ממלאת את כולו · Esc ליציאה`}
-              </span>
-            </div>
-          )}
-          {/* The inspector is a BAR along the bottom of the canvas now, centred — the shape the
-              venue plan's inspector already has, and the shape that keeps a selection's controls
-              from eating a column of the plan. It is centred rather than tucked into a corner
-              because its own popovers open upwards and centred on their chip: from a corner, half
-              of them would open past the edge of the plane. */}
-          <div className="pointer-events-none absolute inset-x-3 bottom-3 flex justify-center">
-            <div className="pointer-events-auto flex min-w-0 justify-center">
-              {stageFill?.phase === "draw" && stageTool?.kind !== "level" ? (
-                <StageDrawBar
-                  shape={stageFill.shape ?? "corners"}
-                  onShape={(shape: AreaShape) => setStageFill((cur) => (cur?.phase === "draw" ? { ...cur, shape } : cur))}
-                  templates={templates}
-                  onTemplate={(id) => {
-                    const t = templates.find((x) => x.id === id);
-                    if (!t) return;
-                    setStageFill(null);
-                    setPlacing(t);
-                  }}
-                  onRemoveTemplate={(id) => void removeTemplate(id)}
-                  onClose={() => setStageFill(null)}
-                />
-              ) : stageFill?.phase === "pick" ? (
-                <StageFillPanel
-                  state={stageFill}
-                  types={deckTypes}
-                  layout={stageLayout}
-                  onChange={setStageFill}
-                  overlaps={stageShape?.overlaps ?? false}
-                  onRedraw={() => setStageFill((cur) => ({ phase: "draw", chosen: cur?.chosen, editing: cur?.editing, shape: cur?.shape, pieces: cur?.pieces }))}
-                  onResize={resizeStageArea}
-                  onCommit={commitStageFill}
-                  picked={pickedDeck}
-                  pinnedCount={stageFill.pieces?.length ?? 0}
-                  onDeck={(action) => deckAction(action)}
-                  onAddPieces={(infos) => void addStagePieces(infos)}
-                  onClose={() => setStageFill(null)}
-                />
-              ) : (
-              <Inspector
-                selection={sole}
-                selectedCount={selected.length}
-                feature={featurePanel}
-                onResetFeature={resetFeature}
-                onSwapCurtain={swapCurtain}
-                facing={sharedFacing}
-                onFace={faceSelection}
-                spin={spin}
-                onSpin={setSpin}
-                canRestack={stackRefs(selected).length > 0}
-                onRestack={restack}
-                // A block is one table to the seat count's "ל־N שולחנות", as to setSeatsForSelection.
-                selectedTables={new Set(selected.filter((r) => r.kind === "table").map((r) => unitOf(units, r.id)?.key ?? r.id)).size}
-                onSeatsForSelection={setSeatsForSelection}
-                onChairForSelection={setChairForSelection}
-                onChair={(id, variantId) => act({ type: "setTableChair", ids: [id], variantId })}
-                group={groupPanel}
-                onGroup={groupAny}
-                onUngroup={ungroupSelection}
-                onRenumberGroup={(groupId, number) => act({ type: "renumberGroup", groupId, number })}
-                onSeats={(id, seats) => act({ type: "setTableSeats", id, seats })}
-                onSeated={(id, seated) => act({ type: "setTableSeated", id, seated })}
-                onBlockedSides={(id, sides) => act({ type: "setTableBlockedSides", id, sides })}
-                // One number for the block, laid back over the tables it is made of — one history
-                // entry, because from the designer's side it was one number typed once.
-                onGroupSeated={(groupId, seated) =>
-                  batch(spreadSeated(doc, groupId, seated).map((x) => ({ type: "setTableSeated" as const, id: x.id, seated: x.seated })))
-                }
-                onGroupSeats={(groupId, seats) =>
-                  batch(spreadSeats(doc, groupId, seats).map((x) => ({ type: "setTableSeats" as const, id: x.id, seats: x.seats })))
-                }
-                doc={doc}
-                structure={plan.structure}
-                onClose={() => setSelected([])}
-                onQuantity={changeQuantity}
-                onDelete={deleteSelection}
-                onDressTable={mode === "hall" ? undefined : dressTable}
-                onTablesNumbered={(tableIds, numbered) => act({ type: "setTablesNumbered", tableIds, numbered })}
-                renderPattern={renderPattern}
-                renderDesigns={renderDesigns}
-                onScale={(id, scale) => act({ type: "setPlacementScale", id, scale })}
-                onHang={(id, heightMm) => act({ type: "setPlacementHang", id, heightMm })}
-                roofOf={(pt) => sketchRoofOf()(pt)}
-                onCentreOver={centreHung}
-                onSpreadRow={spreadAlongRow}
-                onHangOverDressing={hangOverDressing}
-                onVessel={(ids, vessel) => act({ type: "setPlacementVessel", ids, vessel })}
-                onBorder={(ids, border) => act({ type: "setPlacementBorder", ids, border })}
-                onClimb={(id, edit) => act({ type: "setPlacementClimb", id, ...edit })}
-                onApplyToAllTables={spreadCloth}
-                onVariant={(id, variantId) => act({ type: "setPlacementVariant", id, variantId })}
-                onSpan={(id, span) => act({ type: "setPlacementSpan", id, span })}
-                onRail={(id, rail, dropMm) => act({ type: "setPlacementRail", id, rail, dropMm })}
-                onDrawRod={(id) => {
-                  setRodDraw(id);
-                  // An LED strip is drawn as a free run — its two ends (lib/venues/led.ts ledRunRail).
-                  const drawn = doc.placements.find((x) => x.id === id);
-                  if (drawn && isLedStrip(resolve(drawn.variantId)?.product)) return showHint("לחיצה בתחילת הפס ולחיצה בסופו · Esc לביטול");
-                  showHint("לחיצה לכל עמוד של המוט · Enter או לחיצה כפולה לסיום · Esc לביטול");
-                }}
-                onDrawCloth={(id, kind) => startClothDraw({ kind, placementId: id })}
-                onResize={(id, sizeMm) => act({ type: "resizePlacement", id, sizeMm })}
-                onBows={(id, bows) => act({ type: "setPlacementBows", id, bows })}
-                onCorners={(id, corners) => act({ type: "setPlacementCorners", id, corners })}
-                onCoverInset={(id, insetMm) => {
-                  const cover = doc.placements.find((x) => x.id === id)?.cover;
-                  if (cover) act({ type: "setPlacementCover", id, cover: { ...cover, insetMm } });
-                }}
-                onDetachCover={(id) => act({ type: "setPlacementCover", id, cover: null })}
-                stageCoverItems={soleStage ? coverItems(stageAim(soleStage), true) : undefined}
-                onRenumber={(id, number) => act({ type: "renumberTable", id, number })}
-                onStyleTable={(id, style) => act({ type: "styleTable", id, style })}
-                onDuplicate={duplicate}
-                onRemovePlacement={(id) => act({ type: "removePlacement", id })}
-                zoneFocused={!!focusZoneId}
-                onSelectInZone={selectInZone}
-                layerActive={activeLayer !== null}
-                onSelectLayer={selectLayer}
-                scopeLabel={
-                  [
-                    focusZoneId && `אזור: ${zoneOptions.find((z) => z.id === focusZoneId)?.name ?? ""}`,
-                    activeLayer && `שכבה: ${PLANES.find((pl) => pl.id === activeLayer)?.label ?? ""}`,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ") || undefined
-                }
-                onClearScope={() => {
-                  setZoneFocus(null);
-                  setActiveLayer(null);
-                }}
-                onSelectSimilar={selectSimilar}
-                canDistribute={canDistribute}
-                onDistribute={distributeEvenly}
-                align={alignPanel}
-                lock={lockPanel}
-                dressCandidateCount={dressCandidateCount}
-                onCopyDressing={copyDressingToSelection}
-                onMirror={canMirror ? mirrorSelection : undefined}
-                breaches={breaches}
-                sizePanel={sizePanel}
-                onSize={resizeSole}
-                spacing={spacing}
-                onSpace={spaceSelection}
-                stagePanel={stagePanel}
-                onEditStage={editStage}
-                onExplodeStage={explodeStage}
-                onStageHeight={setStageHeightMm}
-                onStairStep={setStairStep}
-                onStageSize={setStageSize}
-                onAddStagePieces={(infos) => {
-                  if (soleStage) void addStagePieces(infos, soleStage.id);
-                }}
-                onUseStagePieces={(ids) => {
-                  if (soleStage) patchStage(soleStage.id, (s) => ({ ...s, decks: [...s.decks, ...ids.filter((id) => !s.decks.includes(id))] }));
-                }}
-                onLevelHeight={setLevelHeight}
-                onRemoveLevel={removeLevel}
-                onAddLevel={startLevel}
-                onAddEdge={startEdge}
-                onFillEdges={fillEdges}
-                onSelectEdge={setActiveEdge}
-                onRemoveStair={removeStair}
-                onStairChange={changeStair}
-                benchPanel={benchPanel}
-                onBench={changeBench}
-                onChairRows={changeChairRows}
-                onStageSurface={setSurface}
-                onStageCorners={setCorners}
-                onStageExceed={setExceed}
-                onSaveTemplate={(name) => void saveTemplate(name)}
-                stageGroup={stageGroup}
-                onGroupStageHeight={setGroupStageHeight}
-                onGroupFillEdges={fillGroupEdges}
-                onGroupStageSurface={setGroupSurface}
-                onGroupStageCorners={setGroupCorners}
-                onGroupStageExceed={setGroupExceed}
-                onGroupSaveTemplate={(name) => void saveGroupTemplates(name)}
-                onGroupExplode={explodeGroup}
-                onPickStage={(id) => setSelected([{ kind: "placement", id }])}
-                onBackToGroup={backToGroup}
-                onStickStages={selectedStages.length >= 2 ? stickStages : undefined}
-                onMergeStages={selectedStages.length >= 2 ? mergeSelectedStages : undefined}
-                onMakeStage={makeStage}
-                swap={swapPanel}
-                onSwap={swapSelection}
-                onEditProduct={editProduct}
-                onSaveComposite={composeFromSelection}
-                clothOptions={clothOptions}
-                onReplaceCloth={(id, productId) => {
-                  const product = productById(productId);
-                  if (product) replaceItems([id], product);
-                }}
-                onBlockCloth={(tableIds, op) => {
-                  const covers = tableIds.map((id) => coverOn(doc, id)).filter((c): c is Placement => !!c);
-                  if (op === "remove") batch(covers.map((c) => ({ type: "removePlacement" as const, id: c.id })));
-                  else if ("variantId" in op) batch(covers.filter((c) => c.variantId !== op.variantId).map((c) => ({ type: "setPlacementVariant" as const, id: c.id, variantId: op.variantId })));
-                  else {
-                    const product = productById(op.productId);
-                    if (product) replaceItems(covers.map((c) => c.id), product);
-                  }
-                }}
-                onStyleTables={(ids, style) => batch(ids.map((id) => ({ type: "styleTable" as const, id, style })))}
-              />
-              )}
-            </div>
-          </div>
-          {/* The event is booked into a property this designer was never granted. The canvas stays
-              usable — items can still be placed and the meeting can go on — but the blank ground
-              under them gets a reason instead of being mistaken for an undrawn hall. */}
-          {/* Everyone the plan seats — tables and banquettes. Only once there is someone to seat. */}
-          {seating.tables + seating.benches > 0 && (
-            <div className={"pointer-events-none absolute inset-inline-start-4 " + (plan.access === "denied" || venueUnset ? "top-20" : "top-4")}>
-              <span className="nums rounded-md border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
-                {`${seating.tables + seating.benches} מקומות ישיבה`}
-                {seating.benches > 0 ? ` · ${seating.benches} על בנקטים` : ""}
-              </span>
-            </div>
-          )}
-          {/* What the next click will do, said where the eye is. It is the one part of this state
-              with a button in it, so it takes the pointer — the ✕ is the way out for a designer
-              who has never heard of Escape, and the one a tablet has. */}
-          {armed && !placing && (
-            <div className={"pointer-events-none absolute inset-x-0 flex justify-center " + (dressingTable ? "top-28" : "top-4")}>
-              <div
-                role="status"
-                className="pointer-events-auto flex items-center gap-2 rounded-full border border-accent-line bg-surface/95 py-1 ps-3 pe-1 text-xs text-ink-soft shadow-floating"
-              >
-                <span>
-                  {"מניחים: "}
-                  <span className="font-semibold text-accent">{armedRows ? `שורות כיסאות · ${armed.name}` : armed.name}</span>
+              </HintPill>
+            )}
+            {placing && <HintPill>{`לחיצה על התוכנית מציבה את ״${placing.name}״ · Esc לביטול`}</HintPill>}
+            {/* What the next click will do, said where the eye is. The one pill with a button in it,
+                so it takes the pointer — the ✕ is the way out for a designer who has never heard of
+                Escape, and the one a tablet has. */}
+            {armed && !placing && (
+              <HintPill interactive>
+                {/* The words wrap as one line of text on a narrow canvas; the ✕ stays at its end. */}
+                <span role="status" className="flex items-center gap-2">
+                  <span className="min-w-0">
+                    {"מניחים: "}
+                    <span className="font-semibold">{armedRows ? `שורות כיסאות · ${armed.name}` : armed.name}</span>
+                    <span className="opacity-60">{" · "}</span>
+                    {placesOnce(CATEGORY_BY_ID[armed.category])
+                      ? "לחיצה על התוכנית מניחה אחד (Shift — עוד)"
+                      : armed.layer === "table"
+                        ? "לחיצה על שולחן מניחה עליו"
+                        : "כל לחיצה על התוכנית מניחה עוד אחד"}
+                    {armedCount > 0 && (
+                      <>
+                        <span className="opacity-60">{" · "}</span>
+                        <span className="nums">{`הונחו ${armedCount}`}</span>
+                      </>
+                    )}
+                    <span className="opacity-60">{" · "}</span>
+                    {"Esc לסיום"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => arm(null)}
+                    aria-label="סיום ההנחה"
+                    title="סיום ההנחה"
+                    className="-my-1 -me-2 shrink-0 rounded-pill p-1 text-canvas/70 transition-colors hover:bg-canvas/15 hover:text-canvas"
+                  >
+                    <X className="h-3.5 w-3.5" strokeWidth={2} />
+                  </button>
                 </span>
-                <span className="text-muted">·</span>
-                <span>
-                  {placesOnce(CATEGORY_BY_ID[armed.category])
-                    ? "לחיצה על התוכנית מניחה אחד (Shift — עוד)"
-                    : armed.layer === "table"
-                      ? "לחיצה על שולחן מניחה עליו"
-                      : "כל לחיצה על התוכנית מניחה עוד אחד"}
-                </span>
-                {armedCount > 0 && (
-                  <>
-                    <span className="text-muted">·</span>
-                    <span className="nums">{`הונחו ${armedCount}`}</span>
-                  </>
-                )}
-                <span className="text-muted">·</span>
-                <span>Esc לסיום</span>
-                <button
-                  type="button"
-                  onClick={() => arm(null)}
-                  aria-label="סיום ההנחה"
-                  title="סיום ההנחה"
-                  className="rounded-full p-1 text-muted transition-colors hover:bg-accent-tint hover:text-accent"
-                >
-                  <X className="h-3.5 w-3.5" strokeWidth={2} />
-                </button>
-              </div>
-            </div>
-          )}
-          {placing && (
-            <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center">
-              <span className="rounded-full border border-border bg-surface/95 px-3 py-1 text-xs font-medium text-ink-soft shadow-floating">
-                {`לחיצה על התוכנית מציבה את ״${placing.name}״ · Esc לביטול`}
-              </span>
-            </div>
-          )}
-          {plan.access === "denied" && (
-            <div className="pointer-events-none absolute inset-inline-start-4 top-4">
-              <div className="pointer-events-auto">
-                <VenueAccessNotice />
-              </div>
-            </div>
-          )}
-          {/* The other blank plane: an event with no property chosen yet. Common on a first meeting
-              (the event is opened before anyone has decided where the wedding is) and, until this
-              said so, indistinguishable from a hall nobody had drawn. */}
-          {venueUnset && (
-            <div className="pointer-events-none absolute inset-inline-start-4 top-4">
-              <div className="pointer-events-auto">
-                <VenueUnsetNotice />
-              </div>
-            </div>
-          )}
+              </HintPill>
+            )}
+          </HintRow>
+          {/* Whether the drawing is written down — the header's old indicator, in the corner. */}
+          <SavePill state={saveState} onRetry={retrySave} />
           {/* Stable live region so the drop hint / smart-apply confirmation is announced, not just shown. */}
-          {/* Above the inspector bar, not under it: both are centred along the bottom edge. */}
+          {/* Above the inspector bar, not under it: both are centred along the bottom edge (the dock
+              under it is z-10) — and above the 3D card (z-30), which stands in the bottom-start
+              corner: a refusal is never read through a picture of the room. */}
           <div
-            className="pointer-events-none absolute inset-x-0 bottom-20 flex justify-center"
+            className="pointer-events-none absolute inset-x-0 bottom-20 z-40 flex justify-center"
             aria-live="polite"
           >
             {hint && (
@@ -5920,9 +6080,180 @@ export function StudioScreen({
             )}
           </div>
         </div>
-        {/* The room in 3D beside the sketch, off the LIVE document (not the pass's filtered canvasDoc —
-            the room is the whole design), following the selection. Mounted from its first opening
-            and kept; closed = hidden (see scene-preview.tsx). */}
+        {/* The end panel (components/end-panel.tsx): what is on the plan, plane by plane, and with
+            nothing selected the sketch's own groups under it. */}
+        <EndPanel screen="studio" collapsible>
+          {/* Held still while something is dragged on the canvas (./hold-while-dragging.tsx). */}
+          <HoldWhileDragging area={columnRef}>
+            {/* Nothing selected: the sketch's own groups FIRST, the list under them (the user,
+                2026-11-10: "put הסקיצה before בתוכנית") — who it seats, what is wrong with it, how
+                its tables are numbered, the saved sketches, and what this event took out of the venue.
+                Something selected: the list folds to its line at the top and the selection's groups
+                (they arrive with the quick bar) follow it. */}
+            {selected.length === 0 && !fillProps && (
+              <PanelGroups
+                kind="studio:none"
+                first
+                title="הסקיצה"
+                sub={plan.zones.map((z) => z.zone.name).filter(Boolean).join(" · ") || undefined}
+                defaultOpen={["seating", "checks"]}
+                groups={[
+                  {
+                    key: "seating",
+                    icon: Armchair,
+                    title: "ישיבה",
+                    summary: `${seating.seated}/${seating.tables + seating.benches} מושבים`,
+                    body: (
+                      <>
+                        <FactRow label="מקומות ישיבה" value={seating.tables + seating.benches} />
+                        {seating.benches > 0 && <FactRow label="מהם על בנקטים" value={seating.benches} />}
+                        <FactRow label="שולחנות" value={doc.tables.length} />
+                      </>
+                    ),
+                  },
+                  {
+                    key: "checks",
+                    icon: checkRows.length > 0 ? TriangleAlert : ShieldAlert,
+                    title: "בדיקות",
+                    warn: checkRows.length > 0,
+                    summary: checkRows.length === 0 ? "הכול תקין" : checkRows.length === 1 ? "בעיה אחת" : `${checkRows.length} בעיות`,
+                    body:
+                      checkRows.length === 0 ? (
+                        <Note>אין חריגה ממרחק ביטחון, ולכל במה יש בקטלוג כל הפלטות.</Note>
+                      ) : (
+                        <div className="-mx-1.5 flex flex-col gap-px">
+                          {checkRows.map((row) => {
+                            const RowIcon = row.kind === "clearance" ? ArrowLeftRight : Puzzle;
+                            return (
+                              // A row selects what it describes — both sides of a breach, the stage.
+                              <button
+                                key={row.key}
+                                type="button"
+                                onClick={() => pickMany(row.refs, false)}
+                                className="flex w-full items-start gap-2 rounded-sm px-1.5 py-1.5 text-start text-[13px] leading-snug text-ink transition-colors hover:bg-inset"
+                              >
+                                <RowIcon aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn-ink" strokeWidth={1.75} />
+                                <span className="min-w-0 flex-1">{row.text}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ),
+                  },
+                  {
+                    key: "numbering",
+                    icon: ListOrdered,
+                    title: "מספור",
+                    summary: renumbering.length > 0 ? `${renumbering.length} לא לפי הסדר` : doc.tables.length > 0 ? "לפי הסדר" : "אין שולחנות",
+                    body: <NumberingFields options={numbering} onChange={setNumbering} onRenumber={renumberAll} count={renumbering.length} canRenumber={renumbering.length > 0} />,
+                  },
+                  {
+                    key: "sketches",
+                    icon: LayoutTemplate,
+                    title: "סקיצות שמורות",
+                    summary: sketches.length > 0 ? `${sketches.length} שמורות` : "אין עדיין",
+                    body: (
+                      <SketchList
+                        sketches={sketches}
+                        sketchEmpty={doc.tables.length + doc.placements.length === 0}
+                        onSave={(name) => void saveSketch(name)}
+                        onLoad={(id, how) => void loadSketch(id, how)}
+                        onDelete={(id) => void deleteSketch(id)}
+                        onPhoto={(id, file) => void sketchPhoto(id, file)}
+                      />
+                    ),
+                  },
+                  ...(removedVenueFeatures.length > 0
+                    ? [
+                        {
+                          key: "removed",
+                          icon: ArchiveRestore,
+                          title: "פריטי מתחם שהוסרו",
+                          summary: removedVenueFeatures.length === 1 ? removedVenueFeatures[0].label : `${removedVenueFeatures.length} פריטים`,
+                          body: <RemovedFeaturesList features={removedVenueFeatures} onRestore={restoreFeatures} />,
+                        } satisfies PanelGroup,
+                      ]
+                    : []),
+                ]}
+              />
+            )}
+            {selected.length === 0 && !fillProps && <div className="h-px bg-border" aria-hidden />}
+            {listOpen ? (
+              <PanelList title="בתוכנית" count={planTotal}>
+                {PLANES.map(({ id, label }) => {
+                  const rows = planRows[id];
+                  // A hidden plane is listed but not picked from: nothing hidden enters a selection
+                  // (pickMany). What stands on a table goes with the tables.
+                  const shown = layerVisible[id] && (id !== "table" || layerVisible.tables);
+                  const Icon = PLANE_ICON[id];
+                  return (
+                    <div key={id}>
+                      <PanelListHeading
+                        label={label}
+                        count={rows.reduce((n, r) => n + r.count, 0)}
+                        active={activeLayer === id}
+                        visible={layerVisible[id]}
+                        onActivate={() => setActiveLayer((cur) => (cur === id ? null : id))}
+                        onToggleVisible={() => setLayerVisible((v) => ({ ...v, [id]: !v[id] }))}
+                      />
+                      {/* Working in one plane lists that plane alone (the board's "פעילה"). */}
+                      {(activeLayer === null || activeLayer === id) && rows.length > 0 && (
+                        <div className={shown ? undefined : "opacity-50"}>
+                          {rows.map((row) => (
+                            <PanelListRow
+                              key={row.key}
+                              glyph={
+                                row.swatch ? (
+                                  <span aria-hidden className="h-3 w-3 rounded-full border border-border" style={{ backgroundColor: row.swatch }} />
+                                ) : (
+                                  <Icon aria-hidden className="h-3.5 w-3.5 text-muted" strokeWidth={1.75} />
+                                )
+                              }
+                              label={row.label}
+                              meta={rowFigure(row)}
+                              selected={row.refs.every((r) => selectedKeys.has(`${r.kind}:${r.id}`))}
+                              // Every one of them (D11) — a block as the one table it is.
+                              onClick={shown ? () => pickMany(row.refs, false) : undefined}
+                              disabled={behindScrim(row.refs)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {planTotal === 0 && <p className="mx-1 mt-2 text-xs leading-relaxed text-muted">התוכנית עדיין ריקה — בוחרים פריט בקטלוג ולוחצים על התוכנית, או גוררים אותו.</p>}
+              </PanelList>
+            ) : (
+              <PanelListFolded
+                icon={Layers}
+                title="בתוכנית"
+                count={planTotal}
+                crumb={fillProps ? (fillProps.state.editing ? "עריכת במה" : "מילוי במות") : listCrumb(planRows, selected)}
+                badge={
+                  checkRows.length > 0 ? (
+                    <span title={`בדיקות: ${checkRows.length}`} className="nums inline-flex shrink-0 items-center gap-0.5 rounded-pill bg-warn-tint px-1.5 text-[11px] font-bold text-warn-ink">
+                      <TriangleAlert aria-hidden className="h-3 w-3" strokeWidth={2} />
+                      {checkRows.length}
+                    </span>
+                  ) : undefined
+                }
+                onOpen={() => setUnfoldedFor(selected)}
+              />
+            )}
+            {/* The fill tool with its area drawn: its groups, in place of the selection's and the
+                sketch's own, under the folded list — the same props as its quick bar. */}
+            {fillProps && <StageFillPanel part="groups" {...fillProps} />}
+            {/* The selection's groups — every field it has, under the folded list (or, with a zone or a
+                layer scope and nothing selected, the scope's). The same props as the quick bar. */}
+            {!fillToolOut && (selected.length > 0 || !!focusZoneId || activeLayer !== null) && <Inspector part="groups" {...inspectorProps} />}
+          </HoldWhileDragging>
+        </EndPanel>
+      {/* The room in 3D on the sketch, off the LIVE document (not the pass's filtered canvasDoc —
+          the room is the whole design), following the selection. A child of the canvas card, not
+          the column: it opens in the bottom-left corner over the end panel and is dragged anywhere
+          over the canvas and the panel — never over the catalog rail (the user, 2026-11-10). Mounted
+          from its first opening and kept; closed = hidden (see scene-preview.tsx). */}
         {sceneMounted && (
           <ScenePreview
             doc={doc}
@@ -5933,11 +6264,11 @@ export function StudioScreen({
             author={mode === "full"}
             railingAboveMm={railingAboveMm}
             open={scenePane.open}
-            layout={scenePane.layout}
             widthPx={scenePane.widthPx}
+            pos={scenePane.pos}
+            column={columnRef}
             onClose={() => patchScene({ open: false })}
-            onLayout={(layout) => patchScene({ layout })}
-            onWidth={(widthPx) => patchScene({ widthPx })}
+            onPlace={({ widthPx, pos }) => patchScene({ widthPx, pos })}
           />
         )}
       </div>

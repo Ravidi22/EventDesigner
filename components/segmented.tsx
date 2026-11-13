@@ -34,17 +34,14 @@ export function Segmented<T extends string>({
           `text-muted` version and take a prop to override it back — which one caller did, so the
           same control was labelled two ways on two screens. */}
       {!hideLabel && <span className={fieldLabelClassName}>{label}</span>}
-      <div role="group" aria-label={label} className="flex gap-1 rounded-md border border-border p-0.5">
+      <div role="group" aria-label={label} className={segmentFrameClass(false)}>
         {options.map(([v, optionLabel, Icon]) => (
           <button
             key={v}
             type="button"
             aria-pressed={value === v}
             onClick={() => onChange(v)}
-            className={
-              "inline-flex min-h-8 flex-1 items-center justify-center gap-1.5 rounded-sm px-2 py-1 text-xs font-medium leading-snug transition-colors " +
-              (value === v ? "bg-accent text-canvas" : "text-ink-soft hover:bg-accent-tint hover:text-accent")
-            }
+            className={segmentClass(value === v, false)}
           >
             {Icon && <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} aria-hidden />}
             {optionLabel}
@@ -52,5 +49,25 @@ export function Segmented<T extends string>({
         ))}
       </div>
     </div>
+  );
+}
+
+/** The segmented look of the "Studio + Halls" board (2026-11-09, the user: "all the toggles in the side
+ *  panel look off" — the chosen option was a filled violet chip): a hairline frame, the chosen option
+ *  in the accent WASH with deep ink at 700, the others soft ink at 500. `compact` is the quick bar's
+ *  (options as wide as their words, 24px); otherwise every option takes the same width (a panel's).
+ *  One look for `Segmented` and plan-canvas's `SegmentedToggle`. */
+export function segmentFrameClass(compact: boolean): string {
+  return compact
+    ? "flex shrink-0 items-center gap-0.5 rounded-[12px] border border-border bg-surface p-0.5"
+    : "flex gap-1 rounded-md border border-border bg-surface p-0.5";
+}
+
+export function segmentClass(on: boolean, compact: boolean): string {
+  return (
+    (compact
+      ? "inline-flex min-h-6 items-center justify-center gap-1.5 whitespace-nowrap rounded-sm px-2.5 py-0.5 text-xs leading-snug transition-colors "
+      : "inline-flex min-h-8 flex-1 items-center justify-center gap-1.5 rounded-sm px-2 py-1 text-xs leading-snug transition-colors ") +
+    (on ? "bg-accent-wash font-bold text-accent-deep" : "font-medium text-ink-soft hover:bg-accent-tint hover:text-accent")
   );
 }

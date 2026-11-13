@@ -563,7 +563,7 @@ export function CompositionEditor({ composition, selfId, internal = true, onSave
   const selPlacements = refsNow.filter((r) => r.kind === "placement").map((r) => doc.placements.find((p) => p.id === r.id)).filter((p): p is Placement => !!p);
   const soleTable = refsNow.length === 1 && selTables.length === 1 ? selTables[0] : null;
   const solePlacement = refsNow.length === 1 && selPlacements.length === 1 ? selPlacements[0] : null;
-  // A sole CEILING item's hang height (Placement.hangHeightMm, the studio's HangPopover): its own,
+  // A sole CEILING item's hang height (Placement.hangHeightMm, the studio's ״תלייה״ group): its own,
   // else its row's. What lets two ceiling items share one point, one under the other — a drum shade
   // with a crystal cascade below it (the user's photograph, 2026-11-08).
   const soleHang = (() => {
@@ -664,8 +664,6 @@ export function CompositionEditor({ composition, selfId, internal = true, onSave
               showClearance={false}
               onToggleClearance={NOOP}
               onResizeTable={resizeTable}
-              stageFillActive={false}
-              onStageFill={NOOP}
               drawArea={false}
               onArea={NOOP}
               onCancelArea={NOOP}

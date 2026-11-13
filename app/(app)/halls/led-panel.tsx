@@ -25,7 +25,7 @@ const LED_COLOURS: { colour: string; name: string }[] = [
   { colour: "#ff5a5a", name: "אדום" },
 ];
 
-export function VenueLedPopover({ feature, structure, apply }: { feature: StructureFeature; structure: VenueStructure; apply: (fn: (s: VenueStructure) => VenueStructure) => void }) {
+export function VenueLedPopover({ bare = false, feature, structure, apply }: { bare?: boolean; feature: StructureFeature; structure: VenueStructure; apply: (fn: (s: VenueStructure) => VenueStructure) => void }) {
   const rail = ledRail(feature);
   const line = ledLines(structure, feature)[0];
   const colour = ledColour(feature);
@@ -40,8 +40,8 @@ export function VenueLedPopover({ feature, structure, apply }: { feature: Struct
   const L = line?.wall ? line.wall.track.lengthMm : line?.side ? line.side.side.L : 0;
   const along = (t: number) => (line?.wall ? line.wall.track.mmAt(t) : t * L) / 1000;
   const fraction = (m: number) => (line?.wall ? line.wall.track.tAt(m * 1000) : L > 0 ? (m * 1000) / L : 0);
-  return (
-    <Popover label={`פס לד ${where}`} icon={Zap} leading={<Swatch color={colour} size={14} />} value={ltr(`${(ledLengthMm(structure, feature) / 1000).toFixed(2)} מ׳`)} panelClassName="w-80">
+  const body = (
+    <>
       <PanelRow label="צבע" stack>
         <div role="radiogroup" aria-label="צבע הפס" className="flex flex-wrap items-center gap-1.5">
           {LED_COLOURS.map((o) => (
@@ -101,6 +101,12 @@ export function VenueLedPopover({ feature, structure, apply }: { feature: Struct
               ? "0 — קו הרצפה. הפס זז עם הקיר; את הקצוות אפשר לגרור בתוכנית. בסקיצה אפשר להסיר אותו לאירוע אחד."
               : "פס בין שתי נקודות. גוררים את הקצוות בתוכנית כדי להזיז אותם."}
       </Note>
+    </>
+  );
+  if (bare) return body;
+  return (
+    <Popover label={`פס לד ${where}`} icon={Zap} leading={<Swatch color={colour} size={14} />} value={ltr(`${(ledLengthMm(structure, feature) / 1000).toFixed(2)} מ׳`)} panelClassName="w-80">
+      {body}
     </Popover>
   );
 }

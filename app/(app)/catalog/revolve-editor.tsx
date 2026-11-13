@@ -14,6 +14,7 @@ import type { RevolvePoint } from "@/lib/catalog/types";
 import { REVOLVE_FORMS, REVOLVE_LABEL, REVOLVE_PRESETS, addedPoint, cleanRevolve, movedPoint, removedPoint, revolveSilhouette } from "@/lib/element/revolve";
 import { startPointerGesture } from "@/lib/studio/gesture";
 import { Note } from "@/components/inspector-bar";
+import { Button } from "@/components/button";
 
 const fieldLabelClassName = "mb-1 block text-xs font-medium text-muted";
 
@@ -51,7 +52,19 @@ export interface RevolveTiles {
   note: string;
 }
 
-export function RevolveFields({ value, onChange, tiles }: { value: RevolvePoint[] | undefined; onChange: (revolve: RevolvePoint[] | undefined) => void; tiles?: RevolveTiles }) {
+export function RevolveFields({
+  value,
+  onChange,
+  tiles,
+  onEditInView,
+}: {
+  value: RevolvePoint[] | undefined;
+  onChange: (revolve: RevolvePoint[] | undefined) => void;
+  tiles?: RevolveTiles;
+  /** When given, the profile is dragged at full size on the editor's חזית view: the small point
+   *  editor gives way to a button that goes there. The preset tiles stay. */
+  onEditInView?: () => void;
+}) {
   const forms = tiles?.forms ?? REVOLVE_FORMS.map((f) => ({ key: f, label: REVOLVE_LABEL[f], points: REVOLVE_PRESETS[f] }));
   const same = (a: readonly RevolvePoint[], b: readonly RevolvePoint[]) => a.length === b.length && a.every((q, i) => Math.abs(q.r - b[i].r) < 1e-6 && Math.abs(q.z - b[i].z) < 1e-6);
   const form = value ? (forms.find((f) => same(f.points, value))?.key ?? null) : null;
@@ -120,7 +133,15 @@ export function RevolveFields({ value, onChange, tiles }: { value: RevolvePoint[
           })}
         </div>
       </div>
-      {points && (
+      {points && onEditInView && (
+        <div className="space-y-1.5">
+          <Button type="button" variant="outline" size="sm" className="w-full" onClick={onEditInView}>
+            עריכת הגוף בחזית
+          </Button>
+          <Note>גררו את הנקודות על הצללית בחזית; לחיצה על הקו מוסיפה נקודה, לחיצה כפולה על נקודה מוחקת.</Note>
+        </div>
+      )}
+      {points && !onEditInView && (
         <div>
           <span className={fieldLabelClassName}>{formLabel ? `${formLabel} — אפשר לגרור את הנקודות` : "פרופיל מותאם"}</span>
           <svg ref={svg} viewBox={`0 0 ${EW} ${EH}`} width={EW} height={EH} className="block touch-none rounded-sm bg-inset" aria-label="פרופיל הגוף">

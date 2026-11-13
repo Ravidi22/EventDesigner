@@ -393,8 +393,6 @@ export function ClientSketchView({ sketch }: { sketch: ClientSketch }) {
           showClearance={false}
           onToggleClearance={NOOP}
           onResizeTable={resizeTable}
-          stageFillActive={false}
-          onStageFill={NOOP}
           drawArea={false}
           onArea={NOOP}
           onCancelArea={NOOP}

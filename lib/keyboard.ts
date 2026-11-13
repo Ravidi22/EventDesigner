@@ -37,3 +37,19 @@ export function hasTextSelection(): boolean {
   const s = window.getSelection();
   return !!s && !s.isCollapsed && s.toString().trim().length > 0;
 }
+
+// Escape is FIELD-FIRST: with a field focused it means "leave the field", never "also drop the tool /
+// selection behind it". A window-level Escape handler asks this before anything else; when it answers
+// true the press has been spent (the field blurred, or another handler or a dialog already took it)
+// and the handler returns without touching its tool. The press is preventDefault-ed after a blur so
+// the handlers that run later in the same dispatch (the bubble-phase studio keyboard) stand down too,
+// but it is NOT stopped — nothing else is told it was swallowed. A field inside a <dialog> is left
+// alone entirely: the dialog's own Escape (its close watcher) owns that press.
+export function escapeLeavesField(e: KeyboardEvent): boolean {
+  if (e.defaultPrevented) return true;
+  if (!isTypingTarget()) return false;
+  if (e.target instanceof Element && e.target.closest("dialog")) return true;
+  (document.activeElement as HTMLElement | null)?.blur();
+  e.preventDefault();
+  return true;
+}

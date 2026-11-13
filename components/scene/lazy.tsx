@@ -3,6 +3,7 @@
 // component (Next 16: `ssr: false` is refused inside a server component), so three.js is its own
 // chunk, fetched when the scene first renders and never part of /studio's first paint.
 import dynamic from "next/dynamic";
+import type { OrthoUnderlayProps } from "./ortho-underlay";
 import type { SceneViewerProps } from "./scene-viewer";
 
 /** What stands in the viewer's box while its chunk loads. The loading render gets no props from
@@ -19,3 +20,7 @@ export const LazySceneViewer = dynamic<SceneViewerProps>(() => import("./scene-v
   ssr: false,
   loading: () => <SceneSkeleton />,
 });
+
+/** The shape editor's side views' room (./ortho-underlay.tsx) — its own chunk, and nothing in its
+ *  place while it loads: the drawing over it stands alone until it comes. */
+export const LazyOrthoUnderlay = dynamic<OrthoUnderlayProps>(() => import("./ortho-underlay"), { ssr: false, loading: () => null });

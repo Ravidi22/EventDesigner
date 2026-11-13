@@ -144,6 +144,34 @@ export function doorOffsets(e: Pick<StructureEntrance, "distanceMm" | "widthMm" 
   return { toEdgeMm: centre - e.widthMm / 2, toCentreMm: centre, farEdgeMm: wallLenMm - centre - e.widthMm / 2 };
 }
 
+/** One opening as a row of its wall's פתחים group (the wall's end-panel group, 2026-11-09): what it
+ *  is, how wide, and how far its near edge stands from the corner it is measured from. */
+export interface OpeningRow {
+  id: string;
+  kind: OpeningKind;
+  widthMm: number;
+  fromCornerMm: number;
+  label: string;
+}
+
+/** A wall's doors and windows in order along it, from the corner each is measured from. */
+export function openingsOn(s: VenueStructure, wallId: string): OpeningRow[] {
+  const wall = s.walls.find((w) => w.id === wallId);
+  const pts = wall ? wallPoints(s, wall) : null;
+  if (!wall || !pts) return [];
+  const len = Math.hypot(pts.b.x - pts.a.x, pts.b.y - pts.a.y);
+  return s.entrances
+    .filter((e) => e.wallId === wallId)
+    .map((e) => ({
+      id: e.id,
+      kind: e.kind ?? "door",
+      widthMm: e.widthMm,
+      fromCornerMm: Math.round(doorOffsets(e, len).toEdgeMm),
+      label: isWindow(e) ? (isVitrine(e) ? "ויטרינה" : "חלון") : "דלת",
+    }))
+    .sort((p, q) => p.fromCornerMm - q.fromCornerMm);
+}
+
 /** The stored `distanceMm` for an opening whose middle is `centreMm` from the corner it is measured
  *  from, held inside the wall (the opening never hangs off either end). */
 export function doorDistanceFrom(e: Pick<StructureEntrance, "widthMm" | "measureFrom">, wallLenMm: number, centreMm: number): number {
@@ -1387,6 +1415,33 @@ if (isMain(import.meta.url)) {
     const bb = footprintBounds(featureFootprint(bowed));
     assert(Math.abs(bb.w - 6000) < 1 && Math.abs(bb.h - 4000) < 2, `a bowed feature is drawn exactly in its box (${bb.w.toFixed(1)} × ${bb.h.toFixed(1)})`);
     assert(featureFootprint({ shape: "custom", widthMm: 6000, depthMm: 3000, outline: sq }).kind === "custom", "a plain custom feature is drawn as it always was");
+  }
+
+  {
+    // A wall's openings as the rows of its פתחים group: in order along the wall from the corner each
+    // is measured from, a vitrine named as one.
+    const s: VenueStructure = {
+      ...emptyStructure(),
+      nodes: [
+        { id: "a", x: 0, y: 0 },
+        { id: "b", x: 10000, y: 0 },
+        { id: "c", x: 10000, y: 5000 },
+      ],
+      walls: [
+        { id: "w", a: "a", b: "b", kind: "wall" },
+        { id: "bare", a: "b", b: "c", kind: "wall" },
+      ],
+      entrances: [
+        { id: "door", wallId: "w", distanceMm: 6000, widthMm: 1600, swingInward: true, doubleDoor: false },
+        { id: "vit", wallId: "w", distanceMm: 2000, widthMm: 2000, swingInward: false, doubleDoor: false, kind: "window" },
+      ],
+    };
+    const rows = openingsOn(s, "w");
+    assert(rows.map((r) => r.id).join() === "vit,door", "openings in order along the wall");
+    assert(rows[0].label === "ויטרינה" && rows[0].fromCornerMm === 1000, "a vitrine, its near edge a metre from the corner");
+    assert(rows[1].label === "דלת" && rows[1].fromCornerMm === 5200 && rows[1].widthMm === 1600, "the door, 5.20 m from the corner");
+    assert(openingsOn(s, "bare").length === 0, "a wall with no openings has no rows");
+    assert(openingsOn(s, "missing").length === 0, "…and so does a wall that is not there");
   }
 
   console.log("venue structure self-check passed");

@@ -5,6 +5,7 @@ import { Copy, RotateCcw, RotateCw, Trash2, X, type LucideIcon } from "lucide-re
 import { InspectorDivider, InspectorHeader } from "@/components/plan-canvas";
 import { NumberField } from "@/components/number-field";
 import { Popover } from "@/components/popover";
+import { Menu, type MenuItem } from "@/components/menu";
 import { fieldLabelClassName } from "@/components/control";
 
 // The floating selection bar the studio sketch puts under a selected thing — a title row, then a row
@@ -107,7 +108,7 @@ export function Rotation({ value, onChange }: { value: number | null; onChange: 
             onClick={() => onChange(deg)}
             className={
               "nums rounded-sm py-1 text-xs font-semibold transition-colors " +
-              (value === deg ? "bg-accent text-canvas" : "bg-inset text-ink-soft hover:bg-accent-tint hover:text-accent")
+              (value === deg ? "bg-accent-wash text-accent-deep" : "bg-inset text-ink-soft hover:bg-accent-tint hover:text-accent")
             }
           >
             {ltr(`${deg}°`)}
@@ -118,26 +119,159 @@ export function Rotation({ value, onChange }: { value: number | null; onChange: 
   );
 }
 
-/** The two verbs every selection has, held at the far end of the subjects row: another one of these,
- *  and remove these. A venue feature has neither — it belongs to the property, not to tonight — so
- *  its bar simply doesn't render this. The hairline is what keeps the destructive one from sitting
- *  flush against the last subject under a moving cursor. */
-export function Actions({
-  onDuplicate,
-  duplicateLabel,
-  onDelete,
-  deleteLabel,
+// ── The QUICK BAR's second row (2026-11-09, the user's "Studio + Halls" board) ────────────────────
+// Every selection's bar reads in one order: at most three numbers typed in place → one mode verb
+// (an outline pill) → copy · delete · ⋯, always last. Everything else about the selection is a
+// group in the end panel (components/end-panel.tsx). Lifted out of the shape editor's quick bar,
+// which was the board's reference.
+
+/** A number typed in the bar itself — the board's 56×28 field (44 when `narrow`). Committed on
+ *  blur: a size typed digit by digit would otherwise resize the thing at "1", then "12"… */
+export function QuickNumber({
+  label,
+  value,
+  onChange,
+  decimals = 0,
+  min,
+  max,
+  narrow,
+  placeholder,
+  hideZero,
+  disabled,
 }: {
-  onDuplicate: () => void;
-  duplicateLabel: string;
-  onDelete: () => void;
-  deleteLabel: string;
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  decimals?: number;
+  min?: number;
+  max?: number;
+  narrow?: boolean;
+  placeholder?: string;
+  hideZero?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <NumberField
+      size="sm"
+      aria-label={label}
+      decimals={decimals}
+      min={min}
+      max={max}
+      commitOnBlur
+      value={value}
+      onChange={onChange}
+      placeholder={placeholder}
+      hideZero={hideZero}
+      disabled={disabled}
+      className={narrow ? "w-11" : "w-14"}
+    />
+  );
+}
+
+/** A unit or a sign between numbers — "×", "ס״מ", "°". */
+export function QuickUnit({ children }: { children: ReactNode }) {
+  return <span className="text-xs text-muted">{children}</span>;
+}
+
+/** The hairline between the bar's subjects. */
+export function QuickSep() {
+  return <div className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />;
+}
+
+/** The muted icon in front of a number, saying what the number is (its tooltip says it in words). */
+export function QuickLead({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+  return (
+    <span title={label} className="inline-flex shrink-0 text-muted">
+      <Icon className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+    </span>
+  );
+}
+
+/** Which way it faces, typed in the bar: a quarter turn either side of the angle. Blank on a mixed
+ *  selection (several things at several angles have no one facing); typing one squares them all. */
+export function QuickTurn({ value, onChange, label = "זווית במעלות" }: { value: number | null; onChange: (deg: number) => void; label?: string }) {
+  const turn = (by: number) => onChange(((((value ?? 0) + by) % 360) + 360) % 360);
+  return (
+    <>
+      <BarButton icon={RotateCcw} label="רבע סיבוב שמאלה" onClick={() => turn(-90)} />
+      <QuickNumber
+        label={label}
+        narrow
+        value={value === null ? 0 : Math.round(value) % 360}
+        hideZero={value === null}
+        placeholder={value === null ? "—" : undefined}
+        onChange={(v) => onChange(((v % 360) + 360) % 360)}
+      />
+      <QuickUnit>°</QuickUnit>
+      <BarButton icon={RotateCw} label="רבע סיבוב ימינה" onClick={() => turn(90)} />
+    </>
+  );
+}
+
+/** The selection's ONE mode verb — הלבשה, עריכת הקווים, עריכת האזור — as an outline pill, the
+ *  product form's "עריכת המראה" look. `active` while the mode it enters is on; `disabled` while
+ *  there is nothing for it to do (a venue feature that stands where the venue has it), `title` then
+ *  saying why. */
+export function ModeVerb({
+  icon: Icon,
+  label,
+  onClick,
+  active,
+  disabled,
+  title,
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick: () => void;
+  active?: boolean;
+  disabled?: boolean;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      disabled={disabled}
+      title={title}
+      className={
+        "inline-flex h-[30px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-pill border-[1.5px] border-accent-line px-3 text-[13px] font-bold text-accent transition-colors hover:bg-accent-tint disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-surface " +
+        (active ? "bg-accent-wash" : "bg-surface")
+      }
+    >
+      <Icon className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
+      {label}
+    </button>
+  );
+}
+
+/** The bar's last word: copy · delete · ⋯, in that order and always last, behind a hairline. A
+ *  wall has no copy, nor a venue feature in a sketch (its delete takes it out of this event only);
+ *  the ⋯ holds the rare verbs (cut, select similar, stacking, lock, mirror, save as composite) in
+ *  the sections the caller gives. */
+export function QuickTail({
+  onCopy,
+  copyLabel = "שכפול · Ctrl+D",
+  onDelete,
+  deleteLabel = "מחיקה",
+  deleteDisabled,
+  more,
+  moreLabel = "עוד פעולות",
+}: {
+  onCopy?: () => void;
+  copyLabel?: string;
+  onDelete?: () => void;
+  deleteLabel?: string;
+  deleteDisabled?: boolean;
+  more?: MenuItem[];
+  moreLabel?: string;
 }) {
   return (
     <div className="ms-auto flex items-center gap-1">
       <InspectorDivider />
-      <BarButton icon={Copy} label={`${duplicateLabel} · Ctrl+C · Ctrl+V`} onClick={onDuplicate} />
-      <BarButton icon={Trash2} label={`${deleteLabel} · Delete`} onClick={onDelete} tone="danger" />
+      {onCopy && <BarButton icon={Copy} label={copyLabel} onClick={onCopy} />}
+      {onDelete && <BarButton icon={Trash2} label={`${deleteLabel} · Delete`} onClick={onDelete} tone="danger" disabled={deleteDisabled} />}
+      {more && more.length > 0 && <Menu label={moreLabel} side="top" items={more} />}
     </div>
   );
 }

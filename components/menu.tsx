@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { Ellipsis, type LucideIcon } from "lucide-react";
+import { ChevronDown, Ellipsis, type LucideIcon } from "lucide-react";
 import { IconButton } from "./icon-button";
 
 // The "…" menu — a row of actions folded behind one button.
@@ -40,7 +40,19 @@ export function Menu({
   side = "bottom",
   onOpenChange,
   className = "",
+  trigger = "icon",
+  triggerText,
+  align = "end",
 }: {
+  /** "icon" — the round icon button (the "…"). "chip" — icon + words + chevron, a choice read at a
+   *  glance (the venue ▾ over the canvas). "pill" — a quick bar's verb that opens a list (the wall's
+   *  "פתח" → דלת / חלון, יישור) in the ModeVerb outline (components/inspector-bar.tsx). */
+  trigger?: "icon" | "chip" | "pill";
+  /** The words on a chip or pill trigger. Defaults to the label. */
+  triggerText?: string;
+  /** Which edge of the trigger the list hangs from — "end" (the default) keeps a menu on a card
+   *  inside the card; "start" is for a trigger at the canvas's start corner. */
+  align?: "start" | "end";
   /** What the button is, for a screen reader and the tooltip — "אפשרויות לשולחן עגול 180", not
    *  "אפשרויות": in a grid of a hundred cards the bare word names all hundred of them. */
   label: string;
@@ -147,18 +159,43 @@ export function Menu({
 
   return (
     <div ref={rootRef} className={`relative ${className}`}>
-      <IconButton
-        label={label}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
-        aria-activedescendant={open && activeIndex >= 0 ? `${menuId}-${activeIndex}` : undefined}
-        onClick={() => (open ? setOpen(false) : openAt(-1))}
-        onKeyDown={onKeyDown}
-        className={open ? "bg-accent-tint text-accent-hover" : ""}
-      >
-        <Icon className="h-4 w-4" strokeWidth={2} />
-      </IconButton>
+      {trigger === "icon" ? (
+        <IconButton
+          label={label}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-controls={open ? menuId : undefined}
+          aria-activedescendant={open && activeIndex >= 0 ? `${menuId}-${activeIndex}` : undefined}
+          onClick={() => (open ? setOpen(false) : openAt(-1))}
+          onKeyDown={onKeyDown}
+          className={open ? "bg-accent-tint text-accent-hover" : ""}
+        >
+          <Icon className="h-4 w-4" strokeWidth={2} />
+        </IconButton>
+      ) : (
+        <button
+          type="button"
+          aria-label={label}
+          title={label}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-controls={open ? menuId : undefined}
+          aria-activedescendant={open && activeIndex >= 0 ? `${menuId}-${activeIndex}` : undefined}
+          onClick={() => (open ? setOpen(false) : openAt(-1))}
+          onKeyDown={onKeyDown}
+          className={
+            trigger === "pill"
+              ? "inline-flex h-[30px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-pill border-[1.5px] border-accent-line px-3 text-[13px] font-bold text-accent transition-colors hover:bg-accent-tint " +
+                (open ? "bg-accent-wash" : "bg-surface")
+              : "inline-flex h-8 max-w-56 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[13px] font-semibold text-ink-soft transition-colors hover:bg-accent-tint hover:text-accent-hover " +
+                (open ? "bg-accent-tint text-accent-hover" : "")
+          }
+        >
+          <Icon className={trigger === "pill" ? "h-3.5 w-3.5 shrink-0" : "h-4 w-4 shrink-0 text-accent"} strokeWidth={trigger === "pill" ? 2 : 1.75} />
+          <span className="truncate">{triggerText ?? label}</span>
+          {trigger === "chip" && <ChevronDown className="h-3 w-3 shrink-0 opacity-60" strokeWidth={2.5} />}
+        </button>
+      )}
 
       {open && (
         // Aligned END-to-END with the trigger, which in an RTL screen means the panel hangs to the
@@ -167,7 +204,7 @@ export function Menu({
           id={menuId}
           role="menu"
           aria-label={label}
-          className={`absolute end-0 z-40 min-w-40 rounded-md border border-border bg-surface p-1 shadow-lifted ${
+          className={`absolute ${align === "start" ? "start-0" : "end-0"} z-40 min-w-40 rounded-md border border-border bg-surface p-1 shadow-lifted ${
             side === "top" ? "bottom-[calc(100%+6px)]" : "top-[calc(100%+6px)]"
           }`}
         >

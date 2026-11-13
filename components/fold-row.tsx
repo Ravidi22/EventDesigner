@@ -20,8 +20,12 @@ export function FoldRow({
   open,
   onToggle,
   variant = "card",
+  tone = "default",
   children,
 }: {
+  /** "warn" for a group that reports a problem — its icon and summary in the warning ink, so a
+   *  closed panel says something is wrong before it is opened. */
+  tone?: "default" | "warn";
   icon: LucideIcon;
   title: string;
   /** What it holds now — text, or a few swatches and a word. */
@@ -43,9 +47,9 @@ export function FoldRow({
         onClick={onToggle}
         className={`flex w-full items-center gap-2.5 px-4 text-start transition-colors hover:bg-inset ${panel ? "py-[11px]" : "py-3"}`}
       >
-        <Icon className={`h-4 w-4 shrink-0 ${panel ? "text-accent" : "text-muted"}`} strokeWidth={1.75} />
+        <Icon className={`h-4 w-4 shrink-0 ${tone === "warn" ? "text-warn-ink" : panel ? "text-accent" : "text-muted"}`} strokeWidth={1.75} />
         <span className={`whitespace-nowrap text-sm text-ink ${panel ? "font-bold" : "font-semibold"}`}>{title}</span>
-        <span className={`flex min-w-0 flex-1 items-center justify-end gap-1.5 truncate text-xs ${panel ? "font-semibold text-ink-soft" : "text-muted"}`}>
+        <span className={`flex min-w-0 flex-1 items-center justify-end gap-1.5 truncate text-xs ${tone === "warn" ? "font-semibold text-warn-ink" : panel ? "font-semibold text-ink-soft" : "text-muted"}`}>
           {summary}
         </span>
         <Chevron className="h-3.5 w-3.5 shrink-0 text-faint" strokeWidth={2} />

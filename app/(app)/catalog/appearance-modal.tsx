@@ -15,6 +15,8 @@ import {
   Cylinder,
   Donut,
   DraftingCompass,
+  Eye,
+  EyeOff,
   FlipHorizontal2,
   FlipVertical2,
   Frame,
@@ -76,15 +78,21 @@ import { Select } from "@/components/select";
 import { CHAIR_D_MM, seatSides, seatsAround } from "@/lib/studio/seating";
 import { FootprintShape, OutlinePath } from "@/components/footprint-shape";
 import { SeatChairs, SeatSidesPicker } from "@/components/seat-sides-picker";
-import { Actions, Bar, BarButton, Note, PanelRow, ltr } from "@/components/inspector-bar";
+import { Bar, BarButton, Note, PanelRow, QuickNumber, QuickSep, QuickTail, QuickUnit, ltr } from "@/components/inspector-bar";
 import { Popover } from "@/components/popover";
 import { IconButton } from "@/components/icon-button";
 import { FoldRow } from "@/components/fold-row";
+import { EndPanel, PanelGroupsHeader, PanelList, PanelListRow } from "@/components/end-panel";
+import { ToolGrid, ToolTile, toolTileClass } from "@/components/tool-tile";
+import { ShapeGrid, ShapeIcon } from "@/components/shape-grid";
 import { ElevationView } from "./elevation-view";
+import { ElevationCanvas } from "./elevation-canvas";
+import { ElevationQuickBar } from "./elevation-bar";
+import { elevationNudge, type ElevationView as SideView } from "@/lib/element/elevation";
 import { RevolveFields, type RevolveTiles } from "./revolve-editor";
 import { REVOLVE_LABEL, revolveFormOf } from "@/lib/element/revolve";
 import { ScenePane } from "./scene-pane";
-import { itemScene, itemSceneKey } from "@/lib/scene/item-scene";
+import { itemBaseZ, itemScene, itemSceneKey } from "@/lib/scene/item-scene";
 import { Menu, type MenuItem } from "@/components/menu";
 import { StructureFeatures } from "@/components/venue-plan";
 import { Dim } from "@/components/venue-dims";
@@ -492,21 +500,8 @@ function HollowFields({
 // (lib/catalog/shape-list.ts).
 
 /** A shape's picture, at a neutral proportion — the drawer's tiles and the shape picker's. */
-function ShapeIcon({ shape, className = "h-[30px] w-[30px]" }: { shape: Exclude<MapShape, "custom">; className?: string }) {
-  const f = shapeFootprint(shape, { widthMm: 1600, depthMm: shape === "line" ? 60 : 1000, diameterMm: 1600 });
-  const b = footprintBounds(f);
-  const pad = Math.max(b.w, b.h) * 0.08;
-  return (
-    <svg viewBox={`${-b.w / 2 - pad} ${-b.h / 2 - pad} ${b.w + pad * 2} ${b.h + pad * 2}`} className={`shrink-0 ${className}`} aria-hidden>
-      <FootprintShape footprint={f} fill="var(--color-surface)" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-    </svg>
-  );
-}
 
 /** A shape tile — the drawer's and the shape picker's, one look. */
-const shapeTileClass = (on: boolean) =>
-  "flex h-[58px] min-w-0 flex-col items-center justify-center gap-0.5 rounded-sm border px-1 pb-[5px] pt-1 text-[11px] font-semibold leading-tight transition-colors " +
-  (on ? "border-accent bg-accent-tint text-accent" : "border-transparent bg-inset text-ink-soft hover:border-accent-line");
 
 /** The drawer's names where the full one does not fit a tile; the full one is its tooltip. */
 const SHAPE_SHORT: Partial<Record<MapShape, string>> = {
@@ -523,15 +518,26 @@ type RailShape = Exclude<MapShape, "custom">;
 const RAIL_SHAPES = PICKER_SHAPES.filter((s): s is RailShape => s !== "custom");
 const isRailShape = (id: string): id is RailShape => (RAIL_SHAPES as readonly string[]).includes(id);
 
-function ShapeRail({ armed, drawing, onArm, onDraw }: { armed: RailShape | null; drawing: boolean; onArm: (s: RailShape | null) => void; onDraw: () => void }) {
+/** The view switch over the canvas — the plan and the two side views (lib/element/elevation.ts). */
+const VIEW_OPTIONS = [
+  ["plan", "תוכנית"],
+  ["front", "חזית"],
+  ["side", "צד"],
+] as const;
+
+function ShapeRail({ armed, drawing, onArm, onDraw, disabled = false }: { armed: RailShape | null; drawing: boolean; onArm: (s: RailShape | null) => void; onDraw: () => void; disabled?: boolean }) {
+  // A side view places nothing new yet (front shapes are the next stage): shapes are added on the
+  // plan, and the rail says so rather than arming a tool the view cannot place.
+  const why = disabled ? "צורות חדשות מונחות בתוכנית" : undefined;
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-e border-border bg-surface">
+    <aside className={"flex w-56 shrink-0 flex-col border-e border-border bg-surface" + (disabled ? " opacity-50" : "")} title={why}>
       <div className="scroll-slim flex flex-1 flex-col gap-2.5 overflow-y-auto p-2.5">
         <button
           type="button"
           onClick={onDraw}
+          disabled={disabled}
           aria-pressed={drawing}
-          title="ציור חופשי — נקודה אחר נקודה"
+          title={why ?? "ציור חופשי — נקודה אחר נקודה"}
           className={
             "flex h-9 w-full items-center justify-center gap-2 rounded-sm border px-2.5 text-[13px] font-semibold transition-colors " +
             (drawing ? "border-accent bg-accent-tint text-accent" : "border-border bg-surface text-ink hover:border-accent-line hover:bg-inset")
@@ -540,30 +546,20 @@ function ShapeRail({ armed, drawing, onArm, onDraw }: { armed: RailShape | null;
           <PenLine className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.75} />
           ציור חופשי
         </button>
-        <div className="flex flex-col gap-1.5">
-          <span className="ps-0.5 text-xs font-semibold text-muted">צורות</span>
-          <div className="grid grid-cols-3 gap-1">
-            {RAIL_SHAPES.map((s) => (
-              <button
-                key={s}
-                type="button"
-                draggable
-                aria-pressed={armed === s}
-                aria-label={SHAPE_LABEL[s]}
-                title={SHAPE_LABEL[s]}
-                onClick={() => onArm(armed === s ? null : s)}
-                onDragStart={(e) => {
-                  e.dataTransfer.setData("text/plain", s);
-                  e.dataTransfer.effectAllowed = "copy";
-                }}
-                className={shapeTileClass(armed === s)}
-              >
-                <ShapeIcon shape={s} />
-                <span className="block w-full truncate text-center">{SHAPE_SHORT[s] ?? SHAPE_LABEL[s]}</span>
-              </button>
-            ))}
-          </div>
-        </div>
+        <ToolGrid label="צורות">
+          {RAIL_SHAPES.map((s) => (
+            <ToolTile
+              key={s}
+              glyph={<ShapeIcon shape={s} />}
+              label={SHAPE_SHORT[s] ?? SHAPE_LABEL[s]}
+              title={why ?? SHAPE_LABEL[s]}
+              armed={armed === s}
+              disabled={disabled}
+              onClick={() => onArm(armed === s ? null : s)}
+              dragId={s}
+            />
+          ))}
+        </ToolGrid>
       </div>
     </aside>
   );
@@ -760,24 +756,6 @@ function restacked(list: readonly ShapePart[], ids: readonly string[], how: "fro
  *  of cards rather than a Select — the bar sits on the bottom edge of the canvas, and a list that
  *  opens downward from there opens off it. The three hollow shapes a solid one now draws
  *  (PICKER_SHAPES) show a card only on a shape that already is one, so the grid still says what it is. */
-function ShapeGrid({ value, onPick }: { value: MapShape; onPick: (shape: MapShape) => void }) {
-  return (
-    <div className="grid grid-cols-4 gap-1" role="group" aria-label="צורה">
-      {MAP_SHAPES.filter((s) => PICKER_SHAPES.includes(s) || s === value).map((s) => (
-        <button key={s} type="button" aria-pressed={value === s} title={SHAPE_LABEL[s]} onClick={() => onPick(s)} className={`${shapeTileClass(value === s)} h-auto min-h-[64px]`}>
-          {s === "custom" ? (
-            <span className="flex h-[30px] w-[30px] items-center justify-center">
-              <PenLine className="h-4 w-4 text-accent" strokeWidth={1.75} />
-            </span>
-          ) : (
-            <ShapeIcon shape={s} />
-          )}
-          <span className="line-clamp-2 w-full text-center">{SHAPE_LABEL[s]}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
 
 /** The versions of a category's picture (SYMBOL_STYLES) as tiles, each drawn at a typical size of
  *  that version in THIS row's shade and count, so the designer picks by looking. The first tile is
@@ -897,6 +875,7 @@ function PictureFields({
   symbol,
   onChange,
   onProfile,
+  onEditInView,
 }: {
   product: Product;
   preview: Product;
@@ -905,6 +884,8 @@ function PictureFields({
   /** Sets the FIRST shape's body (its `revolve`) — a chandelier's silhouette. Absent when the first
    *  shape cannot have one (not round). */
   onProfile?: (revolve: RevolvePoint[] | undefined) => void;
+  /** Goes to the חזית view with the first shape selected, where its body is dragged at full size. */
+  onEditInView?: () => void;
 }) {
   const category = CATEGORY_BY_ID[product.category];
   const tone = preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill;
@@ -1041,7 +1022,7 @@ function PictureFields({
           return (
             <div className="space-y-2">
               {profiled && (
-                <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile!(revolve)} tiles={pendants ? PENDANT_GLASS_TILES : CHANDELIER_SILHOUETTES} />
+                <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile!(revolve)} tiles={pendants ? PENDANT_GLASS_TILES : CHANDELIER_SILHOUETTES} onEditInView={onEditInView} />
               )}
               {/* GLASS PENDANTS: the glass is the shade (גוונים וצבעים — ענבר, עשן, שקוף, כרום), so here
                   only the metal, whether every globe takes its own shade, and their sizes. */}
@@ -1144,7 +1125,7 @@ function PictureFields({
           const flowered = built.flowers !== "none" || built.roof === "flowers" || built.meadow;
           return (
             <div className="space-y-2">
-              {round && onProfile && <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile(revolve)} tiles={CHUPPAH_ROOF_TILES} />}
+              {round && onProfile && <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile(revolve)} tiles={CHUPPAH_ROOF_TILES} onEditInView={onEditInView} />}
               <PanelRow label="עמודים" htmlFor="chuppah-posts">
                 <NumberField id="chuppah-posts" decimals={0} min={0} max={12} commitOnBlur value={built.posts ?? ownPosts} onChange={(v) => set({ posts: Math.round(v) === ownPosts ? undefined : Math.round(v) })} className="w-20" />
               </PanelRow>
@@ -1181,13 +1162,13 @@ function PictureFields({
           const chosen = preview.appearance?.symbolStyle;
           const form = isFlowerForm(chosen) ? chosen : defaultFlowerForm(preview.dimensions.heightMm, b.w, b.h);
           if (form === "runner" || form === "bud" || form === "single") return null;
-          return <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile(revolve)} tiles={FLOWER_ENVELOPES} />;
+          return <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile(revolve)} tiles={FLOWER_ENVELOPES} onEditInView={onEditInView} />;
         })()}
     </div>
   );
 }
 
-/** The "…" of a shape's bar and of several shapes' — the studio's MoreMenu order: turn it over, then
+/** The "…" of a shape's bar and of several shapes' — the studio's ⋯ order: turn it over, then
  *  where it stands in the stack. */
 function moreItems(onFlip: (axis: FlipAxis) => void, onRestack: (how: "front" | "back") => void): MenuItem[] {
   return [
@@ -1234,11 +1215,6 @@ function sizeLabel(part: ShapePart): string {
 }
 
 /** The small number box the quick bar types sizes into — the sketch bar's h-7, 56px wide. */
-function BarNumber({ label, value, onChange, decimals = 0, min = 0, className = "w-14" }: { label: string; value: number; onChange: (v: number) => void; decimals?: number; min?: number; className?: string }) {
-  return <NumberField size="sm" aria-label={label} decimals={decimals} min={min} commitOnBlur value={value} onChange={onChange} className={className} />;
-}
-const BarSep = () => <div className="mx-0.5 h-6 w-px bg-border" aria-hidden />;
-const BarUnit = ({ children }: { children: ReactNode }) => <span className="text-xs text-muted">{children}</span>;
 
 /** A selected shape's QUICK bar, at the canvas's foot — the edits made most: which shape, its size,
  *  its turn, and the verbs (redraw, flip/order, duplicate, delete). Everything else about the shape is
@@ -1280,38 +1256,46 @@ function ShapeQuickBar({
       facts={base ? "מידות הפריט וגובהו" : part.repeat ? `חוזרת ${REPEAT_SHORT[part.repeat.along]}` : undefined}
       onClose={onClose}
     >
-      <Popover label="צורה" icon={Shapes} value={drawn ? "חופשית" : SHAPE_LABEL[part.shape]} panelClassName="w-80">
-        <ShapeGrid value={part.shape} onPick={onReshape} />
+      <Popover label="צורה" icon={Shapes} value={drawn ? "חופשית" : SHAPE_LABEL[part.shape]} variant="picker">
+        {(close) => (
+          <ShapeGrid
+            value={part.shape}
+            onPick={(s) => {
+              onReshape(s);
+              close();
+            }}
+          />
+        )}
       </Popover>
-      <BarSep />
+      <QuickSep />
       <span title="מידות" className="inline-flex text-muted">
         <Ruler className="h-4 w-4" strokeWidth={1.75} />
       </span>
       {round ? (
         <>
-          <BarUnit>{field.label === "רדיוס" ? "R" : "⌀"}</BarUnit>
-          <BarNumber label={`${field.label} (ס״מ)`} value={(D ?? 0) / field.factor / 10} onChange={(v) => onChange({ diameterMm: Math.round(v * 10 * field.factor) })} />
+          <QuickUnit>{field.label === "רדיוס" ? "R" : "⌀"}</QuickUnit>
+          <QuickNumber min={0} label={`${field.label} (ס״מ)`} value={(D ?? 0) / field.factor / 10} onChange={(v) => onChange({ diameterMm: Math.round(v * 10 * field.factor) })} />
         </>
       ) : (
         <>
           {/* Committed on blur: a size typed digit by digit rescaled the shape at "1", then "12", then
               "120" — a hand-drawn one through rescaleCustomPart each time. */}
-          <BarNumber label={part.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={cmOf(part.widthMm)} onChange={(v) => onChange({ widthMm: Math.round(v * 10) })} />
-          <BarUnit>×</BarUnit>
+          <QuickNumber min={0} label={part.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={cmOf(part.widthMm)} onChange={(v) => onChange({ widthMm: Math.round(v * 10) })} />
+          <QuickUnit>×</QuickUnit>
           {part.shape === "line" ? (
-            <BarNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(part.depthMm ?? 0) / 10} onChange={(v) => onChange({ depthMm: Math.max(1, Math.round(v * 10)) })} />
+            <QuickNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(part.depthMm ?? 0) / 10} onChange={(v) => onChange({ depthMm: Math.max(1, Math.round(v * 10)) })} />
           ) : (
-            <BarNumber label="עומק (ס״מ)" value={cmOf(part.depthMm)} onChange={(v) => onChange({ depthMm: Math.round(v * 10) })} />
+            <QuickNumber min={0} label="עומק (ס״מ)" value={cmOf(part.depthMm)} onChange={(v) => onChange({ depthMm: Math.round(v * 10) })} />
           )}
         </>
       )}
-      <BarUnit>ס״מ</BarUnit>
-      <BarSep />
+      <QuickUnit>ס״מ</QuickUnit>
+      <QuickSep />
       <BarButton icon={RotateCcw} label="רבע סיבוב שמאלה" onClick={() => turn(-90)} />
       <NumberField size="sm" aria-label="זווית במעלות" decimals={0} value={deg} onChange={(v) => onChange({ rotation: ((v % 360) + 360) % 360 })} className="w-12" />
-      <BarUnit>°</BarUnit>
+      <QuickUnit>°</QuickUnit>
       <BarButton icon={RotateCw} label="רבע סיבוב ימינה" onClick={() => turn(90)} />
-      <BarSep />
+      <QuickSep />
       <BarButton icon={PenLine} label="עריכת הקווים · לחיצה כפולה" onClick={onRedraw} />
       {/* Lines only: the side back to the first point and the fill left out. A band or a surface has
           no inside to go on, so they go with it. */}
@@ -1323,8 +1307,7 @@ function ShapeQuickBar({
           onClick={() => onChange(part.open ? { open: undefined } : { open: true, hollow: undefined, texture: undefined, textureImage: undefined })}
         />
       )}
-      <Menu label="עוד פעולות לצורה" side="top" items={more} />
-      <Actions onDuplicate={onDuplicate} duplicateLabel="שכפול הצורה · Ctrl+D" onDelete={onRemove} deleteLabel="מחיקת הצורה · Delete" />
+      <QuickTail onCopy={onDuplicate} copyLabel="שכפול הצורה · Ctrl+D" onDelete={onRemove} deleteLabel="מחיקת הצורה" more={more} moreLabel="עוד פעולות לצורה" />
     </Bar>
   );
 }
@@ -1385,7 +1368,11 @@ function ShapePanel({
   onChange,
   groups,
   bodyTiles,
+  onOpenElevation,
 }: {
+  /** Goes to the חזית view with this shape kept selected — the height drawn at full size, and the
+   *  body dragged on it. */
+  onOpenElevation?: () => void;
   /** The tiles the "גוף" group offers instead of the vessels' — a chandelier's silhouettes. */
   bodyTiles?: RevolveTiles;
   part: ShapePart;
@@ -1437,6 +1424,11 @@ function ShapePanel({
       >
         <div className="space-y-1.5">
           <ElevationView shapes={shapes} itemHeightMm={itemHeightMm} selectedId={part.id} />
+          {onOpenElevation && (
+            <Button type="button" variant="outline" size="sm" className="w-full" onClick={onOpenElevation}>
+              פתיחה בחזית
+            </Button>
+          )}
           {base ? (
             <>
               <PanelRow label="גובה הפריט (ס״מ)" htmlFor={`${id}-height`}>
@@ -1486,7 +1478,7 @@ function ShapePanel({
           a slice, which have no body of revolution. */}
       {(part.shape === "circle" || part.shape === "ellipse") && !part.hollow && !(part.arc?.sweepDeg && part.arc.sweepDeg < 360) && (
         <FoldRow {...group(groups, "body")} icon={Cylinder} title={bodyTiles ? bodyTiles.title.split(" — ")[0] : "גוף"} summary={bodyValue(part, bodyTiles)}>
-          <RevolveFields value={part.revolve} onChange={(revolve) => onChange({ revolve })} tiles={bodyTiles} />
+          <RevolveFields value={part.revolve} onChange={(revolve) => onChange({ revolve })} tiles={bodyTiles} onEditInView={onOpenElevation} />
         </FoldRow>
       )}
       {/* PIN (Stage 3): how this shape follows a resize of the item on the sketch — against the first
@@ -1818,6 +1810,23 @@ export function AppearanceModal({
     setSceneMounted(true);
     setScene3d((v) => !v);
   };
+  // תוכנית · חזית · צד (lib/element/elevation.ts). The side views' canvas is mounted on the first
+  // visit and then kept — hidden while the plan shows — so the room under it compiles once; the plan's
+  // canvas is kept too, its view where the designer left it.
+  const [view, setView] = useState<"plan" | SideView>("plan");
+  // The side view the side canvas shows — kept while the plan is up, so it comes back as it was.
+  const [sideView, setSideView] = useState<SideView>("front");
+  const [sideMounted, setSideMounted] = useState(false);
+  const [roomShown, setRoomShown] = useState(true);
+  const side = view === "plan" ? null : view;
+  const showView = (v: "plan" | SideView) => {
+    if (v !== "plan") {
+      setSideMounted(true);
+      setSideView(v);
+    }
+    setArmedShape(null);
+    setView(v);
+  };
   const [alignPreview, setAlignPreview] = useState<AlignOp | null>(null);
   const [alignKey, setAlignKey] = useState(0);
   // The shape a right-click landed on — reported by the feature layer just before the canvas asks
@@ -1950,7 +1959,21 @@ export function AppearanceModal({
       const next = withShapes(d, flipShapes(d.shapes, ids, axis));
       return { ...next, look: { ...next.look, appearance: next.look.appearance && { ...next.look.appearance, blockedSides: undefined } } };
     });
-  const nudge = (dx: number, dy: number) => editShapes((l) => l.map((s) => (selected.includes(s.id) ? shifted(s, dx, dy) : s)));
+  const nudge = (dx: number, dy: number) =>
+    editShapes((l) =>
+      l.map((s, i) => {
+        if (!selected.includes(s.id)) return s;
+        // In a side view → is across and ↑ is up (a screen's down is the floor's).
+        return side ? { ...s, ...elevationNudge(s, i, side, dx, -dy) } : shifted(s, dx, dy);
+      }),
+    );
+  /** A side view's live edit, inside the open undo entry — the shapes, and the item's height when the
+   *  first shape's top edge moved. Committed when the gesture ends. */
+  const sideEdit = (fn: (list: ShapePart[]) => ShapePart[], itemHeightMm?: number) =>
+    hist.amend((d) => {
+      const next = withShapes(d, fn(d.shapes));
+      return itemHeightMm === undefined ? next : { ...next, look: { ...next.look, dimensions: { ...next.look.dimensions, heightMm: itemHeightMm } } };
+    });
 
   // ── יישור — the selection lined up by one of its own (lib/studio/align.ts) ────────────────────
   const shapeName = (s: ShapePart) => `${s.shape === "custom" ? (s.open ? "קווים" : "צורה חופשית") : SHAPE_LABEL[s.shape]} ${shapes.indexOf(s) + 1}`;
@@ -2250,7 +2273,11 @@ export function AppearanceModal({
         ? `לחצו על הקנבס כדי להניח ${SHAPE_LABEL[armedShape]} · Esc לביטול`
         : missing
           ? "גררו צורה מהמגירה אל הקנבס, או ״ציור חופשי״"
-          : seeded && !hist.canUndo && !selected.length
+          : side && !selected.length
+            ? preview.layer === "ceiling"
+              ? "גררו צורה למעלה או למטה כדי לשנות את גובהה בפריט"
+              : "גררו צורה למעלה או למטה כדי לשנות את גובהה מהרצפה"
+            : seeded && !hist.canUndo && !selected.length
             ? `גודל התחלתי ל${category?.label ?? "פריט"} — הקלידו את המידות האמיתיות בסרגל למטה`
             : null);
 
@@ -2266,6 +2293,10 @@ export function AppearanceModal({
             preview={preview}
             symbol={previewSymbol}
             onChange={setAppearance}
+            onEditInView={() => {
+              if (shapes[0]) setSel([shapes[0].id]);
+              showView("front");
+            }}
             onProfile={
               shapes[0] && (shapes[0].shape === "circle" || shapes[0].shape === "ellipse") && !shapes[0].hollow
                 ? (revolve) => editShapes((list) => list.map((s, i) => (i === 0 ? { ...s, revolve } : s)))
@@ -2348,63 +2379,43 @@ export function AppearanceModal({
     </>
   );
   const panel = (
-    <aside className="flex min-h-0 w-[296px] shrink-0 flex-col border-s border-border bg-surface">
-      <div className="scroll-slim min-h-0 flex-1 overflow-y-auto">
+    <EndPanel screen="editor">
         {!stretch && (
           <>
-            <div className="px-3 pb-2.5 pt-3">
-              <div className="flex items-center gap-1.5 px-1 pb-1.5">
-                <span className="text-xs font-semibold text-muted">צורות בפריט</span>
-                <span className="nums text-xs text-quiet">{shapes.length}</span>
-              </div>
-              <div className="flex flex-col gap-0.5">
-                {shapes.map((s, i) => {
-                  const on = selected.includes(s.id);
-                  return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={(e) => {
-                        if (drawingPart) return;
-                        setArmedShape(null);
-                        setSel((cur) => (e.shiftKey || e.ctrlKey || e.metaKey ? (cur.includes(s.id) ? cur.filter((x) => x !== s.id) : [...cur, s.id]) : [s.id]));
-                      }}
-                      aria-pressed={on}
-                      className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-start transition-colors ${on ? "bg-accent-tint text-accent-hover" : "text-ink hover:bg-inset"}`}
-                    >
-                      <PartGlyph part={s} />
-                      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{shapeName(s).replace(/ \d+$/, "")}</span>
-                      {i === 0 && <span className="shrink-0 rounded-pill bg-accent-wash px-2 py-px text-[11px] font-semibold text-accent-hover">בסיס</span>}
-                      {i > 0 && s.repeat && (
-                        <span className="shrink-0 rounded-pill border border-accent-line px-[7px] text-[11px] font-semibold text-accent-hover">{REPEAT_SHORT[s.repeat.along]}</span>
-                      )}
-                      <span dir="ltr" className="nums shrink-0 text-xs text-muted">
-                        {sizeLabel(s)}
+            <PanelList title="צורות בפריט" count={shapes.length}>
+                {shapes.map((s, i) => (
+                  <PanelListRow
+                    key={s.id}
+                    glyph={<PartGlyph part={s} />}
+                    label={shapeName(s).replace(/ \d+$/, "")}
+                    badge={i > 0 && s.repeat ? REPEAT_SHORT[s.repeat.along] : undefined}
+                    meta={
+                      <span className="flex items-center gap-1.5">
+                        {i === 0 && <span className="rounded-pill bg-accent-wash px-2 py-px text-[11px] font-semibold text-accent-hover">בסיס</span>}
+                        <span dir="ltr">{sizeLabel(s)}</span>
                       </span>
-                    </button>
-                  );
-                })}
-              </div>
+                    }
+                    selected={selected.includes(s.id)}
+                    onClick={(e) => {
+                      if (drawingPart) return;
+                      setArmedShape(null);
+                      setSel((cur) => (e.shiftKey || e.ctrlKey || e.metaKey ? (cur.includes(s.id) ? cur.filter((x) => x !== s.id) : [...cur, s.id]) : [s.id]));
+                    }}
+                  />
+                ))}
               <p className="mx-1 mt-2 text-xs leading-relaxed text-muted">
                 {shapes.length <= 1
                   ? "הוסיפו צורות מהמגירה כדי לבנות פריט מכמה חלקים — עמודים, מדף, במה."
                   : "הצורה הראשונה היא בסיס הפריט: היא קובעת את מידותיו ואת גובהו."}
               </p>
-            </div>
+            </PanelList>
             <div className="h-px bg-border" />
           </>
         )}
-        <div className="px-4 pb-1.5 pt-3">
-          <span className="text-xs font-semibold text-muted">
-            {drawingPart
-              ? "ציור צורה"
-              : one
-                ? `מתקדם · ${shapeName(one).replace(/ \d+$/, "")}`
-                : selShapes.length > 1
-                  ? `${selShapes.length} צורות נבחרו`
-                  : `הפריט · ${draft.name.trim() || category?.label || ""}`}
-          </span>
-        </div>
+        <PanelGroupsHeader
+          title={drawingPart ? "ציור צורה" : one ? shapeName(one).replace(/ \d+$/, "") : selShapes.length > 1 ? `${selShapes.length} צורות נבחרו` : "הפריט"}
+          sub={drawingPart || selShapes.length > 1 ? undefined : one ? "מתקדם" : draft.name.trim() || category?.label || undefined}
+        />
         {drawingPart ? (
           <p className="px-4 pb-4 text-xs leading-relaxed text-muted">לחצו על הקנבס נקודה אחר נקודה. לחיצה על הנקודה הראשונה או Enter — סגירת הצורה; ״סיום כקווים״ — בלי לסגור.</p>
         ) : one ? (
@@ -2424,6 +2435,7 @@ export function AppearanceModal({
             onItemHeight={setItemHeight}
             onChange={(p) => patchShape(one.id, p)}
             groups={groups}
+            onOpenElevation={() => showView("front")}
             bodyTiles={(() => {
               if (shapes[0]?.id !== one.id) return undefined;
               if (previewSymbol === "flowers" || previewSymbol === "centerpiece") return FLOWER_ENVELOPES;
@@ -2438,8 +2450,7 @@ export function AppearanceModal({
         ) : (
           itemGroups
         )}
-      </div>
-    </aside>
+    </EndPanel>
   );
 
   return (
@@ -2469,7 +2480,7 @@ export function AppearanceModal({
         </header>
 
         <div className="flex min-h-0 flex-1">
-          {!stretch && <ShapeRail armed={armedShape} drawing={!!drawingPart?.isNew} onArm={setArmedShape} onDraw={() => startDrawing()} />}
+          {!stretch && <ShapeRail armed={armedShape} drawing={!!drawingPart?.isNew} onArm={setArmedShape} onDraw={() => startDrawing()} disabled={!!side} />}
 
           <div className="relative min-w-0 flex-1 bg-canvas">
             {/* Why something was refused (an outline that crosses itself), for a moment, over the
@@ -2495,6 +2506,8 @@ export function AppearanceModal({
                 )}
               </div>
             ) : (
+              <>
+              <div className={"absolute inset-0" + (side ? " invisible pointer-events-none" : "")} aria-hidden={!!side}>
               <PlanCanvas
                 // A footprint is a cm-scale thing: typed and shown in centimetres. A drawn side goes
                 // where the pointer is (pulled square by the points already drawn); Alt holds it to
@@ -2838,6 +2851,44 @@ export function AppearanceModal({
                   </>
                 )}
               />
+              </div>
+              {/* חזית · צד — the shapes as boxes from their bottom to their top, the room under them. */}
+              {sideMounted && (
+                <div className={"absolute inset-0" + (side ? "" : " invisible pointer-events-none")} aria-hidden={!side}>
+                  <ElevationCanvas
+                    view={sideView}
+                    shapes={shapes}
+                    itemHeightMm={draft.dimensions.heightMm ?? 0}
+                    itemStyle={draft.appearance?.style}
+                    selected={selected}
+                    onSelect={(ids) => {
+                      setArmedShape(null);
+                      setSel(ids);
+                    }}
+                    onEdit={sideEdit}
+                    onCommit={hist.commit}
+                    history={{ canUndo: hist.canUndo, canRedo: hist.canRedo, onUndo: hist.undo, onRedo: hist.redo }}
+                    room={shapes.length ? { subject: { key: itemSceneKey(preview), build: () => itemScene(preview) }, itemAt, baseZMm: itemBaseZ(preview) } : null}
+                    roomShown={roomShown}
+                    hidden={!side}
+                    envelopeIds={shapes[0] && (previewSymbol === "chandelier" || previewSymbol === "flowers" || previewSymbol === "centerpiece" || previewSymbol === "chuppah") ? [shapes[0].id] : undefined}
+                    frame={PRODUCT_FRAME}
+                  />
+                </div>
+              )}
+              {/* The view switch — the plan's strip is at the top END, so this takes the START. Not
+                  while a shape is being drawn: the drawing is the plan's. */}
+              {!drawingPart && (
+                <div className="absolute top-4 start-4 z-20 flex items-center gap-1 rounded-md bg-surface p-1 shadow-floating">
+                  <Segmented label="מבט" hideLabel value={view} options={VIEW_OPTIONS} onChange={showView} />
+                  {side && (
+                    <IconButton label="החדר מאחורי השרטוט" pressed={roomShown} onClick={() => setRoomShown((v) => !v)}>
+                      {roomShown ? <Eye className="h-[18px] w-[18px]" strokeWidth={1.4} /> : <EyeOff className="h-[18px] w-[18px]" strokeWidth={1.4} />}
+                    </IconButton>
+                  )}
+                </div>
+              )}
+              </>
             )}
 
             {/* The item in a room of its own, in the canvas's corner — above the bar's band, under
@@ -2859,6 +2910,23 @@ export function AppearanceModal({
               <div className="pointer-events-auto max-w-full">
                 {drawingPart ? (
                   <DrawingBar ed={partEd} isNew={drawingPart.isNew} onCancel={cancelDrawing} onFinish={finishDrawing} />
+                ) : one && side ? (
+                  <ElevationQuickBar
+                    part={one}
+                    base={shapes[0]?.id === one.id}
+                    hung={preview.layer === "ceiling"}
+                    title={shapeName(one).replace(/ \d+$/, "")}
+                    itemHeightMm={draft.dimensions.heightMm ?? 0}
+                    onChange={(p) => patchShape(one.id, p)}
+                    onItemHeight={setItemHeight}
+                    onDuplicate={() => duplicate([one.id])}
+                    onRemove={() => removeShapes([one.id])}
+                    more={moreItems(
+                      (axis) => flip([one.id], axis),
+                      (how) => restack([one.id], how),
+                    )}
+                    onClose={() => setSel([])}
+                  />
                 ) : one ? (
                   <ShapeQuickBar
                     part={one}
@@ -2877,15 +2945,17 @@ export function AppearanceModal({
                 ) : selShapes.length > 1 ? (
                   <Bar icon={Layers} title={`${selShapes.length} צורות`} onClose={() => setSel([])}>
                     <AlignMenu align={alignPanel} />
-                    <Menu
-                      label="עוד פעולות לנבחרות"
-                      side="top"
-                      items={moreItems(
+                    <QuickTail
+                      onCopy={() => duplicate(selected)}
+                      copyLabel="שכפול הצורות · Ctrl+D"
+                      onDelete={() => removeShapes(selected)}
+                      deleteLabel="מחיקת הצורות"
+                      more={moreItems(
                         (axis) => flip(selected, axis),
                         (how) => restack(selected, how),
                       )}
+                      moreLabel="עוד פעולות לנבחרות"
                     />
-                    <Actions onDuplicate={() => duplicate(selected)} duplicateLabel="שכפול הצורות · Ctrl+D" onDelete={() => removeShapes(selected)} deleteLabel="מחיקת הצורות · Delete" />
                   </Bar>
                 ) : (
                   <Bar
@@ -2900,8 +2970,8 @@ export function AppearanceModal({
                         </span>
                         {baseRound ? (
                           <>
-                            <BarUnit>{baseField.label === "רדיוס" ? "R" : "⌀"}</BarUnit>
-                            <BarNumber
+                            <QuickUnit>{baseField.label === "רדיוס" ? "R" : "⌀"}</QuickUnit>
+                            <QuickNumber min={0}
                               label={`${baseField.label} (ס״מ)`}
                               value={(roundSizeMm(base.shape, base) ?? 0) / baseField.factor / 10}
                               onChange={(v) => setBase({ diameterMm: Math.round(v * 10 * baseField.factor) })}
@@ -2909,24 +2979,24 @@ export function AppearanceModal({
                           </>
                         ) : (
                           <>
-                            <BarNumber label={base.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={mmToCm(base.widthMm ?? 0)} onChange={(v) => setBase({ widthMm: Math.round(v * 10) })} />
-                            <BarUnit>×</BarUnit>
+                            <QuickNumber min={0} label={base.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={mmToCm(base.widthMm ?? 0)} onChange={(v) => setBase({ widthMm: Math.round(v * 10) })} />
+                            <QuickUnit>×</QuickUnit>
                             {base.shape === "line" ? (
-                              <BarNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(base.depthMm ?? 0) / 10} onChange={(v) => setBase({ depthMm: Math.max(1, Math.round(v * 10)) })} />
+                              <QuickNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(base.depthMm ?? 0) / 10} onChange={(v) => setBase({ depthMm: Math.max(1, Math.round(v * 10)) })} />
                             ) : (
-                              <BarNumber label="עומק (ס״מ)" value={mmToCm(base.depthMm ?? 0)} onChange={(v) => setBase({ depthMm: Math.round(v * 10) })} />
+                              <QuickNumber min={0} label="עומק (ס״מ)" value={mmToCm(base.depthMm ?? 0)} onChange={(v) => setBase({ depthMm: Math.round(v * 10) })} />
                             )}
                           </>
                         )}
-                        <BarUnit>ס״מ</BarUnit>
-                        <BarSep />
+                        <QuickUnit>ס״מ</QuickUnit>
+                        <QuickSep />
                       </>
                     )}
                     <span title="גובה הפריט" className="inline-flex text-muted">
                       <ArrowUpFromLine className="h-4 w-4" strokeWidth={1.75} />
                     </span>
                     <NumberField size="sm" aria-label="גובה הפריט (ס״מ)" decimals={0} min={0} hideZero placeholder="—" commitOnBlur value={heightCm} onChange={(v) => setItemHeight(Math.max(0, Math.round(v * 10)))} className="w-14" />
-                    <BarUnit>ס״מ</BarUnit>
+                    <QuickUnit>ס״מ</QuickUnit>
                   </Bar>
                 )}
               </div>

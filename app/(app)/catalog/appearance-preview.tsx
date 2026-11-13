@@ -14,7 +14,7 @@ import { ClothDrape, CLOTH_DROP_MM, DrapePleats, ItemSymbol, RugPattern, SeatCha
 import { ItemSurface, edgeFootprint } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { CATEGORY_BY_ID, anchorOf } from "@/lib/catalog/categories";
-import { seatsAround, CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
+import { seatsAround, seatTransform, CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
 import { chairStyleOf, curtainStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { pergolaPostOf } from "@/lib/venues/pergola";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
@@ -27,8 +27,21 @@ import { isLedStrip } from "@/lib/venues/led";
 import { isCeilingClothCategory } from "@/lib/studio/ceiling-cloth";
 import { CeilingDrapeSymbol, SailSymbol } from "@/components/ceiling-cloth";
 import { Dim, type DimTone } from "@/components/venue-dims";
+import { useMounted } from "@/lib/use-mounted";
 
 export function AppearancePreview({ product, className }: { product: Product; className?: string }) {
+  // Drawn once the page is the browser's (lib/use-mounted.ts) — on the server and in the hydrating
+  // render the frame alone. Every picture here is trigonometry (bottles round a bar, candles round a
+  // stem, pleats, a ring of chairs), and Node's Math and the browser's can differ in the last digit —
+  // depending even on which tier of the JIT ran it — so a server-drawn preview did not hydrate: a
+  // warning on every load of a page with the catalog rail on it. Opened later (the drawer, the shape
+  // editor), it is drawn at once: the hook answers "mounted" outside hydration.
+  const mounted = useMounted();
+  if (!mounted) return <svg className={"text-ink-soft " + (className ?? "")} role="img" aria-label="תצוגה מקדימה של המראה על התוכנית" />;
+  return <PreviewDrawn product={product} className={className} />;
+}
+
+function PreviewDrawn({ product, className }: { product: Product; className?: string }) {
   const cat = CATEGORY_BY_ID[product.category];
   // The colour the plan draws it in when nothing else says: its first shade.
   const swatch = product.variants.find((v) => !v.archived && v.swatch)?.swatch;
@@ -122,7 +135,7 @@ function planArt(product: Product): { art: ReactNode; w: number; h: number; reac
   const art = (
     <>
       {ring.map((seat, i) => (
-        <g key={i} transform={`translate(${seat.x} ${seat.y}) rotate(${seat.facingDeg})`}>
+        <g key={i} transform={seatTransform(seat)}>
           <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} />
         </g>
       ))}
