@@ -122,6 +122,35 @@ export function outlineStrokeD(outline: Point[], edgeCurves?: (EdgeCurve | null)
   return d;
 }
 
+/** A front shape's FACE on the plan (backdrops S2, lib/studio/footprint.ts BuiltOutline.face): the
+ *  named edges of an outline as one open path, consecutive edges one run — drawn over the outline so
+ *  which way a backdrop faces reads off the drawing. Null when none are named. */
+export function faceStrokeD(outline: Point[], edgeCurves: (EdgeCurve | null)[] | undefined, face: readonly number[] | undefined): string | null {
+  const n = outline.length;
+  if (!face?.length || n < 2) return null;
+  const on = new Set(face.filter((i) => i >= 0 && i < n));
+  if (!on.size) return null;
+  // Start where a run begins (an edge on the face whose predecessor is not), so a run that wraps
+  // past the last edge is still one.
+  const start = [...on].find((i) => !on.has((i - 1 + n) % n)) ?? [...on][0];
+  let d = "";
+  let pen = -1;
+  for (let k = 0; k < n; k++) {
+    const i = (start + k) % n;
+    if (!on.has(i)) continue;
+    const a = outline[i];
+    const b = outline[(i + 1) % n];
+    if (pen !== i) d += `${d ? " " : ""}M ${a.x} ${a.y}`;
+    const curve = edgeCurves?.[i];
+    if (curve) {
+      const { c1, c2 } = absoluteControlPoints(a, b, curve);
+      d += ` C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${b.x} ${b.y}`;
+    } else d += ` L ${b.x} ${b.y}`;
+    pen = (i + 1) % n;
+  }
+  return d || null;
+}
+
 // Open (non-closed) SVG path for a single edge — used to give each wall its own clickable/
 // draggable element in the interactive editor, instead of one combined closed path.
 export function edgePathD(a: Point, b: Point, curve?: EdgeCurve | null): string {
@@ -825,6 +854,13 @@ if (isMain(import.meta.url)) {
     assert(Math.round(diag.widthMm) === Math.round(diag.depthMm), "at 45° the box is square");
     assert(diag.widthMm > 4000, "…and larger than the deck, which is the generous way to be wrong");
   }
+
+  // A front shape's FACE marked on the plan (backdrops S2): only the named edges, joined where they
+  // meet, and nothing when none are named.
+  const band = [{ x: -1500, y: -10 }, { x: 1500, y: -10 }, { x: 1500, y: 10 }, { x: -1500, y: 10 }];
+  assert(faceStrokeD(band, undefined, [2]) === "M 1500 10 L -1500 10", `the band's face is its +y side (${faceStrokeD(band, undefined, [2])})`);
+  assert(faceStrokeD(band, undefined, []) === null && faceStrokeD(band, undefined, undefined) === null, "…none named, nothing drawn");
+  assert(faceStrokeD(band, undefined, [1, 2]) === "M 1500 -10 L 1500 10 L -1500 10", "consecutive face edges are one run");
 
   console.log("geometry self-check passed");
 }

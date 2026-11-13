@@ -16,7 +16,7 @@
 // let settle — useSettledScene), drawn by an orthographic camera at exactly the canvas's settled
 // view (components/scene/ortho-underlay.tsx through PlanCanvas's `underlay`, carried through a pan
 // by CSS). Kept mounted once shown — hidden, never unmounted, so its shaders compile once.
-import { useCallback, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type ComponentProps, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { RevolvePoint, ShapePart } from "@/lib/catalog/types";
 import type { ElementStyle } from "@/lib/element-style";
 import { ELEVATION_MIN_H_MM, boxGripSpots, boxRect, elevationBoxes, elevationFrame, orthoFrame, profileHandles, profilePoint, rectEdit, runsClearOf, type ElevationBox, type ElevationRect, type ElevationView } from "@/lib/element/elevation";
@@ -25,10 +25,15 @@ import { startPointerGesture } from "@/lib/studio/gesture";
 import { PlanCanvas, type CanvasFocus, type CanvasLayerContext, type HostSnapOptions, type MarqueeMode } from "@/components/plan-canvas";
 import { StructureFeatures } from "@/components/venue-plan";
 import { Dim } from "@/components/venue-dims";
+import { OutlinePath } from "@/components/footprint-shape";
 import { emptyStructure, type StructureFeature } from "@/lib/venues/structure";
 import { hitsInBox, mergeSelection } from "@/lib/venues/selection";
 import { LazyOrthoUnderlay } from "@/components/scene/lazy";
 import { useSettledScene, type SceneSubject } from "./scene-pane";
+
+/** While a tile is armed no shape takes the pointer — the click places, whatever it lands on (a wave
+ *  laid in front of the wall it covers; /halls' rule). */
+const NEVER = () => false;
 
 /** How far the floor line runs either way — past any item and any view of one. */
 const FLOOR_REACH_MM = 50_000;
@@ -59,9 +64,16 @@ export interface ElevationCanvasProps {
   envelopeIds?: readonly string[];
   /** The editor's canvas frame (padding, the least extent, the grid) — the plan's own. */
   frame: { padMm: number; minExtentMm: { w: number; h: number }; gridMm: number };
+  /** A tile is armed on the rail (backdrops S2): a click on the canvas places it there. */
+  onPlace?: (at: { x: number; y: number }) => void;
+  /** A tile dropped from the rail. */
+  onDropAt?: (e: ReactDragEvent, at: { x: number; y: number }) => void;
+  /** A front shape being drawn (or redrawn) on this canvas: the outline editor's props, laid over the
+   *  canvas's own as the plan canvas takes them; the shapes rest meanwhile. */
+  drawing?: Partial<ComponentProps<typeof PlanCanvas>>;
 }
 
-export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selected, onSelect, onEdit, onCommit, history, room, roomShown, hidden = false, envelopeIds, frame }: ElevationCanvasProps) {
+export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selected, onSelect, onEdit, onCommit, history, room, roomShown, hidden = false, envelopeIds, frame, onPlace, onDropAt, drawing }: ElevationCanvasProps) {
   const boxes = useMemo(() => elevationBoxes(shapes, itemHeightMm, view), [shapes, itemHeightMm, view]);
   const rects = useMemo(() => boxes.map(boxRect), [boxes]);
   const showRoom = !!room && roomShown;
@@ -83,10 +95,11 @@ export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selecte
       style: {
         ...itemStyle,
         ...s.style,
-        dash: b.outlineOnly ? "dashed" : "solid",
-        // Over the room the boxes are its outlines; a body of revolution is drawn as its silhouette
-        // over a clear box.
-        ...(showRoom || b.revolve ? { fillOpacity: 0 } : {}),
+        dash: b.outlineOnly || b.front?.asItself ? "dashed" : "solid",
+        // Over the room the boxes are its outlines; a body of revolution is drawn as its silhouette,
+        // and a front shape facing the viewer as its FACE, over a clear box.
+        ...(showRoom || b.revolve || b.front?.asItself ? { fillOpacity: 0 } : {}),
+        ...(b.front?.asItself ? { strokeOpacity: 0.35 } : {}),
       },
     };
   });
@@ -146,6 +159,9 @@ export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selecte
   return (
     <PlanCanvas
       lengthUnit="cm"
+      drawAngleStepDeg={45}
+      drawAngleFromFirstSide
+      drawAngleFree
       mode="edit"
       outline={[]}
       edgeCurves={[]}
@@ -156,13 +172,15 @@ export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selecte
       onMoveVertex={() => {}}
       onMoveWallHandle={() => {}}
       onMarquee={marquee}
-      cursor="default"
-      onCanvasClick={() => onSelect([])}
+      cursor={onPlace ? "crosshair" : "default"}
+      onCanvasClick={(p) => (onPlace ? onPlace(p) : onSelect([]))}
+      onDropAt={onDropAt}
       onCommit={onCommit}
       canUndo={history.canUndo}
       canRedo={history.canRedo}
       onUndo={history.onUndo}
       onRedo={history.onRedo}
+      {...drawing}
       framePoints={framePoints}
       focus={focus}
       defaultDims
@@ -171,7 +189,7 @@ export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selecte
       gridMm={frame.gridMm}
       underlay={room ? underlay : undefined}
       backdrop={<line className="pointer-events-none" x1={-FLOOR_REACH_MM} x2={FLOOR_REACH_MM} y1={0} y2={0} stroke="var(--color-ink-soft)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
-      topmost={(ctx) => (one?.revolve ? <ProfileHandles box={one} ctx={ctx} onEdit={onEdit} onCommit={onCommit} envelope={!!envelopeIds?.includes(one.id)} /> : null)}
+      topmost={(ctx) => (one?.revolve && !drawing ? <ProfileHandles box={one} ctx={ctx} onEdit={onEdit} onCommit={onCommit} envelope={!!envelopeIds?.includes(one.id)} /> : null)}
       overlay={(ctx) => (
         <>
           {/* Bodies of revolution, as their silhouettes, under their (clear) boxes. */}
@@ -191,11 +209,34 @@ export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selecte
                 vectorEffect="non-scaling-stroke"
               />
             ))}
+          {/* Front shapes facing the viewer, as their FACES (backdrops S2) — under their clear boxes,
+              which take the pointer, the moves and the resizes. A shape being redrawn is left out. */}
+          {boxes
+            .filter((b) => b.front?.asItself)
+            .map((b) => (
+              <g key={`face-${b.id}`} className="pointer-events-none">
+                {b.front!.pieces.map((o, i) => (
+                  <OutlinePath
+                    key={i}
+                    outline={o.outline}
+                    edgeCurves={o.edgeCurves}
+                    open={o.open}
+                    fill={showRoom ? "none" : (shapes[b.index].style?.fill ?? itemStyle?.fill ?? "var(--color-inset)")}
+                    stroke={selected.includes(b.id) ? "var(--color-accent)" : "var(--color-ink-soft)"}
+                    strokeWidth={selected.includes(b.id) ? 2 : 1.25}
+                    strokeLinejoin="round"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                ))}
+              </g>
+            ))}
+          {!drawing && (
           <StructureFeatures
             structure={{ ...emptyStructure(), features }}
             mm={ctx.mm}
             clientToMm={ctx.clientToMm}
             minSizeMm={ELEVATION_MIN_H_MM}
+            interactive={onPlace ? NEVER : undefined}
             selectedIds={[...selected]}
             onSelect={(id, additive) => onSelect(additive ? (selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]) : selected.includes(id) ? [...selected] : [id])}
             onMove={(id, p) => {
@@ -243,6 +284,7 @@ export function ElevationCanvas({ view, shapes, itemHeightMm, itemStyle, selecte
               onCommit();
             }}
           />
+          )}
           {/* THE FIGURES — the selected box's height beside it, and how far its bottom stands off the
               floor beyond that. The plan's own dimension line. */}
           {ctx.dims && one && <BoxFigures box={one} mm={ctx.mm} />}

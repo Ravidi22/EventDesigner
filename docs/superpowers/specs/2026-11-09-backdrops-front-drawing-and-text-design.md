@@ -195,4 +195,5 @@ Installations — fabric funnels with fringes (1), fluted trumpets with wavy rim
 
 ## 13. Status
 - **S1 (the elevation views) - built** on `feat/2026-11-09-backdrops`: the shape editor's תוכנית · חזית · צד switch, shapes as boxes over the item's real 3D in an orthographic room, dragged up/down, and a round shape's גוף shaped by handles on the full-size חזית. Seen headlessly on a bar draft and a chandelier draft on 2026-11-10.
-- **S2-S6 - not started.**
+- **S2 (front shapes) - built** 2026-11-11 (plan docs/superpowers/plans/2026-11-10-backdrops-s2-front-shapes.md): the front plane, its plan band with the face marked, the panel in the room (flat and bent), drawing in חזית (tiles, free draw, גל, עלה), arches/gates/chuppahs replaced by a front drawing — and the קירות רקע category, pulled forward from S3 because Ravid asked to create one. Seen headlessly.
+- **S3-S6 - not started.** S3 keeps the six faces, the swag, the frame preset, the stage edge wearing a row, pins/repeats on front shapes, and the seed rows.

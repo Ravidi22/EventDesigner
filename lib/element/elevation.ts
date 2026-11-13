@@ -17,8 +17,10 @@
 // writes one, so a part that follows the item's height keeps following it.
 //
 // Pure. Run: npm run check:elevation-view
-import type { RevolvePoint, ShapePart } from "@/lib/catalog/types";
-import { placedPartOutline, sampledBounds } from "@/lib/studio/footprint";
+import { FRONT_THICK_MM, usesDiameter, type MapShape, type RevolvePoint, type ShapePart } from "@/lib/catalog/types";
+import { frontFace, placedPartOutline, sampledBounds, type BuiltOutline } from "@/lib/studio/footprint";
+import { rescaleOutline } from "@/lib/catalog/shape-list";
+import type { EdgeCurve, Point } from "@/lib/studio/hall";
 import { REVOLVE_PRESETS, cleanRevolve } from "./revolve";
 import { isMain } from "../self-check";
 
@@ -44,6 +46,10 @@ export interface ElevationBox {
   /** Which of the shape's plan numbers an across resize writes; null = none (turned off the square,
    *  hand-drawn, a band or a slice — their across extent is no one number). */
   across: "width" | "depth" | "diameter" | null;
+  /** A FRONT shape (ShapePart.plane): its face's outlines in the canvas world about the box's middle,
+   *  and whether this view shows it AS ITSELF — the front view, facing the viewer (not turned on the
+   *  plan) and flat — when it is drawn and edited as its face; otherwise it is its box. */
+  front?: { pieces: BuiltOutline[]; asItself: boolean };
 }
 
 /** A rect on the elevation canvas — centre and size in its world (across, −z). */
@@ -66,11 +72,41 @@ function acrossOf(s: ShapePart, view: ElevationView): ElevationBox["across"] {
   return view === "front" ? (square ? "width" : "depth") : square ? "depth" : "width";
 }
 
+/** A plan turn of (nearly) nothing — a front shape facing the viewer. */
+const facing = (deg: number | undefined) => {
+  const r = (((deg || 0) % 360) + 360) % 360;
+  return r < 1 || r > 359;
+};
+
 /** Every shape as its box in the view, in list order. */
 export function elevationBoxes(shapes: readonly ShapePart[], itemHeightMm: number, view: ElevationView): ElevationBox[] {
   return shapes.map((s, index) => {
     const b = sampledBounds([placedPartOutline(s)]);
     const base = index === 0;
+    if (s.plane === "front") {
+      // Its band is its across extent either way; its rise is its face's, from its own z (a base 0).
+      const face = frontFace(s.shape, s);
+      const asItself = view === "front" && facing(s.rotation) && Math.abs(s.bendDeg || 0) < 0.5;
+      const turned = !facing(s.faceTurnDeg);
+      const a0 = view === "front" ? b.minX : b.minY;
+      const a1 = view === "front" ? b.maxX : b.maxY;
+      const z = base ? 0 : (s.zMm ?? 0);
+      const h = Math.max(ELEVATION_MIN_H_MM, face.h);
+      const cx = (a0 + a1) / 2;
+      const cy = -(z + h / 2);
+      const pieces = face.pieces.map((o) => ({ ...o, outline: o.outline.map((v) => ({ x: v.x + cx, y: v.y + cy })) }));
+      return {
+        id: s.id,
+        index,
+        a0,
+        a1,
+        z,
+        h,
+        outlineOnly: s.body === "none",
+        across: asItself && !turned ? (usesDiameter(s.shape) ? "diameter" : "width") : null,
+        front: { pieces, asItself },
+      };
+    }
     const round = (s.shape === "circle" || s.shape === "ellipse") && !s.hollow && !!s.revolve && s.revolve.length >= 2;
     return {
       id: s.id,
@@ -94,6 +130,7 @@ export function boxRect(b: ElevationBox): ElevationRect {
 /** A rect moved or resized on the canvas, read back: the shape's patch, and — the base's top edge
  *  having moved — the item's new height. Only what changed is written. */
 export function rectEdit(shape: ShapePart, b: ElevationBox, rect: ElevationRect, view: ElevationView): { patch: Partial<ShapePart>; itemHeightMm?: number } {
+  if (shape.plane === "front") return frontRectEdit(shape, b, rect, view);
   const patch: Partial<ShapePart> = {};
   const dW = rect.widthMm - (b.a1 - b.a0);
   const resizedAcross = Math.abs(dW) > 0.5;
@@ -129,6 +166,129 @@ export function rectEdit(shape: ShapePart, b: ElevationBox, rect: ElevationRect,
     if (Math.abs(h - b.h) > 0.5) patch.heightMm = h;
   }
   return { patch };
+}
+
+/** rectEdit for a FRONT shape: what moves is its place and its z, what is resized is its FACE — its
+ *  width (a hand-drawn one rescaled, a round one whole) and its height on the face; a front base's
+ *  top edge is its face's height and the item's. A face turned within itself takes moves only. */
+function frontRectEdit(shape: ShapePart, b: ElevationBox, rect: ElevationRect, view: ElevationView): { patch: Partial<ShapePart>; itemHeightMm?: number } {
+  const patch: Partial<ShapePart> = {};
+  const curW = b.a1 - b.a0;
+  const resizedAcross = Math.abs(rect.widthMm - curW) > 0.5 && !!b.across;
+  if (Math.abs(rect.widthMm - curW) <= 0.5 || b.across) {
+    const dA = rect.x - (b.a0 + b.a1) / 2;
+    if (Math.abs(dA) > 0.5) {
+      if (view === "front") patch.x = Math.round(shape.x + dA);
+      else patch.y = Math.round(shape.y + dA);
+    }
+  }
+  const top = -(rect.y - rect.depthMm / 2);
+  const bottom = -(rect.y + rect.depthMm / 2);
+  const moved = Math.abs(rect.depthMm - b.h) <= 0.5;
+  const resizable = facing(shape.faceTurnDeg);
+  let wantH: number | undefined;
+  let itemHeightMm: number | undefined;
+  if (b.index === 0) {
+    if (!moved && Math.abs(top - b.h) > 0.5 && resizable) {
+      wantH = Math.max(ELEVATION_MIN_H_MM, Math.round(top));
+      itemHeightMm = wantH;
+    }
+  } else {
+    const z = Math.max(0, Math.round(bottom));
+    if (Math.abs(z - b.z) > 0.5) patch.zMm = z;
+    if (!moved && resizable) {
+      const h = Math.max(ELEVATION_MIN_H_MM, Math.round(top - z));
+      if (Math.abs(h - b.h) > 0.5) wantH = h;
+    }
+  }
+  const wantW = resizedAcross ? Math.max(ELEVATION_MIN_H_MM, Math.round(rect.widthMm)) : undefined;
+  if (wantW !== undefined || wantH !== undefined) Object.assign(patch, faceResize(shape, curW, b.h, wantW, wantH));
+  return { patch, ...(itemHeightMm !== undefined ? { itemHeightMm } : {}) };
+}
+
+/** A front shape's face resized to a new width and/or height ON THE FACE, measured off what it is now
+ *  — the item's height field and the face's top edge write a front base's face through this. */
+export function faceSized(shape: ShapePart, to: { widthMm?: number; heightMm?: number }): Partial<ShapePart> {
+  const face = frontFace(shape.shape, { ...shape, faceTurnDeg: undefined });
+  return faceResize(shape, face.w, face.h, to.widthMm, to.heightMm);
+}
+
+/** The plan's resize grips on a front shape's BAND: a flat one's width is its face's width (unless
+ *  the face is turned within itself, when the band's width is no one number of the face) and its
+ *  depth its thickness; a BENT band's box is no number of the shape at all, so its grips change
+ *  nothing — its width, bend and thickness are typed in its panel. */
+export function bandResize(s: ShapePart, before: { widthMm: number; depthMm: number }, next: { x: number; y: number; widthMm: number; depthMm: number }): Partial<ShapePart> {
+  if (Math.abs(s.bendDeg || 0) >= 0.5) return {};
+  const patch: Partial<ShapePart> = { x: Math.round(next.x), y: Math.round(next.y) };
+  if (facing(s.faceTurnDeg) && Math.round(next.widthMm) !== Math.round(before.widthMm)) Object.assign(patch, faceSized(s, { widthMm: Math.max(100, Math.round(next.widthMm)) }));
+  if (Math.round(next.depthMm) !== Math.round(before.depthMm)) patch.thicknessMm = Math.max(5, Math.round(next.depthMm));
+  return patch;
+}
+
+/** A front shape's face made `w` across and `h` high (either absent = as it is): a hand-drawn face
+ *  rescaled, a round one resized whole by whichever changed, any other its width and its height on
+ *  the face (`depthMm`). */
+function faceResize(shape: ShapePart, curW: number, curH: number, w?: number, h?: number): Partial<ShapePart> {
+  if (shape.shape === "custom" && shape.outline && shape.outline.length >= 3) {
+    return rescaleOutline(shape.outline, shape.edgeCurves, w ?? curW, h ?? curH);
+  }
+  if (usesDiameter(shape.shape)) {
+    const d0 = shape.diameterMm ?? 0;
+    const k = w !== undefined ? w / Math.max(1, curW) : (h ?? curH) / Math.max(1, curH);
+    return { diameterMm: Math.max(ELEVATION_MIN_H_MM, Math.round(d0 * k)) };
+  }
+  return { ...(w !== undefined ? { widthMm: w } : {}), ...(h !== undefined ? { depthMm: h } : {}) };
+}
+
+/** The face a tile places in the חזית view — 1.2 × 1.2 m, an arch (a half or a quarter circle, an
+ *  arc) ⌀ 2.4 m, a line 2 m long. */
+function tileFace(shape: MapShape): Partial<ShapePart> {
+  if (shape === "line") return { widthMm: 2000, depthMm: 20 };
+  if (usesDiameter(shape)) return { diameterMm: shape === "circle" ? 1200 : 2400 };
+  return { widthMm: 1200, depthMm: 1200 };
+}
+
+/** A tile clicked on the חזית canvas: a front shape of its kind, its face centred on the click but
+ *  never under the floor, standing at plan depth `planY` (from the side, the click's across is its
+ *  plan depth and it stands at plan x 0). */
+export function placedFront(shape: MapShape, at: { x: number; y: number }, view: ElevationView, planY: number): ShapePart {
+  const face = tileFace(shape);
+  const h = frontFace(shape, face).h;
+  return {
+    id: crypto.randomUUID(),
+    plane: "front",
+    shape,
+    ...face,
+    thicknessMm: FRONT_THICK_MM,
+    x: view === "front" ? Math.round(at.x) : 0,
+    y: view === "front" ? Math.round(planY) : Math.round(at.x),
+    rotation: 0,
+    zMm: Math.max(0, Math.round(-at.y - h / 2)),
+  };
+}
+
+/** An outline drawn on the חזית canvas (its world: across, −z) as a front shape: drawn by hand, kept
+ *  as drawn, its box's middle its place across, its bottom its z (never under the floor), standing at
+ *  plan depth `planY`. Null under three points or a box under 10 mm. */
+export function drawnFront(outline: readonly Point[], edgeCurves: readonly (EdgeCurve | null)[] | undefined, planY: number, open?: boolean): ShapePart | null {
+  if (outline.length < 3) return null;
+  const b = sampledBounds([{ outline: [...outline], ...(edgeCurves ? { edgeCurves: [...edgeCurves] } : {}) }]);
+  if (b.w < 10 || b.h < 10) return null;
+  return {
+    id: crypto.randomUUID(),
+    plane: "front",
+    shape: "custom",
+    outline: outline.map((v) => ({ x: Math.round(v.x), y: Math.round(v.y) })),
+    ...(edgeCurves ? { edgeCurves: [...edgeCurves] } : {}),
+    ...(open ? { open: true } : {}),
+    widthMm: Math.round(b.w),
+    depthMm: Math.round(b.h),
+    thicknessMm: FRONT_THICK_MM,
+    x: Math.round(b.cx),
+    y: Math.round(planY),
+    rotation: 0,
+    zMm: Math.max(0, Math.round(-b.maxY)),
+  };
 }
 
 /** An arrow key in the view: across (→ positive) and up, as the shape's NEW values. The base is
@@ -343,5 +503,51 @@ if (isMain(import.meta.url)) {
   assert(fr.maxY >= FLOOR_CLEARANCE_MM && fr.maxY >= (fr.maxY - fr.minY) * 0.2, "room is kept under the floor line for the bar");
   const wide = elevationFrame(fb, { w: 2000, h: 2000 });
   assert(wide.minX === -1500 && wide.maxX === 1500 && wide.maxY === 600, "a wide item is framed to its own extent");
+
+  // THE FRONT PLANE (backdrops S2): a front panel behind the counter, 40 cm off the floor.
+  const nearly = (a: number, b: number, tol = 0.6) => Math.abs(a - b) <= tol;
+  const panel: ShapePart = { id: "f", plane: "front", shape: "rect", widthMm: 3000, depthMm: 2000, thicknessMm: 30, x: 0, y: -300, rotation: 0, zMm: 400 };
+  const fp = elevationBoxes([bar[0], panel], 1100, "front")[1];
+  assert(fp.z === 400 && fp.h === 2000 && nearly(fp.a0, -1500) && nearly(fp.a1, 1500) && fp.front?.asItself === true && fp.across === "width", "a front panel in front: its face, 40 cm up");
+  const sp = elevationBoxes([bar[0], panel], 1100, "side")[1];
+  assert(nearly(sp.a1 - sp.a0, 30) && sp.front?.asItself === false && sp.across === null, "…from the side, its thickness");
+  const fpr = boxRect(fp);
+  const tallerFace = rectEdit(panel, fp, { ...fpr, y: fpr.y - 250, depthMm: 2500 }, "front");
+  assert(tallerFace.patch.depthMm === 2500 && tallerFace.patch.heightMm === undefined && tallerFace.patch.zMm === undefined, "its top pulled up makes its FACE taller");
+  const raisedFace = rectEdit(panel, fp, { ...fpr, y: fpr.y - 300 }, "front");
+  assert(raisedFace.patch.zMm === 700 && raisedFace.patch.depthMm === undefined, "…moved up, it is raised");
+  const widerFace = rectEdit(panel, fp, { ...fpr, widthMm: 3600 }, "front");
+  assert(widerFace.patch.widthMm === 3600, "…its width is its face's");
+  const frontBase: ShapePart = { ...panel, zMm: undefined };
+  const fbb = elevationBoxes([frontBase], 2000, "front")[0];
+  const fbr = boxRect(fbb);
+  const ftb = rectEdit(frontBase, fbb, { ...fbr, y: fbr.y - 300, depthMm: 2600 }, "front");
+  assert(ftb.itemHeightMm === 2600 && ftb.patch.depthMm === 2600, "a front base's top edge is its face height and the item's height");
+  assert(elevationBoxes([bar[0], { ...panel, rotation: 30 }], 1100, "front")[1].front?.asItself === false, "turned on the plan, it is a box in front");
+  assert(elevationBoxes([bar[0], { ...panel, bendDeg: 60 }], 1100, "front")[1].across === null, "…and so is a bent one");
+  const arch: ShapePart = { id: "a", plane: "front", shape: "half-circle", diameterMm: 2400, x: 0, y: 0, rotation: 0, zMm: 0 };
+  const ab = elevationBoxes([bar[0], arch], 1100, "front")[1];
+  const archTaller = rectEdit(arch, ab, { ...boxRect(ab), y: boxRect(ab).y - 150, depthMm: 1500 }, "front");
+  assert(archTaller.patch.diameterMm === 3000, "a round face is resized whole: an arch 1.5 m tall is ⌀3 m");
+  const petalPart: ShapePart = { id: "p", plane: "front", shape: "custom", outline: [{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 500, y: -2000 }], widthMm: 1000, depthMm: 2000, x: 0, y: 0, rotation: 0, zMm: 0 };
+  const pbx = elevationBoxes([bar[0], petalPart], 1100, "front")[1];
+  const petalWide = rectEdit(petalPart, pbx, { ...boxRect(pbx), widthMm: 1500 }, "front");
+  assert(petalWide.patch.widthMm === 1500 && petalWide.patch.outline?.length === 3 && petalWide.patch.depthMm === 2000, "a hand-drawn face is rescaled across");
+  const tile = placedFront("half-circle", { x: 500, y: -100 }, "front", -200);
+  assert(tile.plane === "front" && tile.diameterMm === 2400 && tile.y === -200 && (tile.zMm ?? 0) === 0 && tile.x === 500, "a half-circle clicked low stands on the floor");
+  const high = placedFront("rect", { x: 0, y: -2000 }, "front", 0);
+  assert(high.zMm === 1400 && high.widthMm === 1200 && high.depthMm === 1200, "a panel clicked high is centred there");
+  const drawn = drawnFront([{ x: 0, y: -100 }, { x: 1000, y: -100 }, { x: 500, y: -1800 }], undefined, 0)!;
+  assert(drawn.plane === "front" && drawn.shape === "custom" && drawn.zMm === 100 && drawn.depthMm === 1700 && drawn.x === 500 && drawn.y === 0, "a free drawing in front is a front custom shape at its height");
+  assert(drawnFront([{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 0, y: 5 }], undefined, 0) === null, "…none under 10 mm");
+  // The plan's grips on a front band (review I3): a flat one's width is its face's, its depth its
+  // thickness; a bent or face-turned one's box is no one number — its grips change nothing.
+  const flatBand = bandResize(panel, { widthMm: 3000, depthMm: 30 }, { x: 0, y: -300, widthMm: 3600, depthMm: 30 });
+  assert(flatBand.widthMm === 3600 && flatBand.thicknessMm === undefined, "a flat band's width grip is its face's width");
+  assert(bandResize(panel, { widthMm: 3000, depthMm: 30 }, { x: 0, y: -290, widthMm: 3000, depthMm: 50 }).thicknessMm === 50, "…its depth grip its thickness");
+  assert(Object.keys(bandResize({ ...panel, bendDeg: 90 }, { widthMm: 1910, depthMm: 560 }, { x: 200, y: -200, widthMm: 2400, depthMm: 760 })).length === 0, "a bent band's grips change nothing");
+  assert(bandResize({ ...panel, faceTurnDeg: 30 }, { widthMm: 3400, depthMm: 30 }, { x: 0, y: -300, widthMm: 3800, depthMm: 30 }).widthMm === undefined, "…nor a face-turned band's width grip");
+  assert(faceSized(panel, { heightMm: 2600 }).depthMm === 2600 && faceSized(arch, { heightMm: 1500 }).diameterMm === 3000, "faceSized: a face's height by its own measure");
+  assert(faceSized(petalPart, { heightMm: 1000 }).outline?.length === 3 && faceSized(petalPart, { heightMm: 1000 }).depthMm === 1000, "…a hand-drawn one rescaled");
   console.log("elevation self-check passed");
 }

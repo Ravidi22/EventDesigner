@@ -2,7 +2,7 @@
 // and the drawer preview. Absence of `appearance` is derived from `dimensions` so every
 // legacy/seed product keeps rendering (name-in-a-shape = today's behavior).
 import type { ArcSpec, HollowSpec, MapShape, Pin, PinMode, Product, ResizeSpec, RingSpec, ShapePart } from "@/lib/catalog/types";
-import { ARC_SWEEP, MAP_SHAPES, RESIZE_DEFAULT_STEP_MM, RING_GAP, canHollow, usesDiameter } from "@/lib/catalog/types";
+import { ARC_SWEEP, FRONT_BEND_MAX_DEG, FRONT_THICK_MM, MAP_SHAPES, RESIZE_DEFAULT_STEP_MM, RING_GAP, canHollow, usesDiameter } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import type { Point } from "@/lib/design-document/types";
 import type { EdgeCurve } from "@/lib/studio/hall";
@@ -15,7 +15,7 @@ export type Footprint =
   | { kind: "rect"; widthMm: number; depthMm: number }
   | { kind: "circle"; diameterMm: number }
   | { kind: "ellipse"; widthMm: number; depthMm: number }
-  | { kind: "custom"; outline: Point[]; edgeCurves?: (EdgeCurve | null)[]; open?: boolean }
+  | { kind: "custom"; outline: Point[]; edgeCurves?: (EdgeCurve | null)[]; open?: boolean; face?: number[] }
   /** An item drawn as several shapes at once — its base shape and the parts added beside it
    *  (MapAppearance.parts). Each part is an outline already turned and placed in the item's frame,
    *  and the lot is centred on the bounding box of all of them, like every other footprint. */
@@ -65,6 +65,9 @@ export interface BuiltOutline {
   of?: number;
   /** Drawn as lines only: no fill, and no side from the last point back to the first (ShapePart.open). */
   open?: boolean;
+  /** The edges on the item's FRONT side of a front shape's plan band (ShapePart.plane — frontBand):
+   *  the plan marks them, so which way a backdrop faces reads off the drawing. */
+  face?: number[];
 }
 
 /** Which of the item's shapes the `i`-th piece of a composite draws (BuiltOutline.of). */
@@ -512,6 +515,12 @@ export interface ShapeDims {
   hollow?: HollowSpec;
   /** Lines only (ShapePart.open) — a hand-drawn outline's. */
   open?: boolean;
+  /** Drawn on the FRONT plane (ShapePart.plane): the measurements above are its FACE (`depthMm` its
+   *  height on the face), and the shape on the plan is its band — frontBand. */
+  plane?: "front";
+  thicknessMm?: number;
+  bendDeg?: number;
+  faceTurnDeg?: number;
 }
 
 /** A shape plus the measurements it is drawn from, resolved to the one footprint every surface in
@@ -526,6 +535,7 @@ export interface ShapeDims {
  *  outline — a keyhole, or a band open on a side — as a custom footprint, or several (a band opened
  *  in two places) as a multi, whose pieces all say they are the one shape (BuiltOutline.of). */
 export function shapeFootprint(shape: MapShape, d: ShapeDims): Footprint {
+  if (d.plane === "front") return piecesFootprint([frontBandOf(shape, d)]);
   return hollowOf(shape, d.hollow, d.open) ? piecesFootprint(shapePieces(shape, d)) : solidFootprint(shape, d);
 }
 
@@ -539,6 +549,7 @@ const hollowOf = (shape: MapShape, h: HollowSpec | undefined, open?: boolean): H
  *  primitives that is footprintOutlines' four corners or four quarter arcs; for a hand-drawn one, the
  *  drawing. What the shape editor shows and drags, hollow or not. */
 export function hollowOuter(shape: MapShape, d: ShapeDims): BuiltOutline {
+  if (d.plane === "front") return frontBandOf(shape, d);
   return footprintOutlines(solidFootprint(shape, d))[0];
 }
 
@@ -548,6 +559,7 @@ export function hollowOuter(shape: MapShape, d: ShapeDims): BuiltOutline {
  *  (the shape editor centres it there), and a band opened on a side may no longer reach every side
  *  of that box. */
 export function shapePieces(shape: MapShape, d: ShapeDims): BuiltOutline[] {
+  if (d.plane === "front") return [frontBandOf(shape, d)];
   const outer = hollowOuter(shape, d);
   const h = hollowOf(shape, d.hollow, d.open);
   return h ? buildHollow(outer, h) : [outer];
@@ -558,7 +570,7 @@ export function shapePieces(shape: MapShape, d: ShapeDims): BuiltOutline[] {
 export function piecesFootprint(pieces: readonly BuiltOutline[]): Footprint {
   if (pieces.length === 1) {
     const p = pieces[0];
-    return { kind: "custom", outline: p.outline, ...(p.edgeCurves ? { edgeCurves: p.edgeCurves } : {}), ...(p.open ? { open: true } : {}) };
+    return { kind: "custom", outline: p.outline, ...(p.edgeCurves ? { edgeCurves: p.edgeCurves } : {}), ...(p.open ? { open: true } : {}), ...(p.face ? { face: p.face } : {}) };
   }
   const b = sampledBounds(pieces);
   return {
@@ -567,9 +579,112 @@ export function piecesFootprint(pieces: readonly BuiltOutline[]): Footprint {
       outline: p.outline.map((v) => ({ x: v.x - b.cx, y: v.y - b.cy })),
       ...(p.edgeCurves ? { edgeCurves: p.edgeCurves } : {}),
       ...(p.open ? { open: true } : {}),
+      ...(p.face ? { face: p.face } : {}),
       of: 0,
     })),
   };
+}
+
+// ── The front plane (docs/superpowers/specs/2026-11-09-backdrops-front-drawing-and-text-design.md
+// §2, lib/element/front.ts) ─────────────────────────────────────────────────────────────────────
+//
+// A shape drawn on the FRONT plane is its FACE — any shape this engine builds, read with x across
+// and its second axis UP (y = −up, as the elevation canvas draws it) — pushed back by its thickness.
+// On the plan it is its BAND: the face's across extent by the thickness, bent along an arc when it is
+// bent. Every plan reader asks shapeFootprint / shapePieces / hollowOuter, and those answer with the
+// band, so the sketch, the print, the clearance and the element model see it without knowing what a
+// front shape is.
+
+/** A front shape's FACE in its own frame — x across, y = −up — centred on its box: the solid outline
+ *  and, drawn hollow, its band's pieces (a hollow rectangle is a frame), turned within the face by
+ *  `faceTurnDeg`. `w`/`h` are the box of what is drawn. */
+export function frontFace(shape: MapShape, d: ShapeDims): { pieces: BuiltOutline[]; w: number; h: number } {
+  const plain: ShapeDims = { ...d, plane: undefined, thicknessMm: undefined, bendDeg: undefined, faceTurnDeg: undefined };
+  const turn = d.faceTurnDeg || 0;
+  const raw = shapePieces(shape, plain);
+  const turned = turn % 360 ? raw.map((o) => placeInPart(o, { x: 0, y: 0, rotation: turn })) : raw;
+  const b = sampledBounds(turned);
+  const pieces = b.cx || b.cy ? turned.map((o) => placeInPart(o, { x: -b.cx, y: -b.cy, rotation: 0 })) : turned;
+  return { pieces, w: b.w, h: b.h };
+}
+
+/** A front shape's PLAN BAND, centred on its own box: `widthMm` across (the arc length of its
+ *  mid-line when bent) by `thicknessMm`, bent `bendDeg` (+ = concave toward the front, +y: the ends
+ *  come forward; − = convex). `face` names the edges on the front side. A curve is cut into arcs of
+ *  at most 90°, each one cubic (bow); the caps are straight. */
+export function frontBand(widthMm: number, thicknessMm: number, bendDeg: number): BuiltOutline {
+  const raw = frontBandRaw(widthMm, thicknessMm, bendDeg);
+  const b = sampledBounds([raw]);
+  return b.cx || b.cy ? { ...raw, outline: raw.outline.map((v) => ({ x: v.x - b.cx, y: v.y - b.cy })) } : raw;
+}
+
+/** Where frontBand's box centre stands in the frame its arcs are struck in (the centre of
+ *  curvature; the panel's own middle for a flat one) — what the 3D subtracts so a bent panel stands
+ *  exactly on its plan band (lib/element/front.ts panelPoint). */
+export function frontBandOffset(widthMm: number, thicknessMm: number, bendDeg: number): Point {
+  const b = sampledBounds([frontBandRaw(widthMm, thicknessMm, bendDeg)]);
+  return { x: b.cx, y: b.cy };
+}
+
+/** frontBand before it is centred on its box: a flat band about its middle, a bent one about its
+ *  centre of curvature (mirrored front to back for a − bend). */
+function frontBandRaw(widthMm: number, thicknessMm: number, bendDeg: number): BuiltOutline {
+  const W = Math.max(1, widthMm);
+  const t = Math.max(1, thicknessMm);
+  const sweep = Math.min(FRONT_BEND_MAX_DEG, Math.abs(bendDeg || 0));
+  if (sweep < 0.5) {
+    return {
+      outline: [{ x: -W / 2, y: -t / 2 }, { x: W / 2, y: -t / 2 }, { x: W / 2, y: t / 2 }, { x: -W / 2, y: t / 2 }],
+      face: [2],
+    };
+  }
+  // The mid-line's radius; the centre it is struck from stands in FRONT (+y) for a + bend, so the
+  // middle is the back-most point and the ends come forward. Screen angles (0 = +x, 90 = +y).
+  const R = W / (sweep * RAD);
+  const outerR = R + t / 2;
+  const innerR = Math.max(1, R - t / 2);
+  const from = -90 - sweep / 2;
+  const to = -90 + sweep / 2;
+  const n = Math.max(1, Math.ceil(sweep / 90));
+  const at = (r: number, deg: number): Point => ({ x: r * Math.cos(deg * RAD), y: r * Math.sin(deg * RAD) });
+  const outline: Point[] = [];
+  const edgeCurves: (EdgeCurve | null)[] = [];
+  // The back (outer) arc, left to right…
+  for (let k = 0; k < n; k++) {
+    const a0 = from + ((to - from) * k) / n;
+    const a1 = from + ((to - from) * (k + 1)) / n;
+    outline.push(at(outerR, a0));
+    edgeCurves.push(bow(outerR, a0, a1));
+  }
+  // …the right cap…
+  outline.push(at(outerR, to));
+  edgeCurves.push(null);
+  // …the face (inner) arc, right to left…
+  const face: number[] = [];
+  for (let k = 0; k < n; k++) {
+    const a0 = to - ((to - from) * k) / n;
+    const a1 = to - ((to - from) * (k + 1)) / n;
+    face.push(outline.length);
+    outline.push(at(innerR, a0));
+    edgeCurves.push(bow(innerR, a0, a1));
+  }
+  // …and the left cap back to the start.
+  outline.push(at(innerR, from));
+  edgeCurves.push(null);
+  // A − bend is the + bend mirrored front to back: the face is then the OUTER arc.
+  const flip = bendDeg < 0;
+  const fy = (p: Point): Point => (flip ? { x: p.x, y: -p.y } : p);
+  return {
+    outline: outline.map(fy),
+    edgeCurves: edgeCurves.map((c) => (c ? { c1: fy(c.c1), c2: fy(c.c2) } : null)),
+    face: flip ? Array.from({ length: n }, (_, k) => k) : face,
+  };
+}
+
+/** A front shape's band from its measurements: the face's across extent, its thickness (absent =
+ *  FRONT_THICK_MM), its bend. */
+function frontBandOf(shape: MapShape, d: ShapeDims): BuiltOutline {
+  return frontBand(frontFace(shape, d).w, d.thicknessMm ?? FRONT_THICK_MM, d.bendDeg ?? 0);
 }
 
 // ── Hollow ─────────────────────────────────────────────────────────────────────────────────────
@@ -1336,11 +1451,26 @@ function solidFootprint(shape: MapShape, d: ShapeDims): Footprint {
 }
 
 export function resolveFootprint(product: Product): Footprint {
+  const { shape, dims } = rowShapeDims(product);
+  return composeShapes(shape, dims, product.appearance?.parts ?? []);
+}
+
+/** A row's BASE shape as the engine reads it: its shape and the measurements it is drawn from. A
+ *  front base (MapAppearance.plane) stores its face height as the row's height and its thickness as
+ *  the row's depth (it stands on the floor, and the depth of a panel IS its thickness), so they are
+ *  read back into the face's `depthMm` and the band's `thicknessMm` here — the one place they are. */
+export function rowShapeDims(product: Product): { shape: MapShape; dims: ShapeDims } {
   const d = product.dimensions;
   const a = product.appearance;
   const shape = a?.shape ?? (d.diameterMm ? "circle" : "rect");
-  const dims: ShapeDims = { ...d, outline: a?.outline, edgeCurves: a?.edgeCurves, open: a?.open, arc: a?.arc, ring: a?.ring, hollow: a?.hollow };
-  return composeShapes(shape, dims, a?.parts ?? []);
+  const drawn = { outline: a?.outline, edgeCurves: a?.edgeCurves, open: a?.open, arc: a?.arc, ring: a?.ring, hollow: a?.hollow };
+  if (a?.plane === "front") {
+    return {
+      shape,
+      dims: { widthMm: d.widthMm, depthMm: d.heightMm, diameterMm: d.diameterMm, ...drawn, plane: "front", thicknessMm: d.depthMm, bendDeg: a.bendDeg, faceTurnDeg: a.faceTurnDeg },
+    };
+  }
+  return { shape, dims: { ...d, ...drawn } };
 }
 
 /** A base shape and the shapes added beside it, at the catalog's own size: one shape resolved as a
@@ -1366,7 +1496,7 @@ export function footprintOutlines(f: Footprint): BuiltOutline[] {
       return f.parts;
     case "custom": {
       const b = customShapeBounds(f.outline, f.edgeCurves);
-      return [{ outline: f.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy })), edgeCurves: f.edgeCurves, ...(f.open ? { open: true } : {}) }];
+      return [{ outline: f.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy })), edgeCurves: f.edgeCurves, ...(f.open ? { open: true } : {}), ...(f.face ? { face: f.face } : {}) }];
     }
     case "rect": {
       const hw = f.widthMm / 2;
@@ -1426,7 +1556,7 @@ export function sampledBounds(pieces: readonly BuiltOutline[]) {
 }
 
 /** An outline in a part's own frame turned about its centre and moved to the part's offset. */
-function placeInPart(o: BuiltOutline, part: ShapePart): BuiltOutline {
+function placeInPart(o: BuiltOutline, part: Pick<ShapePart, "x" | "y" | "rotation">): BuiltOutline {
   const t = ((part.rotation || 0) * Math.PI) / 180;
   const cos = Math.cos(t);
   const sin = Math.sin(t);
@@ -1438,6 +1568,7 @@ function placeInPart(o: BuiltOutline, part: ShapePart): BuiltOutline {
     }),
     ...(o.edgeCurves ? { edgeCurves: o.edgeCurves.map((c) => (c ? { c1: turn(c.c1), c2: turn(c.c2) } : null)) } : {}),
     ...(o.open ? { open: true } : {}),
+    ...(o.face ? { face: o.face } : {}),
   };
 }
 
@@ -1467,7 +1598,7 @@ export function composeFootprint(base: Footprint, parts: readonly ShapePart[]): 
  *  ItemSurface reads a part's own texture. A shape drawn as several (a hollow one opened in two
  *  places) breaks that count, so then every piece says which shape it is (BuiltOutline.of). */
 export function composePieces(basePieces: readonly BuiltOutline[], parts: readonly ShapePart[], baseOuter: BuiltOutline = basePieces[0]): Footprint {
-  return recentred([basePieces, ...parts.map((p) => (p.repeat ? repeatCopies(p, baseOuter) : placedPartOutlines(p)))]);
+  return recentred([basePieces, ...parts.map((p) => (p.repeat && p.plane !== "front" ? repeatCopies(p, baseOuter) : placedPartOutlines(p)))]);
 }
 
 /** Groups of pieces — the base's, then each part's — as one multi re-centred on the lot, every piece
@@ -1494,7 +1625,8 @@ function recentred(groups: readonly (readonly BuiltOutline[])[]): Footprint {
 /** Whether any shape of the item carries a pin or a repeat — then a stretched item is sized by them
  *  (sizedShapes) rather than scaled whole. */
 export function hasBindings(parts: readonly ShapePart[] | undefined): boolean {
-  return !!parts?.some((p) => p.pin || p.repeat);
+  // A front shape takes no pin or repeat yet (S3 brings them): it is laid as itself.
+  return !!parts?.some((p) => p.plane !== "front" && (p.pin || p.repeat));
 }
 
 /** An outline walked as a polygon, its curves sampled. */
@@ -1570,7 +1702,7 @@ function placedAt(pieces: readonly BuiltOutline[], at: Point, deg: number): Buil
  *  centred on its box, as hollowOuter gives it; the copies come back in that frame. */
 export function repeatCopies(part: ShapePart, outer: BuiltOutline): BuiltOutline[] {
   const r = part.repeat;
-  if (!r) return placedPartOutlines(part);
+  if (!r || part.plane === "front") return placedPartOutlines(part);
   const pts = flatPolygon(outer);
   if (pts.length < 3) return [];
   const w = windingOf(pts);
@@ -1669,7 +1801,7 @@ export function repeatCopies(part: ShapePart, outer: BuiltOutline): BuiltOutline
  *  derived shape re-derived from the new numbers, a hand-drawn one stretched (its band cut again
  *  inside the stretched outline). Both centred on the base's box. */
 function sizedBase(shape: MapShape, dims: ShapeDims, w: number, h: number): { outer: BuiltOutline; pieces: BuiltOutline[] } {
-  if (shape !== "custom") {
+  if (shape !== "custom" && dims.plane !== "front") {
     const d2: ShapeDims = usesDiameter(shape)
       ? { diameterMm: shape === "quarter-circle" ? w * 2 : w, arc: dims.arc, hollow: dims.hollow }
       : { widthMm: w, depthMm: h, arc: dims.arc, ring: dims.ring, hollow: dims.hollow };
@@ -1679,7 +1811,7 @@ function sizedBase(shape: MapShape, dims: ShapeDims, w: number, h: number): { ou
   const ob = sampledBounds([outer0]);
   const stretched = ob.w && ob.h ? footprintOutlines(scaleFootprint(piecesFootprint([outer0]), w / ob.w, h / ob.h))[0] : outer0;
   const outer: BuiltOutline = { ...stretched, ...(dims.open ? { open: true } : {}) };
-  const hollow = hollowOf(shape, dims.hollow, dims.open);
+  const hollow = dims.plane === "front" ? undefined : hollowOf(shape, dims.hollow, dims.open);
   return { outer, pieces: hollow ? buildHollow(outer, hollow) : [outer] };
 }
 
@@ -1712,7 +1844,7 @@ function pinAxis(mode: PinMode | undefined, v: number, lo: number, hi: number, o
  *                     by its pin against the base's new box (absent = scaled with it), and every
  *                     repeated shape laid again on the new base. */
 export function sizedShapes(shape: MapShape, dims: ShapeDims, parts: readonly ShapePart[], size: { widthMm: number; depthMm: number }): Footprint {
-  if (!parts.length && shape !== "custom") {
+  if (!parts.length && shape !== "custom" && dims.plane !== "front") {
     if (usesDiameter(shape)) {
       // The box's width IS the circle's diameter for everything cut from one except the quarter,
       // whose box is one radius across (see ROUND_FIELD).
@@ -1723,7 +1855,7 @@ export function sizedShapes(shape: MapShape, dims: ShapeDims, parts: readonly Sh
   }
   // A hand-drawn outline drawn hollow: the OUTLINE is stretched and the band cut inside it again, so
   // the band stays the depth of its modules, as it does on a derived shape.
-  const hollow = !parts.length ? hollowOf(shape, dims.hollow, dims.open) : undefined;
+  const hollow = !parts.length && dims.plane !== "front" ? hollowOf(shape, dims.hollow, dims.open) : undefined;
   if (hollow) {
     const outer = hollowOuter(shape, { outline: dims.outline, edgeCurves: dims.edgeCurves });
     const ob = sampledBounds([outer]);
@@ -1745,11 +1877,13 @@ export function sizedShapes(shape: MapShape, dims: ShapeDims, parts: readonly Sh
   const base = sizedBase(shape, dims, ob.w * sx, ob.h * sy);
   const nb = sampledBounds([base.outer]);
   const groups = parts.map((p) => {
-    if (p.repeat) return repeatCopies(p, base.outer);
+    const front = p.plane === "front";
+    if (p.repeat && !front) return repeatCopies(p, base.outer);
     const pieces = placedPartOutlines(p);
     const pb = sampledBounds(pieces);
-    const px = (x: number) => pinAxis(p.pin?.x, x, pb.minX, pb.maxX, ob.w, nb.w);
-    const py = (y: number) => pinAxis(p.pin?.y, y, pb.minY, pb.maxY, ob.h, nb.h);
+    const pin = front ? undefined : p.pin;
+    const px = (x: number) => pinAxis(pin?.x, x, pb.minX, pb.maxX, ob.w, nb.w);
+    const py = (y: number) => pinAxis(pin?.y, y, pb.minY, pb.maxY, ob.h, nb.h);
     // A bezier's offsets follow the axis' scale (a translation leaves them; a stretch pulls them).
     const kx = px(1) - px(0);
     const ky = py(1) - py(0);
@@ -1816,6 +1950,11 @@ const shapeOfProduct = (product: Product): MapShape =>
  *  on this side of the catalog goes through here, so a category default is honoured by the handles,
  *  the size panel and the drawing alike. */
 export function resizeSpecOf(product: Product): ResizeSpec | undefined {
+  // A row drawn on the FRONT plane is not stretched on the sketch yet (backdrops S2): the room builds
+  // its panels at their catalog size, and the pins that would say how a backdrop stretches — a frame
+  // keeping its pipe, petals spreading — are S3's. Its size is the catalog's until then.
+  const a = product.appearance;
+  if (a?.plane === "front" || a?.parts?.some((p) => p.plane === "front")) return undefined;
   return product.resize ?? CATEGORY_BY_ID[product.category]?.defaultResize;
 }
 
@@ -1872,7 +2011,7 @@ export function scaleFootprint(f: Footprint, sx: number, sy: number): Footprint 
         ? { kind: "circle", diameterMm: f.diameterMm * sx }
         : { kind: "ellipse", widthMm: f.diameterMm * sx, depthMm: f.diameterMm * sy };
     case "custom":
-      return { kind: "custom", outline: f.outline.map(pt), ...(f.edgeCurves ? { edgeCurves: curves(f.edgeCurves) } : {}), ...(f.open ? { open: true } : {}) };
+      return { kind: "custom", outline: f.outline.map(pt), ...(f.edgeCurves ? { edgeCurves: curves(f.edgeCurves) } : {}), ...(f.open ? { open: true } : {}), ...(f.face ? { face: f.face } : {}) };
     case "multi":
       return { kind: "multi", parts: f.parts.map((p) => ({ ...p, outline: p.outline.map(pt), ...(p.edgeCurves ? { edgeCurves: curves(p.edgeCurves) } : {}) })) };
   }
@@ -1882,10 +2021,8 @@ export function scaleFootprint(f: Footprint, sx: number, sy: number): Footprint 
  *  the same shape at the size it was stretched to (see the note above). */
 export function sizedFootprint(product: Product, sizeMm?: { widthMm: number; depthMm: number }): Footprint {
   if (!sizeMm || !resizeSpecOf(product)) return resolveFootprint(product);
-  const a = product.appearance;
-  const d = product.dimensions;
-  const dims: ShapeDims = { ...d, outline: a?.outline, edgeCurves: a?.edgeCurves, open: a?.open, arc: a?.arc, ring: a?.ring, hollow: a?.hollow };
-  return sizedShapes(shapeOfProduct(product), dims, a?.parts ?? [], sizeMm);
+  const { shape, dims } = rowShapeDims(product);
+  return sizedShapes(shape, dims, product.appearance?.parts ?? [], sizeMm);
 }
 
 // ponytail: self-check. Run: node --experimental-strip-types lib/studio/footprint.ts

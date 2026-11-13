@@ -45,6 +45,7 @@ import { Monitor, Zap } from "lucide-react";
 import type { PriceUnit } from "./types";
 import { Sailboat, Waves } from "lucide-react";
 import { Grid3x3 } from "lucide-react";
+import { GalleryVerticalEnd } from "lucide-react";
 
 export interface CategoryField {
   key: string;
@@ -75,6 +76,7 @@ export type CategoryGroupId =
   | "grp-table-design"
   | "grp-ceiling-design"
   | "grp-flowers"
+  | "grp-scenery"
   | "grp-accessories"
   | "grp-composites";
 
@@ -94,6 +96,9 @@ export const CATEGORY_GROUPS: CategoryGroup[] = [
   // publishes on the marketplace, and what an arrangement's spec rows are picked from. Every
   // category in it is `supplierOnly`, so a STUDIO never sees this department (shownGroups).
   { id: "grp-flowers", label: "פרחים וירק" },
+  // SCENERY (Backdrops S2): what stands behind the scene and is seen from the front — a backdrop
+  // wall of panels, an arch, a wave. Drawn on the FRONT plane (the shape editor's חזית), not from above.
+  { id: "grp-scenery", label: "תפאורה" },
   { id: "grp-accessories", label: "מוצרים נלווים" },
   // Items MADE OF other items (lib/catalog/composition.ts) — a dressed head table, a lounge corner.
   // A department of their own: they are found by what they are for, not by any one of their parts.
@@ -184,6 +189,11 @@ export interface CategoryDef {
    *  like `defaultStock`, stored on the row and editable. Absent = per unit. A sail is sold by the
    *  square metre of its polygon, a ceiling drape by the metre of its runs (spec 2026-11-07 §6.3/§6.4). */
   defaultPriceUnit?: PriceUnit;
+  /** A NEW row of this category starts as a FRONT panel (Backdrops S2): its first shape is drawn on
+   *  the front plane — a face width × height, a thickness — rather than a footprint seen from above
+   *  (the drawer's `blankProduct` seeds `appearance.plane = "front"` and a FRONT_THICK_MM depth). A
+   *  seed like `defaultHeightMm`: the row is free to be redrawn afterwards. Absent = a plan shape. */
+  front?: true;
 }
 
 /** Whether click-to-place lets go after one placement. Everything else stays armed until Escape,
@@ -307,6 +317,12 @@ export const CATEGORIES: CategoryDef[] = [
   // An LED wall (§7.2): a free floor item like a stage backdrop — a 4 × 0.1 × 2.5 panel standing on a
   // stage or the floor, its FRONT the +y face that lights. Counted per unit.
   { id: "led-screens", label: "מסכי לד", group: "grp-accessories", defaultLayer: "floor", icon: Monitor, dims: "box", fields: [], builtIn: true },
+  // A BACKDROP (קיר רקע — Backdrops S2): a wall of panels, an arch, a wave standing behind a
+  // chuppah, a stage or a photo corner, drawn from the FRONT (`front`: the first shape is a face 2.4m
+  // high and FRONT_THICK_MM thick) and priced per unit. Not the stage's backdrop EDGE (stage-backdrops,
+  // a built-in counted by the metre off the stage): this one is a row a studio makes as many of as it
+  // stocks, placed and dressed like any floor piece.
+  { id: "backdrops", label: "קירות רקע", group: "grp-scenery", defaultLayer: "floor", icon: GalleryVerticalEnd, dims: "box", fields: [], defaultHeightMm: 2400, front: true },
   { id: "arches", label: "קשתות", group: "grp-accessories", defaultLayer: "floor", icon: Rainbow, dims: "box", fields: [] },
   // A gate — two columns joined overhead by a lintel (a square entrance) or an arch (a round one),
   // set where the guests come in or at the head of the aisle. Not an arch: an arch is a dressed
@@ -392,6 +408,7 @@ export const DESIGN_PASS_GROUPS: CategoryGroupId[] = [
   "grp-ceiling-design",
   "grp-chuppahs",
   "grp-flowers",
+  "grp-scenery",
   "grp-accessories",
   "grp-composites",
 ];

@@ -28,6 +28,7 @@ import { isCeilingClothCategory } from "@/lib/studio/ceiling-cloth";
 import { CeilingDrapeSymbol, SailSymbol } from "@/components/ceiling-cloth";
 import { Dim, type DimTone } from "@/components/venue-dims";
 import { useMounted } from "@/lib/use-mounted";
+import { FrontPreview } from "./front-preview";
 
 export function AppearancePreview({ product, className }: { product: Product; className?: string }) {
   // Drawn once the page is the browser's (lib/use-mounted.ts) — on the server and in the hydrating
@@ -77,6 +78,10 @@ function PreviewDrawn({ product, className }: { product: Product; className?: st
       </svg>
     );
   }
+
+  // A row drawn from the FRONT (its first shape a face — a backdrop, Backdrops S2) is shown as it
+  // stands: from above it is a band a few centimetres thick, which says nothing.
+  if (product.appearance?.plane === "front") return <FrontPreview product={product} className={className} />;
 
   const { art, w, h, reach } = planArt(product);
   const pad = Math.max(w, h) * 0.12 + 80 + reach;
@@ -196,6 +201,8 @@ const GRID_STEPS = [100, 200, 500, 1000, 2000, 5000];
 export function PlanPreview({ product, ghost, tone = "ink", className }: { product: Product; ghost?: "round" | "box"; tone?: DimTone; className?: string }) {
   const gridId = useId();
   if (ownFrame(product)) return <AppearancePreview product={product} className={className} />;
+  // A front row stands on its grid with its width and HEIGHT figured — the numbers its fields type.
+  if (product.appearance?.plane === "front") return <FrontPreview product={product} className={className} figured={{ tone, ghost: !!ghost }} />;
   const drawn = ghost ? null : planArt(product);
   const w = drawn?.w ?? (ghost === "round" ? 1200 : 1600);
   const h = drawn?.h ?? (ghost === "round" ? 1200 : 1000);

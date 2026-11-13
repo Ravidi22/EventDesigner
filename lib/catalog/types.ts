@@ -115,6 +115,11 @@ export const SHAPE_LABEL: Record<MapShape, string> = {
 export const usesDiameter = (shape: MapShape): boolean =>
   shape === "circle" || shape === "arc" || shape === "half-circle" || shape === "quarter-circle";
 
+/** A front shape with no thickness of its own (ShapePart.thicknessMm) — a panel. */
+export const FRONT_THICK_MM = 20;
+/** The most a front shape may be bent (ShapePart.bendDeg) — short of closing on itself. */
+export const FRONT_BEND_MAX_DEG = 300;
+
 /** How the one round number is asked: its label, and how many mm of diameter one mm typed is. */
 export const ROUND_FIELD: Partial<Record<MapShape, { label: string; factor: number }>> = {
   circle: { label: "קוטר", factor: 1 },
@@ -317,6 +322,24 @@ export interface ChuppahSpec {
 export interface ShapePart {
   id: string;
   shape: MapShape;
+  /** DRAWN ON THE FRONT PLANE (docs/superpowers/specs/2026-11-09-backdrops-front-drawing-and-text-
+   *  design.md §2, lib/element/front.ts): a panel, an arch, a wave, a petal — drawn in the חזית view
+   *  and pushed BACK by its thickness, where a plan shape is drawn on the floor and pushed up. Its
+   *  `shape`, `widthMm`, `depthMm`, `diameterMm`, `outline`, `edgeCurves`, `arc`, `ring`, `hollow`
+   *  describe its FACE — x across, `depthMm` its height on the face, an outline in the face frame
+   *  (y = −up, as the elevation canvas draws it). `x`/`y` are the centre of its PLAN BAND (the face's
+   *  across extent by its thickness — lib/studio/footprint.ts frontBand), `zMm` its bottom, `rotation`
+   *  its turn on the plan; its `heightMm` is not read (its rise is its face's). Absent = a plan shape,
+   *  exactly as before. */
+  plane?: "front";
+  /** A front shape's thickness — how far it is pushed back. Absent = FRONT_THICK_MM. */
+  thicknessMm?: number;
+  /** A front shape bent along an arc on the plan: the degrees its width sweeps, + = concave toward
+   *  the item's front (embracing what stands before it), − = convex. The width stays the arc length
+   *  of the band's mid-line. Absent/0 = flat. */
+  bendDeg?: number;
+  /** A front shape's turn WITHIN its face (a petal leaning), degrees, clockwise as drawn. */
+  faceTurnDeg?: number;
   /** A hand-drawn outline, iff `shape === "custom"` — drawn in the appearance editor like the base
    *  shape's own, and recentred on its box (its centre is `x`/`y`, like any part's). */
   outline?: Point[];
@@ -376,6 +399,14 @@ export interface ShapePart {
 // resolveFootprint), since every renderer already draws that correctly.
 export interface MapAppearance {
   shape: MapShape;
+  /** The BASE shape drawn on the front plane (ShapePart.plane). Then `shape`/`outline`… are its face,
+   *  `dimensions.widthMm` (or `diameterMm`) its across size, `dimensions.heightMm` its face height —
+   *  it stands on the floor, so the item's height IS its face's — and `dimensions.depthMm` its
+   *  THICKNESS (lib/studio/footprint.ts rowShapeDims reads it so). */
+  plane?: "front";
+  /** The front base's bend and face turn — see ShapePart.bendDeg / faceTurnDeg. */
+  bendDeg?: number;
+  faceTurnDeg?: number;
   outline?: Point[]; // required iff shape === "custom"
   edgeCurves?: (EdgeCurve | null)[]; // per-edge bezier bow, aligned to outline; null/absent = straight edge (see hall.ts)
   /** Lines only — see ShapePart.open. */

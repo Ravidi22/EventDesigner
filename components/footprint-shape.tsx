@@ -8,7 +8,7 @@ import { blockFrame, blockLabelPoint, blockOutline, blockSpine, type BlockFrame 
 import { autoLayout, dressingLayout, fromTableFrame, toTableFrame, type ChipBox, type TableBox } from "@/lib/design-document/dressing";
 import { footprintPolygons } from "@/lib/studio/proximity";
 import { pointInPolygon } from "@/lib/venues/faces";
-import { outlinePathD, outlineStrokeD } from "@/lib/studio/geometry";
+import { faceStrokeD, outlinePathD, outlineStrokeD } from "@/lib/studio/geometry";
 import { labelAnchor } from "@/lib/studio/label-anchor";
 import { footprintSpine } from "@/lib/studio/spine";
 import { isRunner } from "@/lib/catalog/categories";
@@ -40,7 +40,22 @@ type ShapeProps = Omit<React.SVGProps<SVGPathElement>, "d" | "ref">;
  *  0. Anything with no seam is the one path it always was. An `open` one (lines only) is its lines
  *  and no closing side, over its area left clear — clear, not absent, so it is still taken by the
  *  pointer wherever its closed shape would be. */
-export function OutlinePath({ outline, edgeCurves, open, ...props }: { outline: Point[]; edgeCurves?: Parameters<typeof outlinePathD>[1]; open?: boolean } & ShapeProps) {
+export function OutlinePath({ outline, edgeCurves, open, face, ...props }: { outline: Point[]; edgeCurves?: Parameters<typeof outlinePathD>[1]; open?: boolean; face?: number[] } & ShapeProps) {
+  const body = <OutlineBody outline={outline} edgeCurves={edgeCurves} open={open} {...props} />;
+  // A front shape's FACE (backdrops S2, BuiltOutline.face): its front edges drawn again, heavier, in
+  // the outline's own ink — which way a backdrop faces reads off every plan that draws it.
+  const faceD = face?.length && props.stroke !== "none" ? faceStrokeD(outline, edgeCurves ?? undefined, face) : null;
+  if (!faceD) return body;
+  const w = Number(props.strokeWidth ?? 1) || 1;
+  return (
+    <>
+      {body}
+      <path d={faceD} fill="none" stroke={props.stroke} strokeWidth={w * 2.5} strokeLinecap="round" vectorEffect={props.vectorEffect} opacity={props.opacity} className={props.className} />
+    </>
+  );
+}
+
+function OutlineBody({ outline, edgeCurves, open, ...props }: { outline: Point[]; edgeCurves?: Parameters<typeof outlinePathD>[1]; open?: boolean } & ShapeProps) {
   const d = outlinePathD(outline, edgeCurves);
   if (open) {
     return (
@@ -99,7 +114,7 @@ export function FootprintShape({
     return (
       <g>
         {footprint.parts.map((p, i) => (
-          <OutlinePath key={i} outline={p.outline} edgeCurves={p.edgeCurves} open={p.open} {...props} />
+          <OutlinePath key={i} outline={p.outline} edgeCurves={p.edgeCurves} open={p.open} face={p.face} {...props} />
         ))}
       </g>
     );
@@ -109,7 +124,7 @@ export function FootprintShape({
     // so a shape with one side bowed out stands on its visual centre, not its corners'.
     const b = customShapeBounds(footprint.outline, footprint.edgeCurves);
     const centered = footprint.outline.map((p) => ({ x: p.x - b.cx, y: p.y - b.cy }));
-    return <OutlinePath outline={centered} edgeCurves={footprint.edgeCurves} open={footprint.open} {...props} />;
+    return <OutlinePath outline={centered} edgeCurves={footprint.edgeCurves} open={footprint.open} face={footprint.face} {...props} />;
   }
   const { widthMm: w, depthMm: d } = footprint;
   // Square corners. A rect footprint is a MEASUREMENT — a stage is a run of 100×200 modules, a

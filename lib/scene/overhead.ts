@@ -712,6 +712,8 @@ function partSpan(p: Part): [number, number] {
     }
     case "torus":
       return [p.at.z - p.tube, p.at.z + p.tube];
+    case "panel":
+      return [p.at.z, p.at.z + p.faceHeightMm];
     case "lathe": {
       let lo = 0;
       let hi = 0;
@@ -765,6 +767,8 @@ function flipPart(p: Part, H: number): Part {
     case "ribbon":
     case "drape":
       return { ...p, at: vec3(p.at.x, p.at.y, H - (p.at.z + p.h)) };
+    case "panel":
+      return { ...p, at: vec3(p.at.x, p.at.y, H - (p.at.z + p.faceHeightMm)) };
     case "sphere":
     case "torus":
     case "blob":
