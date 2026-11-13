@@ -12,7 +12,7 @@
 // Keyboard, on the whole bar: ←/→ move between viewpoints and fly there — in RTL → is the PREVIOUS
 // one and ← the NEXT (the chips run right to left); Space plays or pauses the tour. Focus is
 // roving: one chip is in the tab order (the lit one), the arrows carry focus with the choice.
-import { type KeyboardEvent, type RefObject, type WheelEvent, useEffect, useRef, useSyncExternalStore } from "react";
+import { type KeyboardEvent, type ReactNode, type RefObject, type WheelEvent, useEffect, useRef, useSyncExternalStore } from "react";
 import { Maximize, Minimize, Moon, Pause, Play, Sun, Sunset } from "lucide-react";
 import { MOODS, MOOD_LABEL, type Mood, type Viewpoint } from "@/lib/scene/types";
 
@@ -30,6 +30,10 @@ export interface SceneBarProps {
   onMood: (mood: Mood) => void;
   /** What fullscreen takes over: the viewer's box, bar included. */
   fullscreenTarget: RefObject<HTMLElement | null>;
+  /** The designer's bar (the "Outputs and 3D Drawers" board, 2026-11-11): the same chips and ▶,
+   *  but the moods are the end panel's and its last word is "שמירת נקודת מבט" (`trailing`). */
+  author?: boolean;
+  trailing?: ReactNode;
 }
 
 const MOOD_ICON = { day: Sun, evening: Sunset, night: Moon } as const;
@@ -50,7 +54,7 @@ const onFullscreenChange = (cb: () => void) => {
 };
 const noSubscribe = () => () => {};
 
-export function SceneBar({ viewpoints, activeId, onActive, playing, onPlay, canPlay = true, mood, onMood, fullscreenTarget }: SceneBarProps) {
+export function SceneBar({ viewpoints, activeId, onActive, playing, onPlay, canPlay = true, mood, onMood, fullscreenTarget, author = false, trailing }: SceneBarProps) {
   const strip = useRef<HTMLDivElement>(null);
   const full = useSyncExternalStore(
     onFullscreenChange,
@@ -168,8 +172,10 @@ export function SceneBar({ viewpoints, activeId, onActive, playing, onPlay, canP
         >
           {playing ? <Pause className="h-4 w-4" strokeWidth={1.75} /> : <Play className="h-4 w-4" strokeWidth={1.75} />}
         </button>
-        <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-border" />
-        <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="תאורה">
+        {!author && (
+          <>
+            <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-border" />
+            <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="תאורה">
           {MOODS.map((m) => {
             const Icon = MOOD_ICON[m];
             const active = m === mood;
@@ -193,6 +199,14 @@ export function SceneBar({ viewpoints, activeId, onActive, playing, onPlay, canP
             >
               {full ? <Minimize className="h-4 w-4" strokeWidth={1.75} /> : <Maximize className="h-4 w-4" strokeWidth={1.75} />}
             </button>
+          </>
+        )}
+          </>
+        )}
+        {trailing && (
+          <>
+            <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-border" />
+            {trailing}
           </>
         )}
       </div>

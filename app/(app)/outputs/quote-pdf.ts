@@ -32,8 +32,11 @@ export async function buildQuotePdf(pages: HTMLElement[], fileName: string, meta
   const [{ toJpeg, getFontEmbedCSS }, { PDFDocument }] = await Promise.all([import("html-to-image"), import("pdf-lib")]);
   const filter = (node: HTMLElement) => !(node instanceof Element && node.hasAttribute(NO_CAPTURE));
   // The fonts are embedded once and handed to every page — each call would otherwise re-read and
-  // re-inline every @font-face in the document.
-  const fontEmbedCSS = pages[0] ? await getFontEmbedCSS(pages[0]) : undefined;
+  // re-inline every @font-face in the document. Read off the pages' common parent, not the first
+  // page: a document's faces differ page to page (a studio direction sets its numbers in Plex Mono,
+  // its cover in another face), and html-to-image embeds only the faces the node it reads uses.
+  const root = pages[0]?.parentElement ?? pages[0];
+  const fontEmbedCSS = root ? await getFontEmbedCSS(root) : undefined;
 
   const pdf = await PDFDocument.create();
   // Readers that honour it show this Hebrew title instead of the file name — the one name that

@@ -20,6 +20,7 @@ export function QuotePhotoPicker({
   related,
   liked,
   all,
+  max = MAX_SECTION_PHOTOS,
   onChange,
 }: {
   /** What the section shows now (the default pick, or the designer's). */
@@ -28,6 +29,8 @@ export function QuotePhotoPicker({
   related: QuotePhoto[];
   liked: QuotePhoto[];
   all: QuotePhoto[];
+  /** How many may be picked; at 1, picking another replaces it (a page's single photo). */
+  max?: number;
   /** undefined = back to the default pick. */
   onChange: (ids: string[] | undefined) => void;
 }) {
@@ -35,7 +38,8 @@ export function QuotePhotoPicker({
   const ids = chosen.map((c) => c.id);
   const toggle = (id: string) => {
     if (ids.includes(id)) onChange(ids.filter((x) => x !== id));
-    else if (ids.length < MAX_SECTION_PHOTOS) onChange([...ids, id]);
+    else if (max === 1) onChange([id]);
+    else if (ids.length < max) onChange([...ids, id]);
   };
   const shown = new Set([...related, ...liked].map((p) => p.id));
   const q = query.trim().toLocaleLowerCase();
@@ -45,7 +49,7 @@ export function QuotePhotoPicker({
     <div className="grid grid-cols-4 gap-1.5">
       {photos.map((p) => {
         const at = ids.indexOf(p.id);
-        const full = at < 0 && ids.length >= MAX_SECTION_PHOTOS;
+        const full = max > 1 && at < 0 && ids.length >= max;
         return (
           <button
             key={p.id}
@@ -75,7 +79,7 @@ export function QuotePhotoPicker({
   return (
     <div className="space-y-3">
       <p className="text-[13px] text-muted">
-        עד {MAX_SECTION_PHOTOS} תמונות, לפי סדר הבחירה.
+        {max === 1 ? "תמונה אחת לעמוד." : `עד ${max} תמונות, לפי סדר הבחירה.`}
         {isDefault && " כרגע מוצגת בחירה אוטומטית מהפריטים שבאזור."}
       </p>
       {related.length > 0 && (

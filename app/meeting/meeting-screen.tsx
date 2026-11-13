@@ -223,8 +223,8 @@ export function MeetingScreen() {
           </CanvasCard>
         )}
         {/* The room the client is about to be quoted for, from the inside (F-9.1): the designer's
-            /scene tab in its meeting frame — the curated camera and the client's bar, the
-            viewpoints a popover away. It edits nothing, so there is nothing for guarded() to keep
+            /scene tab in its meeting frame — it opens in the client view (the curated camera and the
+            client's bar, the panel put away); "תצוגת לקוח" off brings the designer's panel back. It edits nothing, so there is nothing for guarded() to keep
             the designer from leaving with unsaved. Only in a flow that turned it on (DEFAULT_FLOW
             does not list it). */}
         {step.id === "scene" && event && (

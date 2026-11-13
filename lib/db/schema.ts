@@ -58,6 +58,7 @@ import type { VenueStructure } from "@/lib/venues/structure";
 import type { ZoneSource, ZoneCapacity } from "@/lib/venues/zone";
 import type { ElementStyle } from "@/lib/element-style";
 import type { MeetingStepId } from "@/lib/meeting/steps";
+import type { DocStyleSetting } from "@/lib/documents/style";
 import type { CheckpointOffsets } from "@/lib/production/runway";
 import type { QuoteLayout } from "@/lib/quotes/layout";
 import type { NotificationKind, NotificationPayload } from "@/lib/notifications/types";
@@ -365,6 +366,10 @@ export const studioSettings = pgTable("studio_settings", {
   /** Bank, branch, account — printed on a payment request so the client can transfer. Free text:
    *  "בנק הפועלים · סניף 612 · חשבון 123456" is how a designer writes it and nothing queries it. */
   bankDetails: text("bank_details").notNull().default(""),
+  /** How the studio's documents look (DocStyleSetting, lib/documents/style.ts): the direction —
+   *  הזמנה · לוקבוק · סטודיו — and only the settings changed from it. Null = never opened, read as
+   *  the default direction. Rewritten whole by Settings → מיתוג מסמכים, never queried into. */
+  docStyle: jsonb("doc_style").$type<DocStyleSetting>(),
   /** The stages this studio's meeting has, in order (MeetingStepId[]). Ordered and rewritten
    *  whole by the settings screen, never queried into — an array column says exactly that. */
   meetingFlow: text("meeting_flow").array().$type<MeetingStepId[]>().notNull().default([]),

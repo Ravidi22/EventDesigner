@@ -1,15 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Copy, Link2, MessageCircle, Trash2 } from "lucide-react";
+import { Check, Copy, MessageCircle, Trash2 } from "lucide-react";
 import { fetchSceneLinks, mintSceneLink, revokeSceneLink, type SceneLinkRow } from "@/lib/scene/actions";
 import { Button } from "@/components/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 
-// The no-login link to the event in 3D (spec §6.4, F-9.2): the designer mints it here, sends it to
-// the couple (who forward it to family), sees whether it was opened, and takes it back. One live
-// link per event — a new one revokes the last (DECIDE 4), which is also how a link sent to the wrong
+// The no-login link to the event in 3D (spec §6.4, F-9.2): the designer mints it, sends it to the
+// couple (who forward it to family), sees whether it was opened, and takes it back. One live link
+// per event — a new one revokes the last (DECIDE 4), which is also how a link sent to the wrong
 // number is taken back. The token is shown ONCE, in the minute after minting; only its hash is kept.
+//
+// Since the "Outputs and 3D Drawers" board (2026-11-11) the link is read by two places at once: the
+// end panel's "קישור ללקוח" group and the panel's FOOT (its status line and the CTA, kept when the
+// panel is put away) — so the state is a hook the screen holds, and the group is drawn from it.
 
 /** wa.me wants the number in international form, digits only: 050-1234567 → 972501234567. */
 function waNumber(phone: string): string | null {
@@ -20,19 +24,23 @@ function waNumber(phone: string): string | null {
   return digits;
 }
 
-const dateOf = (iso: string) => new Date(iso).toLocaleDateString("he-IL", { day: "numeric", month: "numeric", year: "2-digit" });
+export const dateOf = (iso: string) => new Date(iso).toLocaleDateString("he-IL", { day: "numeric", month: "numeric", year: "2-digit" });
 
-export function SharePanel({ eventId, clientName, phone }: { eventId: string; clientName: string; phone: string }) {
+export function useSceneLink(eventId: string | null) {
   const [links, setLinks] = useState<SceneLinkRow[] | null>(null);
   const [fresh, setFresh] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [revoking, setRevoking] = useState<SceneLinkRow | null>(null);
+  const [linksOf, setLinksOf] = useState(eventId);
+  if (linksOf !== eventId) {
+    setLinksOf(eventId);
+    setLinks(null);
+    setFresh(null);
+  }
 
   useEffect(() => {
+    if (!eventId) return;
     let live = true;
-    setFresh(null);
     fetchSceneLinks(eventId)
       .then((l) => live && setLinks(l))
       .catch(() => live && setError("לא הצלחנו לקרוא את הקישורים"));
@@ -41,9 +49,8 @@ export function SharePanel({ eventId, clientName, phone }: { eventId: string; cl
     };
   }, [eventId]);
 
-  const current = links?.find((l) => l.live) ?? null;
-
   const mint = async () => {
+    if (!eventId) return;
     setBusy(true);
     setError(null);
     try {
@@ -58,7 +65,7 @@ export function SharePanel({ eventId, clientName, phone }: { eventId: string; cl
   };
 
   const revoke = async (row: SceneLinkRow) => {
-    setRevoking(null);
+    if (!eventId) return;
     setBusy(true);
     try {
       setLinks(await revokeSceneLink(eventId, row.id));
@@ -70,6 +77,26 @@ export function SharePanel({ eventId, clientName, phone }: { eventId: string; cl
     }
   };
 
+  const current = links?.find((l) => l.live) ?? null;
+  return { links, current, fresh, busy, error, mint, revoke, ready: links !== null };
+}
+export type SceneLink = ReturnType<typeof useSceneLink>;
+
+/** What the link's group summary and the foot's line say. */
+export function linkStatus(link: SceneLink): string {
+  if (!link.ready) return "…";
+  if (link.fresh) return "קישור חדש מוכן";
+  if (!link.current) return "אין קישור פעיל";
+  const opened = link.current.openedCount ? `נפתח ${link.current.openedCount} פעמים` : "עוד לא נפתח";
+  return `קישור פעיל · ${opened}`;
+}
+
+/** The "קישור ללקוח" group's body. */
+export function ShareLink({ link, clientName, phone }: { link: SceneLink; clientName: string; phone: string }) {
+  const [copied, setCopied] = useState(false);
+  const [revoking, setRevoking] = useState<SceneLinkRow | null>(null);
+  const { fresh, current, busy, error } = link;
+
   const copy = async () => {
     if (!fresh) return;
     try {
@@ -80,21 +107,15 @@ export function SharePanel({ eventId, clientName, phone }: { eventId: string; cl
       // A refused clipboard (an insecure origin): the field is selectable for exactly this.
     }
   };
-
   const to = waNumber(phone);
   const text = fresh ? `היי ${clientName}, האירוע שלכם בתלת-ממד — אפשר לעבור בין הזוויות ולראות את הסיור: ${fresh}` : "";
 
   return (
-    <section className="flex flex-col gap-2 rounded-md border border-border bg-inset p-[11px]">
-      <h3 className="flex items-center gap-1.5 text-sm font-bold text-ink">
-        <Link2 className="h-4 w-4 text-accent" strokeWidth={1.8} />
-        שיתוף עם הלקוח
-      </h3>
-
+    <div className="flex flex-col gap-2.5">
       {fresh ? (
         <div className="flex flex-col gap-2">
           <p className="text-[13px] leading-relaxed text-ink-soft">
-            <span className="font-bold text-ink">הקישור מוכן.</span> תקף 30 יום ומוצג פעם אחת — בלי סיסמה, אפשר להעביר למשפחה.
+            <span className="font-bold text-ink">הקישור מוכן.</span> מוצג פעם אחת — העתיקו או שלחו עכשיו.
           </p>
           <input
             readOnly
@@ -102,7 +123,7 @@ export function SharePanel({ eventId, clientName, phone }: { eventId: string; cl
             value={fresh}
             onFocus={(e) => e.currentTarget.select()}
             aria-label="הקישור לתלת-ממד"
-            className="w-full rounded-md border border-border bg-surface px-3 py-2 text-start text-xs text-ink-soft"
+            className="w-full rounded-sm border border-border bg-surface px-3 py-2 text-start text-xs text-ink-soft"
           />
           <div className="flex gap-2">
             <Button size="sm" variant="outline" onClick={() => void copy()} className="flex-1">
@@ -113,7 +134,7 @@ export function SharePanel({ eventId, clientName, phone }: { eventId: string; cl
               href={`https://wa.me/${to ?? ""}?text=${encodeURIComponent(text)}`}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-pill bg-accent px-3 py-1.5 text-[13px] font-bold text-canvas transition-colors hover:bg-accent-hover"
+              className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-pill border-[1.5px] border-accent-line text-[13px] font-bold text-accent transition-colors hover:bg-accent-tint"
             >
               <MessageCircle className="h-4 w-4" strokeWidth={1.8} />
               וואטסאפ
@@ -121,14 +142,15 @@ export function SharePanel({ eventId, clientName, phone }: { eventId: string; cl
           </div>
         </div>
       ) : current ? (
-        <div className="flex items-center justify-between gap-2 text-[13px] text-ink-soft">
-          <span>
-            קישור פעיל עד {dateOf(current.expiresAt)} · {current.openedCount ? `נפתח ${current.openedCount} פעמים` : "עוד לא נפתח"}
+        <div className="flex items-center gap-2 rounded-md border border-inset-border bg-inset px-2.5 py-2">
+          <span className="min-w-0 flex-1 leading-snug">
+            <span className="nums block text-[13px] font-semibold text-ink">פעיל עד {dateOf(current.expiresAt)}</span>
+            <span className="nums block text-xs text-muted">{current.openedCount ? `נפתח ${current.openedCount} פעמים` : "עוד לא נפתח"}</span>
           </span>
           <button
             type="button"
             onClick={() => setRevoking(current)}
-            className="rounded-md p-1 text-alert transition-colors hover:bg-surface"
+            className="rounded-sm p-1 text-alert transition-colors hover:bg-alert-tint"
             title="ביטול הקישור"
             aria-label="ביטול הקישור"
             disabled={busy}
@@ -136,13 +158,13 @@ export function SharePanel({ eventId, clientName, phone }: { eventId: string; cl
             <Trash2 className="h-4 w-4" strokeWidth={1.8} />
           </button>
         </div>
-      ) : (
-        <p className="text-[13px] text-muted">קישור צפייה בלי סיסמה — הלקוח רואה רק את נקודות המבט והסיור שהכנתם, בלי מחירים.</p>
+      ) : null}
+      <p className="text-xs leading-relaxed text-muted">קישור צפייה בלי סיסמה, תקף 30 יום — הלקוח רואה רק את נקודות המבט והסיור שהכנתם, בלי מחירים. קישור חדש מבטל את הקודם.</p>
+      {current && !fresh && (
+        <Button size="sm" variant="outline" className="w-full" onClick={() => void link.mint()} disabled={busy}>
+          קישור חדש (מבטל את הקודם)
+        </Button>
       )}
-
-      <Button size="sm" variant={current && !fresh ? "outline" : "primary"} className="w-full" onClick={() => void mint()} disabled={busy}>
-        {current ? "קישור חדש (מבטל את הקודם)" : "יצירת קישור"}
-      </Button>
       {error && <p className="text-[13px] text-alert">{error}</p>}
 
       <ConfirmDialog
@@ -150,9 +172,12 @@ export function SharePanel({ eventId, clientName, phone }: { eventId: string; cl
         title="לבטל את הקישור?"
         body="מי שקיבל אותו לא יוכל לפתוח אותו יותר. אפשר ליצור קישור חדש בכל רגע."
         confirmLabel="ביטול הקישור"
-        onConfirm={() => revoking && void revoke(revoking)}
+        onConfirm={() => {
+          if (revoking) void link.revoke(revoking);
+          setRevoking(null);
+        }}
         onClose={() => setRevoking(null)}
       />
-    </section>
+    </div>
   );
 }

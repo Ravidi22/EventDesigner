@@ -2,6 +2,7 @@ import { useId, type ReactNode } from "react";
 import { fitScale, scaleBarSteps, type Extent } from "@/lib/outputs/scale";
 import type { PlanSheet } from "@/lib/outputs/sheets";
 import { OVERHEAD_DASH } from "@/components/footprint-shape";
+import { docTheme, type DocTheme } from "@/lib/documents/theme";
 
 // THE DRAFTING FRAME. Every plan sheet — hall, ceiling, stage, chairs — is drawn inside this one
 // component, so the border, the title block, the graphic scale bar and the north point are defined
@@ -131,6 +132,9 @@ export interface SheetFrameProps {
    *  millimetres: a table number authored in room millimetres is 6mm tall at 1:100 and a 1mm smudge
    *  at 1:500, and the crew reads the page, not the room. */
   children: ReactNode | ((denominator: number) => ReactNode);
+  /** The studio's document direction, in ink (`docTheme(…, { ink: true })`): the title block's
+   *  faces and structure and the foot line. Absent = the default direction, stationery. */
+  theme?: DocTheme;
   /** The drawing alone — no border, scale bar, legend or title block. For a plan shown to a CLIENT
    *  (the quote's sketch page), where a drafting frame reads as a construction document. */
   bare?: boolean;
@@ -168,8 +172,10 @@ export function SheetFrame({
   notes,
   summary,
   children,
+  theme,
   bare = false,
 }: SheetFrameProps) {
+  const t = theme ?? docTheme(null, { ink: true });
   const rows = legend ?? [];
   const clipId = `sheet-clip-${useId().replace(/:/g, "")}`;
 
@@ -375,35 +381,99 @@ export function SheetFrame({
 
       {notes && <NotesColumn notes={notes} x={right - NOTES_MM} top={marginMm + 4} bottom={barTop - 3} width={NOTES_MM} />}
 
-      {/* The title block — hairline-ruled cells along the bottom edge. */}
-      <g>
-        <line x1={left} y1={titleTop} x2={right} y2={titleTop} stroke={INK} strokeWidth={LINE_WEIGHTS.feature} vectorEffect="non-scaling-stroke" />
-        {laidCells.map((c, i) => {
-          const value = fitText(c.value, c.w - 3, 3.4, 2.4);
-          const sub = c.sub ? fitText(c.sub, c.w - 3, 2.5, 2) : null;
-          return (
-            <g key={i}>
-              {i > 0 && (
-                <line x1={c.x + c.w} y1={titleTop} x2={c.x + c.w} y2={titleTop + TITLE_CELLS_MM} stroke={HAIRLINE} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
-              )}
-              <text x={c.x + c.w / 2} y={titleTop + 3.6} textAnchor="middle" fontSize={2.2} fontFamily="Assistant, sans-serif" fill={MUTED}>
-                {c.label}
-              </text>
-              <text x={c.x + c.w / 2} y={titleTop + 8.6} textAnchor="middle" fontSize={value.size} fontWeight={600} fontFamily="Assistant, sans-serif" fill={INK} className="nums">
-                {value.text}
-              </text>
-              {sub && (
-                <text x={c.x + c.w / 2} y={titleTop + 12.8} textAnchor="middle" fontSize={sub.size} fontFamily="Assistant, sans-serif" fill={INK_SOFT} className="nums">
-                  {sub.text}
-                </text>
-              )}
-            </g>
-          );
-        })}
-      </g>
+      <TitleBlock t={t} cells={laidCells} top={titleTop} left={left} right={right} />
+
+      {/* The foot line, in the paper margin under the border: when it was printed, and by what. */}
+      {marginMm >= 9 && (
+        <g>
+          <text
+            x={t.dir === "stationery" ? paper.widthMm / 2 + 1 : right}
+            y={paper.heightMm - marginMm + 5}
+            direction="rtl"
+            textAnchor={t.dir === "stationery" ? "end" : "start"}
+            fontSize={2.3}
+            style={{ fontFamily: t.mono }}
+            fill={MUTED}
+          >
+            {`הופק ב־${date}`}
+          </text>
+          <text
+            x={t.dir === "stationery" ? paper.widthMm / 2 + 3 : left}
+            y={paper.heightMm - marginMm + 5}
+            direction="ltr"
+            textAnchor="start"
+            fontSize={3}
+            fontWeight={900}
+            style={{ fontFamily: "var(--font-wordmark)" }}
+            fill={INK}
+          >
+            Eve.
+          </text>
+        </g>
+      )}
       </>
       )}
     </svg>
+  );
+}
+
+type LaidCell = { label: string; value: string; sub?: string; x: number; w: number };
+
+/** The title block in the studio's document direction — the same five cells and the same facts in
+ *  each, set the way the direction sets a page's head (./crew-doc.tsx):
+ *    stationery  a hairline over centred cells, Bellefair values, no dividers but short hairlines;
+ *    lookbook    a 1.4px rule, values flush to the cell's start, the event in big Karantina;
+ *    studio      a fully ruled grid, Plex Mono labels and figures, Plex values. */
+function TitleBlock({ t, cells, top, left, right }: { t: DocTheme; cells: LaidCell[]; top: number; left: number; right: number }) {
+  const H = TITLE_CELLS_MM;
+  const condensed = t.style.headFont === "Karantina";
+  const per = condensed ? 0.36 : 0.54;
+  const rule = t.dir === "lookbook" ? 1.4 : t.dir === "studio" ? LINE_WEIGHTS.feature : LINE_WEIGHTS.annotation;
+  const centred = t.dir === "stationery";
+  return (
+    <g>
+      <line x1={left} y1={top} x2={right} y2={top} stroke={INK} strokeWidth={rule} vectorEffect="non-scaling-stroke" />
+      {cells.map((c, i) => {
+        const big = t.dir === "lookbook" && i === 0;
+        const value = fitText(c.value, c.w - 4, big ? 6.4 : t.dir === "stationery" ? 3.8 : 3.4, 2.4, per);
+        const sub = c.sub ? fitText(c.sub, c.w - 4, 2.5, 2) : null;
+        const x = centred ? c.x + c.w / 2 : c.x + c.w - 2;
+        const anchor = centred ? "middle" : "start";
+        // Figures — the scale, the date, the sheet's number — are Plex Mono in the studio direction.
+        const figures = t.dir === "studio" && (c.label === "קנה מידה" || c.label === "תאריך");
+        return (
+          <g key={i}>
+            {i > 0 &&
+              (t.dir === "studio" ? (
+                <line x1={c.x + c.w} y1={top} x2={c.x + c.w} y2={top + H} stroke={INK} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
+              ) : t.dir === "stationery" ? (
+                <line x1={c.x + c.w} y1={top + 4} x2={c.x + c.w} y2={top + H - 4} stroke={HAIRLINE} strokeWidth={LINE_WEIGHTS.annotation} vectorEffect="non-scaling-stroke" />
+              ) : null)}
+            <text x={x} y={top + 3.6} direction="rtl" textAnchor={anchor} fontSize={t.dir === "studio" ? 1.9 : 2.2} style={{ fontFamily: t.dir === "studio" ? t.mono : t.body }} fill={MUTED}>
+              {c.label}
+            </text>
+            <text
+              x={x}
+              y={top + (big ? 10 : 8.6)}
+              direction="rtl"
+              textAnchor={anchor}
+              fontSize={value.size}
+              fontWeight={big || t.dir === "stationery" ? t.wHead : 500}
+              style={{ fontFamily: figures ? t.mono : big || t.dir !== "studio" ? t.head : t.body }}
+              fill={INK}
+              className="nums"
+            >
+              {value.text}
+            </text>
+            {sub && (
+              <text x={x} y={top + 12.8} direction="rtl" textAnchor={anchor} fontSize={sub.size} style={{ fontFamily: t.dir === "studio" ? t.mono : t.body }} fill={INK_SOFT} className="nums">
+                {sub.text}
+              </text>
+            )}
+          </g>
+        );
+      })}
+    </g>
   );
 }
 
@@ -411,8 +481,7 @@ export function SheetFrame({
 /** A title-block value at the largest size that fits its cell, down to `min`; past that, cut with an
  *  ellipsis rather than printed into the next cell. Widths are estimated (SVG has no measuring
  *  before paint) at a generous glyph average. */
-function fitText(text: string, widthMm: number, base: number, min: number): { text: string; size: number } {
-  const per = 0.54;
+function fitText(text: string, widthMm: number, base: number, min: number, per = 0.54): { text: string; size: number } {
   if (!text) return { text, size: base };
   const size = Math.max(min, Math.min(base, widthMm / (text.length * per)));
   if (text.length * per * size <= widthMm) return { text, size };

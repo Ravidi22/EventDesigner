@@ -120,6 +120,8 @@
     "check:quote-layout": "tsx lib/quotes/layout.ts",
     "check:billing": "tsx lib/billing/rules.ts",
     "check:paginate": "tsx lib/outputs/paginate.ts",
+    "check:doc-style": "tsx lib/documents/style.ts",
+    "check:doc-theme": "tsx lib/documents/theme.ts",
     "check:scale": "tsx lib/outputs/scale.ts",
     "check:sheets": "tsx lib/outputs/sheets.ts",
     "check:dimensions": "tsx lib/outputs/dimensions.ts",

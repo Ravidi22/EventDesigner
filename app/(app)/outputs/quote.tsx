@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { Check, Download, Eye, PencilLine, Printer, Share2, TriangleAlert } from "lucide-react";
+import { Banknote, Building2, Check, Download, Eye, EyeOff, ListPlus, PencilRuler, Printer, Share2, TriangleAlert, Type } from "lucide-react";
 import { BackToStudio } from "./back-to-studio";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import type { EventPlan } from "@/lib/events/plan";
@@ -14,6 +14,8 @@ import type { PlanSheet } from "@/lib/outputs/sheets";
 import { measureContext, priceLookup } from "@/lib/outputs/lookup";
 import { recordExport } from "@/lib/outputs/actions";
 import {
+  CONCEPT_PHOTO,
+  COVER_PHOTO,
   DEFAULT_CLOSING,
   DEFAULT_LAYOUT,
   PRICE_MODES,
@@ -39,18 +41,20 @@ import { catalogShades, shadeKey } from "@/lib/catalog/shades";
 import { isRunner } from "@/lib/catalog/categories";
 import { resolve } from "@/lib/studio/catalog-resolver";
 import { formatPrice } from "@/lib/catalog/format";
-import { Button } from "@/components/button";
+import { panelGroup as G, type PanelGroup } from "@/components/end-panel";
+import { GroupLine } from "@/components/doc-shell";
 import { NumberField } from "@/components/number-field";
 import { TextField } from "@/components/text-field";
 import { Segmented } from "@/components/segmented";
 import { SwitchRow } from "@/components/toggle";
 import { VenueAccessNotice } from "@/components/venue-access-notice";
-import { CONTENT_W, QuoteDocument, SKETCH_MAX_H, type QuotePalette, type QuotePhoto, type QuoteSketch } from "./quote-document";
+import { QuoteDocument, type QuotePalette, type QuotePhoto, type QuoteSketch } from "./quote-document";
 import { QuotePhotoPicker } from "./quote-photo-picker";
 import { QuoteExtras } from "./quote-extras";
 import { QuoteStudioDetails, missingDetails } from "./quote-studio-details";
 import { PlacementMap, mapWorld } from "./placement-map";
 import { buildQuotePdf, downloadFile, quoteFileName, shareFile } from "./quote-pdf";
+import type { DocParts } from "./doc-parts";
 
 // F-7.1–F-7.4: the quote — the CONTROLS and the state. The document a client receives is
 // ./quote-document.tsx (A4 pages), its sections are derived from the drawing by
@@ -92,6 +96,9 @@ export function Quote({
   plan,
   zonePlans,
   documentVersion,
+  client,
+  onStatus,
+  children,
 }: {
   doc: DesignDocumentContent;
   meeting?: boolean;
@@ -101,6 +108,12 @@ export function Quote({
   zonePlans: ZoneSheet[];
   /** The version the drawing is on now — F-7.4 compares it with the issued quote's. */
   documentVersion: number | null;
+  /** The client view (the screen's "תצוגת לקוח"): the pages alone, no tools in their margins. */
+  client: boolean;
+  /** Where the quote stands, for the rail's line — kept by the screen while another document is open. */
+  onStatus?: (s: { meta: string; warn: boolean }) => void;
+  /** The screen's shell, handed this document's parts (./doc-parts.ts). */
+  children: (parts: DocParts) => ReactNode;
 }) {
   const [settings, setSettings] = useState<BusinessSettings | null>(null);
   const [issued, setIssued] = useState<IssuedQuote | null>(null);
@@ -108,7 +121,7 @@ export function Quote({
   const [images, setImages] = useState<GalleryImage[]>([]);
   const [liked, setLiked] = useState<string[]>([]);
   const [venueName, setVenueName] = useState<string>();
-  const [editing, setEditing] = useState(false);
+  const editing = !client;
   // Seeded from the workspace, then moved by issuing (which seals this version) — render-time
   // derivation, React's pattern for state that follows a prop.
   const [currentVersion, setCurrentVersion] = useState(documentVersion);
@@ -216,11 +229,10 @@ export function Quote({
     const shown = zonePlans.filter((z) => z.doc.tables.length > 0 || z.doc.placements.some((p) => p.layer === "floor"));
     return shown.map((z) => {
       const world = mapWorld(z.bounds);
-      const heightMm = Math.min(SKETCH_MAX_H, Math.max(60, (CONTENT_W * world.heightMm) / Math.max(1, world.widthMm)));
       return {
         key: z.zone?.zone.id ?? "all",
         title: shown.length > 1 ? (z.zone?.zone.name ?? "") : "",
-        heightMm,
+        aspect: world.heightMm / Math.max(1, world.widthMm),
         render: (widthMm: number, h: number) => (
           <PlacementMap
             doc={z.doc}
@@ -263,6 +275,23 @@ export function Quote({
     return relatedOf(s)
       .filter((p) => !p.category || !NOT_BY_DEFAULT.has(p.category))
       .slice(0, DEFAULT_PHOTOS);
+  };
+
+  // The pages that are not sections. The cover and the concept take the event's own photographs by
+  // default — liked ones first, then any of a section's — never a bare catalog shot; the closing
+  // photo is only ever chosen.
+  const eventPhotos = useMemo(() => {
+    const pids = new Set(raw.flatMap((s) => s.lines.map((l) => l.productId)).filter(Boolean));
+    const likedFirst = liked.map((id) => photoPool.byId.get(id)).filter((p): p is PickablePhoto => !!p && !p.id.startsWith("product:"));
+    const related = photoPool.gallery.filter((p) => pids.has(p.productId) && !likedFirst.includes(p));
+    return [...likedFirst, ...related];
+  }, [raw, liked, photoPool]);
+  const pagePhoto = (key: string): QuotePhoto | null => {
+    const chosen = layout.photos[key];
+    if (chosen) return chosen.map((id) => photoPool.byId.get(id)).find((p): p is PickablePhoto => !!p) ?? null;
+    if (key === COVER_PHOTO) return eventPhotos[0] ?? null;
+    if (key === CONCEPT_PHOTO) return eventPhotos[1] ?? null;
+    return null;
   };
 
   // ── The palette: the event's shades — or, when none were picked, the drawing's own ─────────────
@@ -403,6 +432,20 @@ export function Quote({
         onChange={(ids) => update((l) => ({ photos: setMapEntry(l.photos, s.key, ids) }))}
       />
     ),
+    pagePhotoPanel: (key: string) => {
+      const p = pagePhoto(key);
+      return (
+        <QuotePhotoPicker
+          chosen={p ? [p] : []}
+          isDefault={!layout.photos[key]}
+          related={eventPhotos}
+          liked={liked.map((id) => photoPool.byId.get(id)).filter((x): x is PickablePhoto => !!x)}
+          all={photoPool.gallery}
+          max={1}
+          onChange={(ids) => update((l) => ({ photos: setMapEntry(l.photos, key, ids) }))}
+        />
+      );
+    },
     onTitle: (key: string, title: string) => {
       const def = allRaw.find((s) => s.key === key)?.title;
       update((l) => ({ titles: setMapEntry(l.titles, key, title.trim() && title !== def ? title : undefined) }));
@@ -420,207 +463,245 @@ export function Quote({
     onGift: (lineKey: string, gift: boolean) => update((l) => ({ gifts: gift ? [...l.gifts, lineKey] : l.gifts.filter((k) => k !== lineKey) })),
   };
 
-  if (raw.length === 0) {
-    return (
-      <div className="mx-auto max-w-md py-20 text-center">
-        <p className="text-sm text-ink-soft">עדיין אין פריטים בעיצוב.</p>
-        <BackToStudio meeting={meeting} className="mt-3 inline-block text-sm" />
-      </div>
-    );
+  // ── The parts the screen's shell draws (2026-11-11, the "Outputs and 3D Drawers" board): the pages
+  // on the light table, the controls as end-panel groups, share / download / print at the foot ──
+  const issuedOn = issued ? new Date(issued.issuedAt).toLocaleDateString("he-IL") : "";
+  const status = statusOf(!!issued, drawingChanged, layoutChanged, issuedOn);
+  const working = busy === "issue" ? "מפיק את ההצעה…" : busy === "pdf" ? "מכין PDF…" : busy === "print" ? "מכין להדפסה…" : null;
+  const empty = raw.length === 0;
+  const off = !event || !!busy || empty;
+  const foot: DocParts["foot"] = {
+    info: working ?? notice?.text ?? status.short,
+    warn: !working && (notice ? notice.tone === "warn" : status.warn),
+    side: currentVersion !== null ? `גרסה ${currentVersion}` : undefined,
+    action: { label: working ?? "שיתוף PDF", icon: Share2, onClick: share, disabled: off, title: "מפיק את ההצעה, חותם את גרסת העיצוב ופותח את חלון השיתוף" },
+    extras: [
+      { label: "הורדת PDF", icon: Download, onClick: download, disabled: off },
+      { label: "הדפסה", icon: Printer, onClick: print, disabled: off },
+    ],
+  };
+
+  // The rail's line under "הצעת מחיר" — kept by the screen while another document is open.
+  const railKey = `${status.rail}|${status.warn}`;
+  useEffect(() => {
+    onStatus?.({ meta: status.rail, warn: status.warn });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [railKey]);
+
+  if (empty) {
+    // eslint-disable-next-line react-hooks/refs -- the parts carry event handlers (share, print), called on a press, never while rendering
+    return children({
+      pages: (
+        <div className="bg-canvas px-10 py-20 text-center shadow-lifted" style={{ width: "210mm" }}>
+          <p className="text-sm text-ink-soft">עדיין אין פריטים בעיצוב.</p>
+          <BackToStudio meeting={meeting} className="mt-3 inline-block text-sm" />
+        </div>
+      ),
+      groups: [],
+      foot,
+    });
   }
 
-  const issuedOn = issued ? new Date(issued.issuedAt).toLocaleDateString("he-IL") : "";
-  const working = busy === "issue" ? "מפיק את ההצעה…" : busy === "pdf" ? "מכין PDF…" : busy === "print" ? "מכין להדפסה…" : null;
   const missing = missingDetails(settings);
-  const actions = (
-    <div className="flex flex-wrap items-center gap-2">
-      <Button variant="outline" size="sm" onClick={() => setEditing((v) => !v)} aria-pressed={editing}>
-        {editing ? <Eye className="h-4 w-4" strokeWidth={2} /> : <PencilLine className="h-4 w-4" strokeWidth={2} />}
-        {editing ? "תצוגת לקוח" : "עריכת ההצעה"}
-      </Button>
-      {editing && (
-        <Button variant="outline" size="sm" onClick={print} disabled={!event || !!busy}>
-          <Printer className="h-4 w-4" strokeWidth={2} />
-          הדפסה
-        </Button>
-      )}
-      <Button variant="outline" size="sm" onClick={download} disabled={!event || !!busy}>
-        <Download className="h-4 w-4" strokeWidth={2} />
-        הורדת PDF
-      </Button>
-      <Button size="sm" onClick={share} disabled={!event || !!busy} title="מפיק את ההצעה, חותם את גרסת העיצוב ופותח את חלון השיתוף">
-        <Share2 className="h-4 w-4" strokeWidth={2} />
-        {working ?? "שיתוף PDF"}
-      </Button>
-    </div>
-  );
+  const todo: { text: string; href?: string; link: string }[] = [
+    ...(!event?.eventType ? [{ text: "סוג האירוע לא צוין", href: event && !meeting ? `/dashboard?event=${event.id}` : undefined, link: "לפרטי האירוע" }] : []),
+    ...(figures.unpriced > 0 ? [{ text: `${figures.unpriced} פריטים ללא מחיר (או מחיר חלקי)`, href: meeting ? undefined : "/catalog", link: "לקטלוג" }] : []),
+    ...(settings && !settings.quoteTerms ? [{ text: "לא הוגדרו תנאי הצעה", href: meeting ? undefined : "/settings", link: "להגדרות ↗" }] : []),
+  ];
+  const priceLabel = PRICE_MODES.find((m) => m.id === layout.priceMode)?.label ?? "";
+  const extrasSum = layout.extras.reduce((n, e) => n + (e.price || 0), 0);
+  const texts = [layout.concept.trim() && "קונספט", layout.paletteNote.trim() && "פלטה", layout.closing.trim() ? "ברכה אישית" : "ברכת ברירת מחדל"].filter(Boolean).join(" · ");
 
-  return (
-    <div className="flex w-full flex-col items-center gap-5">
-      {editing && plan.access === "denied" && (
-        <div className="no-print w-full" style={{ maxWidth: "210mm" }}>
-          <VenueAccessNotice tone="measure" />
-        </div>
-      )}
-
-      {!editing ? (
-        // The client view: the pages, and the one thing the designer does from here.
-        <div className="no-print flex w-full flex-wrap items-center justify-between gap-3" style={{ maxWidth: "210mm" }}>
-          {notice ? <Notice notice={notice} /> : <span />}
-          {actions}
-        </div>
-      ) : (
-        <div className="no-print w-full space-y-4 rounded-md border border-border bg-surface px-5 py-4 shadow-floating" style={{ maxWidth: "210mm" }}>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <Status issued={!!issued} drawingChanged={drawingChanged} layoutChanged={layoutChanged} on={issuedOn} />
-            {actions}
-          </div>
-          {notice && <Notice notice={notice} />}
-
-          <div className="grid grid-cols-2 gap-x-4 gap-y-3 border-t border-border pt-4">
-            <Segmented<PriceMode>
-              label="הצגת מחירים ללקוח"
-              value={layout.priceMode}
-              options={PRICE_MODES.map((m) => [m.id, m.label] as const)}
-              onChange={(priceMode) => update({ priceMode })}
-            />
-            <div>
-              <NumberField
-                label="מחיר סופי ללקוח"
-                min={0}
-                decimals={0}
-                hideZero
-                value={layout.finalPrice ?? 0}
-                placeholder={figures.catalogSum.toLocaleString("he-IL")}
-                onChange={(v) => update({ finalPrice: v > 0 ? v : null })}
-                commitOnBlur
-              />
-              <p className="nums mt-1 text-caption text-muted">
-                לפי מחירון: {formatPrice(figures.catalogSum)}
-                {settings && (settings.pricesIncludeVat ? " · כולל מע״מ" : " · לפני מע״מ")}
-                {layout.finalPrice !== null && (
-                  <button type="button" onClick={() => update({ finalPrice: null })} className="ms-2 text-accent hover:underline">
-                    חזרה למחירון
-                  </button>
-                )}
-              </p>
-            </div>
-            <SwitchRow
-              checked={layout.priceMode !== "total" || layout.showDiscount}
-              onChange={(showDiscount) => update({ showDiscount })}
-              disabled={layout.priceMode !== "total" || figures.discount <= 0}
-              label="הצגת ההנחה ללקוח"
-              hint={
-                layout.priceMode !== "total"
-                  ? "כשמוצגים מחירים, ההפרש מהמחירון מודפס תמיד — כדי שהסכומים יסתכמו."
-                  : figures.discount > 0
-                    ? `הנחה של ${formatPrice(figures.discount)} מהמחירון.`
-                    : "אין הנחה — המחיר הסופי שווה למחירון או גבוה ממנו."
-              }
-            />
-            <SwitchRow
-              checked={layout.sketch}
-              onChange={(sketch) => update({ sketch })}
-              disabled={sketches.length === 0}
-              label="סקיצה של האולם"
-              hint={sketches.length ? "תוכנית ההצבה מתוך העיצוב — שולחנות, במה ובר, בלי מידות ובלי מחירים." : "אין עדיין מה לשרטט."}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-x-4 gap-y-3 border-t border-border pt-4">
-            <TextField
-              label="משפט על הפלטה"
-              multiline
-              rows={2}
-              value={layout.paletteNote}
-              onChange={(paletteNote) => update({ paletteNote })}
-              placeholder="למשל: כל הפרחים בגווני שמנת-לבן עם נגיעות ירוק עדין"
-            />
-            <TextField label="ברכת סיום" multiline rows={2} value={layout.closing} onChange={(closing) => update({ closing })} placeholder={DEFAULT_CLOSING} />
-          </div>
-          <p className="-mt-2 text-caption text-muted">
-            גווני האירוע וסוג האירוע נקבעים בפרטי האירוע{(event?.shades?.length ?? 0) === 0 && " — כרגע הפלטה נלקחת מהפריטים שבעיצוב"}.
-          </p>
-
-          <div className="border-t border-border pt-4">
-            <QuoteExtras extras={layout.extras} onChange={(extras) => update({ extras })} />
-          </div>
-
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border pt-3 text-caption">
-            {settings && <QuoteStudioDetails settings={settings} onChange={setSettings} />}
-            {missing.length > 0 && <span className="text-warn-ink">חסרים בהצעה: {missing.join(", ")}</span>}
-            {!event?.eventType && <span className="text-warn-ink">סוג האירוע לא צוין — בפרטי האירוע</span>}
-            {hiddenCount > 0 && (
-              <button type="button" onClick={() => update({ hidden: [] })} className="inline-flex items-center gap-1.5 text-muted transition-colors hover:text-ink">
-                <Eye className="h-3.5 w-3.5" strokeWidth={2} />
-                <span className="nums">{hiddenCount}</span> שורות מוסתרות — החזרת הכול
+  const groups: PanelGroup[] = [
+    ...(todo.length
+      ? [
+          G(
+            "missing",
+            TriangleAlert,
+            "חסר בהצעה",
+            todo.length === 1 ? "דבר אחד" : `${todo.length} דברים`,
+            <div className="flex flex-col gap-2">
+              {todo.map((t) => (
+                <GroupLine key={t.text} action={t.href ? <Link href={t.href} className="hover:text-accent-hover">{t.link}</Link> : undefined}>
+                  <span className="nums">{t.text}</span>
+                </GroupLine>
+              ))}
+            </div>,
+            true,
+          ),
+        ]
+      : []),
+    G(
+      "price",
+      Banknote,
+      "מחירים",
+      <span className="nums">{`${priceLabel} · ${formatPrice(figures.total)}`}</span>,
+      <div className="flex flex-col gap-3.5">
+        <Segmented<PriceMode> label="הצגת מחירים ללקוח" value={layout.priceMode} options={PRICE_MODES.map((m) => [m.id, m.label] as const)} onChange={(priceMode) => update({ priceMode })} />
+        <div>
+          <NumberField
+            label="מחיר סופי ללקוח"
+            min={0}
+            decimals={0}
+            hideZero
+            value={layout.finalPrice ?? 0}
+            placeholder={figures.catalogSum.toLocaleString("he-IL")}
+            onChange={(v) => update({ finalPrice: v > 0 ? v : null })}
+            commitOnBlur
+          />
+          <p className="nums mt-1 text-caption text-muted">
+            לפי מחירון: {formatPrice(figures.catalogSum)}
+            {settings && (settings.pricesIncludeVat ? " · כולל מע״מ" : " · לפני מע״מ")}
+            {layout.finalPrice !== null && (
+              <button type="button" onClick={() => update({ finalPrice: null })} className="ms-2 text-accent hover:underline">
+                חזרה למחירון
               </button>
             )}
-            {figures.unpriced > 0 && (
-              <span className="inline-flex items-center gap-1.5 text-warn-ink">
-                <TriangleAlert className="h-3.5 w-3.5" strokeWidth={2} />
-                <span className="nums">{figures.unpriced}</span> פריטים ללא מחיר (או מחיר חלקי) — הוסיפו מחיר בקטלוג
-              </span>
-            )}
-            {settings && !settings.quoteTerms && (
-              <Link href="/settings" className="text-warn-ink underline-offset-2 hover:underline">
-                לא הוגדרו תנאי הצעה ↗
-              </Link>
-            )}
-          </div>
-          <p className="text-caption text-muted">כותרות, הערות, תמונות וסדר — בכלים שמעל כל אזור בעמוד. מתנה או הסתרה — ב״…״ שליד כל שורה.</p>
+          </p>
         </div>
-      )}
+        <SwitchRow
+          checked={layout.priceMode !== "total" || layout.showDiscount}
+          onChange={(showDiscount) => update({ showDiscount })}
+          disabled={layout.priceMode !== "total" || figures.discount <= 0}
+          label="הצגת ההנחה ללקוח"
+          hint={
+            layout.priceMode !== "total"
+              ? "כשמוצגים מחירים, ההפרש מהמחירון מודפס תמיד — כדי שהסכומים יסתכמו."
+              : figures.discount > 0
+                ? `הנחה של ${formatPrice(figures.discount)} מהמחירון.`
+                : "אין הנחה — המחיר הסופי שווה למחירון או גבוה ממנו."
+          }
+        />
+      </div>,
+    ),
+    G(
+      "sketch",
+      PencilRuler,
+      "סקיצה",
+      sketches.length === 0 ? "אין מה לשרטט" : layout.sketch ? (sketches.length > 1 ? `מוצגת · ${sketches.length} אזורים` : "מוצגת") : "לא מוצגת",
+      <SwitchRow
+        checked={layout.sketch}
+        onChange={(sketch) => update({ sketch })}
+        disabled={sketches.length === 0}
+        label="סקיצה של האולם"
+        hint={sketches.length ? "תוכנית ההצבה מתוך העיצוב — שולחנות, במה ובר, בלי מידות ובלי מחירים." : "אין עדיין מה לשרטט."}
+      />,
+    ),
+    G(
+      "text",
+      Type,
+      "טקסטים",
+      texts,
+      <div className="flex flex-col gap-3">
+        <TextField
+          label="הקונספט"
+          multiline
+          rows={4}
+          value={layout.concept}
+          onChange={(concept) => update({ concept })}
+          placeholder="למשל: ערב רך בגווני שמנת וורוד עתיק, עם ירוק מרווה שמחבר בין האולם לגן…"
+        />
+        <TextField
+          label="חומרים ופלטה — שורה אחת"
+          multiline
+          rows={2}
+          value={layout.paletteNote}
+          onChange={(paletteNote) => update({ paletteNote })}
+          placeholder="למשל: כל הפרחים בגווני שמנת-לבן עם נגיעות ירוק עדין"
+        />
+        <TextField label="ברכת סיום" multiline rows={2} value={layout.closing} onChange={(closing) => update({ closing })} placeholder={DEFAULT_CLOSING} />
+        <p className="text-xs leading-relaxed text-muted">
+          גווני האירוע וסוג האירוע נקבעים בפרטי האירוע{(event?.shades?.length ?? 0) === 0 && " — כרגע הפלטה נלקחת מהפריטים שבעיצוב"}.
+        </p>
+      </div>,
+    ),
+    G(
+      "extras",
+      ListPlus,
+      "תוספות",
+      layout.extras.length ? <span className="nums">{`${layout.extras.length} ${layout.extras.length === 1 ? "שורה" : "שורות"} · ${formatPrice(extrasSum)}`}</span> : "אין",
+      <QuoteExtras extras={layout.extras} onChange={(extras) => update({ extras })} />,
+    ),
+    ...(hiddenCount > 0
+      ? [
+          G(
+            "hidden",
+            EyeOff,
+            "שורות מוסתרות",
+            <span className="nums">{hiddenCount}</span>,
+            <GroupLine
+              action={
+                <button type="button" onClick={() => update({ hidden: [] })} className="inline-flex items-center gap-1.5 hover:text-accent-hover">
+                  <Eye className="h-3.5 w-3.5" strokeWidth={2} />
+                  החזרת הכול
+                </button>
+              }
+            >
+              <span className="nums">{hiddenCount === 1 ? "שורה אחת מוסתרת מהלקוח" : `${hiddenCount} שורות מוסתרות מהלקוח`}</span>
+            </GroupLine>,
+          ),
+        ]
+      : []),
+    ...(settings
+      ? [
+          G(
+            "studio",
+            Building2,
+            "פרטי הסטודיו",
+            missing.length ? `חסרים ${missing.length}` : "מלאים",
+            <QuoteStudioDetails settings={settings} onChange={setSettings} />,
+            missing.length > 0,
+          ),
+        ]
+      : []),
+  ];
 
-      <QuoteDocument
-        pagesRef={pagesRef}
-        settings={settings}
-        event={event}
-        venueName={venueName}
-        layout={layout}
-        sections={sections}
-        figures={figures}
-        photosOf={photosOf}
-        palette={palette}
-        seating={seating}
-        sketches={sketches}
-        reference={reference}
-        issuedAt={reference ? (issued?.issuedAt ?? null) : null}
-        edit={editing ? edit : undefined}
-      />
-    </div>
-  );
-}
-
-function Notice({ notice }: { notice: { tone: "ok" | "warn"; text: string } }) {
-  return (
-    <p className={"inline-flex items-center gap-1.5 text-sm " + (notice.tone === "warn" ? "text-warn-ink" : "text-success-ink")}>
-      {notice.tone === "warn" ? <TriangleAlert className="h-4 w-4" strokeWidth={2} /> : <Check className="h-4 w-4" strokeWidth={2.5} />}
-      {notice.text}
-    </p>
-  );
-}
-
-function Status({ issued, drawingChanged, layoutChanged, on }: { issued: boolean; drawingChanged: boolean; layoutChanged: boolean; on: string }) {
-  if (!issued) return <p className="text-sm text-muted">טיוטה — טרם נשלחה ללקוח.</p>;
-  if (drawingChanged)
-    return (
-      <p className="inline-flex items-center gap-1.5 text-sm text-warn-ink">
-        <TriangleAlert className="h-4 w-4" strokeWidth={2} />
-        העיצוב השתנה מאז ההצעה ששלחת ({on})
+  // eslint-disable-next-line react-hooks/refs -- as above: handlers, not reads
+  return children({
+    pages: (
+      <>
+        {editing && plan.access === "denied" && (
+          <div className="no-print" style={{ width: "210mm" }}>
+            <VenueAccessNotice tone="measure" />
+          </div>
+        )}
+        <QuoteDocument
+          pagesRef={pagesRef}
+          settings={settings}
+          event={event}
+          venueName={venueName}
+          layout={layout}
+          sections={sections}
+          figures={figures}
+          photosOf={photosOf}
+          pagePhoto={pagePhoto}
+          palette={palette}
+          seating={seating}
+          sketches={sketches}
+          reference={reference}
+          issuedAt={reference ? (issued?.issuedAt ?? null) : null}
+          edit={editing ? edit : undefined}
+        />
+      </>
+    ),
+    lead: (
+      <p className={"flex items-start gap-1.5 px-4 pb-3 text-[13px] leading-snug " + (status.warn ? "text-warn-ink" : "text-muted")}>
+        {status.warn ? <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={2} /> : issued ? <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={2.5} /> : null}
+        {status.long}
       </p>
-    );
-  if (layoutChanged)
-    return (
-      <p className="inline-flex items-center gap-1.5 text-sm text-warn-ink">
-        <TriangleAlert className="h-4 w-4" strokeWidth={2} />
-        יש שינויים בהצעה שטרם נשלחו (נשלחה {on})
-      </p>
-    );
-  return (
-    <p className="inline-flex items-center gap-1.5 text-sm text-ink-soft">
-      <Check className="h-4 w-4 text-accent" strokeWidth={2.5} />
-      נשלחה {on} · תואמת לעיצוב הנוכחי
-    </p>
-  );
+    ),
+    after: <p className="border-t border-border-soft px-4 py-3 text-xs leading-relaxed text-muted">כותרות, הערות, תמונות וסדר — בכלים שמעל כל אזור בעמוד. מתנה או הסתרה — ב״…״ שליד כל שורה.</p>,
+    groups,
+    foot,
+    defaultOpen: ["missing", "price"],
+  });
 }
+
+/** Where the quote stands, in three lengths: the panel's line, the foot's, the rail's. */
+export function statusOf(issued: boolean, drawingChanged: boolean, layoutChanged: boolean, on: string): { long: string; short: string; rail: string; warn: boolean } {
+  if (!issued) return { long: "טיוטה — טרם נשלחה ללקוח.", short: "טיוטה · טרם נשלחה", rail: "טיוטה · טרם נשלחה", warn: false };
+  if (drawingChanged) return { long: `העיצוב השתנה מאז ההצעה ששלחת (${on})`, short: "העיצוב השתנה מאז ההצעה", rail: "העיצוב השתנה מאז", warn: true };
+  if (layoutChanged) return { long: `יש שינויים בהצעה שטרם נשלחו (נשלחה ${on})`, short: "טיוטה · שינויים שטרם נשלחו", rail: "שינויים שטרם נשלחו", warn: true };
+  return { long: `נשלחה ${on} · תואמת לעיצוב הנוכחי`, short: `נשלחה ${on} · תואמת לעיצוב`, rail: `נשלחה ${on}`, warn: false };
+}
+

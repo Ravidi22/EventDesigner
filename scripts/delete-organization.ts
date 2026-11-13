@@ -1,7 +1,12 @@
 // Remove ONE organisation and everything that hangs off it — its people, their logins and sessions,
 // its settings, and every row in every table that points at it, found from the database's own
-// foreign keys rather than from a list somebody has to keep current. Written 2026-10-31 to clear a
-// stale empty studio from the production branch before opening the real one.
+// catalogue rather than from a list somebody has to keep current: the foreign keys that point at
+// `organizations` and `users`, AND every table with an `organization_id` column. Most of the
+// schema has no foreign key to `organizations` (ADR-2's `orgId()` is a plain uuid column), so
+// the first version of this script, which followed foreign keys only, left an organisation's
+// products, variants, events, drawings and venues behind (found 2026-11-11 clearing a throwaway
+// studio). Written 2026-10-31 to clear a stale empty studio from the production branch before
+// opening the real one.
 //
 //   npx tsx scripts/delete-organization.ts --org <organisation id> [--db PROD_DIRECT_URL] [--dry-run] [--yes]
 //
@@ -14,7 +19,9 @@
 // the users, then rows referencing the ORGANISATION, then the organisation — each table's rows for
 // this organisation only. A table whose rows are themselves referenced by another table with a NO
 // ACTION rule is retried after the others, up to a handful of passes, which covers chains like
-// order_lines → orders → organisations without hard-coding them.
+// order_lines → orders → organisations, or billing_documents → events → venues, without
+// hard-coding them. A child table with no organisation column of its own (event_zones, order_lines)
+// goes by its parent's CASCADE.
 import { config } from "dotenv";
 config({ path: ".env.local" });
 config();
@@ -76,8 +83,18 @@ async function main() {
       const [{ n }] = await sql.unsafe<{ n: number }[]>(`select count(*)::int as n from "${r.table}" where "${r.column}" = $1::uuid`, [orgId]);
       if (n) counts.push({ ...r, via: "organisation", n });
     }
+    // Every table that carries the tenant column without a foreign key on it — most of the schema.
+    const keyed = new Set(byOrg.filter((r) => r.column === "organization_id").map((r) => r.table));
+    const scoped = await sql<{ table: string }[]>`
+      select table_name as table from information_schema.columns
+      where table_schema = 'public' and column_name = 'organization_id' order by 1`;
+    for (const { table } of scoped) {
+      if (table === "users" || keyed.has(table)) continue;
+      const [{ n }] = await sql.unsafe<{ n: number }[]>(`select count(*)::int as n from "${table}" where "organization_id" = $1::uuid`, [orgId]);
+      if (n) counts.push({ table, column: "organization_id", rule: "no fk", via: "organisation", n });
+    }
     console.log("rows that go with it:");
-    for (const c of counts) console.log(`  ${c.table}.${c.column} (${c.via}, fk ${c.rule}): ${c.n}`);
+    for (const c of counts) console.log(`  ${c.table}.${c.column} (${c.via}, ${c.rule === "no fk" ? "no fk" : `fk ${c.rule}`}): ${c.n}`);
     if (!counts.length) console.log("  (none beyond the organisation row)");
     if (dryRun) {
       console.log("dry run — nothing deleted");
@@ -93,7 +110,7 @@ async function main() {
         ...counts.filter((c) => c.via === "organisation").map((c) => ({ ...c, key: [orgId] })),
       ];
       let passes = 0;
-      while (pending.length && passes < 6) {
+      while (pending.length && passes < 10) {
         passes++;
         for (let i = pending.length - 1; i >= 0; i--) {
           const c = pending[i];
@@ -123,7 +140,13 @@ async function main() {
     });
     const [left] = await sql`select count(*)::int as n from organizations where id = ${orgId}`;
     const [leftPeople] = await sql`select count(*)::int as n from users where id = any (${userIds}::uuid[])`;
-    console.log(`deleted organisation "${org.name}" and ${people.length} people — remaining: ${left.n} organisation rows, ${leftPeople.n} user rows`);
+    let leftRows = 0;
+    for (const { table } of scoped) {
+      const [{ n }] = await sql.unsafe<{ n: number }[]>(`select count(*)::int as n from "${table}" where "organization_id" = $1::uuid`, [orgId]);
+      if (n) console.log(`  still in ${table}: ${n}`);
+      leftRows += n;
+    }
+    console.log(`deleted organisation "${org.name}" and ${people.length} people — remaining: ${left.n} organisation rows, ${leftPeople.n} user rows, ${leftRows} rows carrying its id`);
   } finally {
     await sql.end();
   }

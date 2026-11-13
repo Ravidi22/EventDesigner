@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useIsVenue } from "@/components/org-kind-context";
+import { useIsSupplier, useIsVenue } from "@/components/org-kind-context";
 import { useMounted } from "@/lib/use-mounted";
-import { CalendarClock, CalendarSync, Database, Grid2x2, ListChecks, ReceiptText, Share2, Store, UserRound, Users } from "lucide-react";
+import { CalendarClock, CalendarSync, Database, Grid2x2, ListChecks, Palette, ReceiptText, Share2, Store, UserRound, Users } from "lucide-react";
 import type { BusinessSettings } from "@/lib/settings/types";
 import type { CheckpointOffsets } from "@/lib/production/runway";
 import type { GoogleStatus } from "@/lib/google/actions";
@@ -11,6 +11,7 @@ import type { StudioMember } from "@/lib/team/types";
 import { PAGE_GUTTER } from "@/components/page-gutter";
 import { BusinessSection } from "./business-section";
 import { BillingSection } from "./billing-section";
+import { BrandingSection } from "./branding-section";
 import type { SeriesCounter } from "@/lib/billing/actions";
 import { AccountSection } from "./account-section";
 import { MeetingSection } from "./meeting-section";
@@ -39,6 +40,8 @@ const SECTIONS = [
   { id: "business", label: "העסק", icon: Store },
   // Straight after the business: what the billing documents read off it (lib/billing).
   { id: "billing", label: "חיוב ומסמכים", icon: ReceiptText },
+  // How the quote and the crew sheets look (the Documents board, 2026-11-10).
+  { id: "branding", label: "מיתוג מסמכים", icon: Palette },
   { id: "account", label: "החשבון שלי", icon: UserRound },
   { id: "meeting", label: "מצב פגישה", icon: ListChecks },
   // Straight after the meeting, and sharing the nav tab's own icon so the row says which screen it
@@ -56,7 +59,7 @@ type SectionId = (typeof SECTIONS)[number]["id"];
 
 /** A designer's own machinery — the meeting flow, the production clock, the stage rules. A venue
  *  runs none of them, so its settings leave them out. */
-const DESIGNER_ONLY: ReadonlySet<SectionId> = new Set<SectionId>(["meeting", "checkpoints", "stages"]);
+const DESIGNER_ONLY: ReadonlySet<SectionId> = new Set<SectionId>(["meeting", "checkpoints", "stages", "branding"]);
 
 // The shared reads arrive from page.tsx and are handed to whichever section is open. Sections mount
 // one at a time (only the selected one renders below), so seeding them here is also what makes
@@ -86,7 +89,9 @@ export function SettingsScreen({
   // useSearchParams / Suspense dance for one string. Read in render after mount; a click wins.
   const mounted = useMounted();
   const venue = useIsVenue();
-  const sections = SECTIONS.filter((s) => !venue || !DESIGNER_ONLY.has(s.id));
+  // A supplier issues no quote and prints no crew sheet — its documents have nothing to brand.
+  const supplier = useIsSupplier();
+  const sections = SECTIONS.filter((s) => (!venue || !DESIGNER_ONLY.has(s.id)) && (!supplier || s.id !== "branding"));
   const fromHash = mounted ? window.location.hash.slice(1) : "";
   const [picked, setSection] = useState<SectionId | null>(null);
   const section: SectionId = picked ?? (sections.some((s) => s.id === fromHash) ? (fromHash as SectionId) : "business");
@@ -126,6 +131,7 @@ export function SettingsScreen({
       <div className="min-w-0 flex-1">
         {section === "business" && <BusinessSection initialSettings={initialSettings} />}
         {section === "billing" && <BillingSection initialSettings={initialSettings} initialCounters={initialCounters} />}
+        {section === "branding" && <BrandingSection initialSettings={initialSettings} />}
         {section === "account" && <AccountSection initialMe={initialMe} />}
         {section === "meeting" && <MeetingSection />}
         {section === "checkpoints" && <CheckpointsSection initialOffsets={initialOffsets} />}
