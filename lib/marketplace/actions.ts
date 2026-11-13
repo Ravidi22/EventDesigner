@@ -22,6 +22,7 @@ import { organizations, productVariants, products, studioSettings, suppliers } f
 import { toProducts, toProductRow, toVariantRows } from "@/lib/catalog/db-mapping";
 import type { Product } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
+import { SUPPLIER_CATEGORY_REFUSAL, isSupplierCategory } from "@/lib/catalog/built-in";
 import { knownFlowerOfProduct, type KnownFlower } from "@/lib/catalog/flowers";
 import { STEM_CATEGORY_FALLBACK } from "@/lib/catalog/flower-spec";
 import { copyFileInto } from "@/lib/files/copy";
@@ -173,6 +174,9 @@ export async function addToCatalog(sourceProductId: string): Promise<{ productId
     .limit(1);
   if (!row) return { error: "הפריט כבר לא מפורסם" };
   const source = row.product;
+  // A cut stem is a supplier's row and nothing a studio files (CategoryDef.supplierOnly): it reaches
+  // the studio as a line of an arrangement's spec, which fetchMarketFlowers below feeds.
+  if (isSupplierCategory(source.category)) return { error: SUPPLIER_CATEGORY_REFUSAL };
   const variantRows = await database
     .select()
     .from(productVariants)

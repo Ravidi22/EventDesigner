@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { Copy, Heart, MousePointerClick, Pencil, Plus, SlidersHorizontal, Sparkles, X } from "lucide-react";
 import { Pin } from "lucide-react";
-import { canDuplicate, railBuiltIns } from "@/lib/catalog/built-in";
+import { canDuplicate, railBuiltIns, shownGroups } from "@/lib/catalog/built-in";
 import { Menu } from "@/components/menu";
 import type { ChairRows } from "@/lib/design-document/types";
 import { NEW_BLOCK, chairRowsLayout } from "@/lib/design-document/chair-rows";
@@ -213,7 +213,9 @@ export function CatalogRail({
               aria-label="קטגוריה"
               options={[
                 { value: "", label: groups ? "כל הקטגוריות בשלב זה" : "כל הקטגוריות" },
-                ...CATEGORY_GROUPS.filter((g) => !groups || groups.includes(g.id)).map((g) => ({ value: g.id, label: g.label })),
+                ...shownGroups(CATEGORY_GROUPS, false, products)
+                  .filter((g) => !groups || groups.includes(g.id))
+                  .map((g) => ({ value: g.id, label: g.label })),
               ]}
               className="w-full"
             />

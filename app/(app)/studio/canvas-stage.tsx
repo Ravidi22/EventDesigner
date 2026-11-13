@@ -1,6 +1,8 @@
 "use client";
 
 import { createElement, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { chandelierDrawOf } from "@/lib/catalog/chandelier";
+import { chuppahDrawOf } from "@/lib/catalog/chuppah";
 import type { DesignDocumentContent, DesignTable, Placement, WallSpan } from "@/lib/design-document/types";
 import type { Plane } from "@/lib/studio/planes";
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
@@ -44,7 +46,7 @@ import { borderOf } from "@/lib/catalog/border";
 import { DrapePleatsAlong } from "@/components/curtain-cloth";
 import { WalkingLine, slopeTextSize } from "@/components/climb-glyph";
 import { EdgeItemHandles } from "@/components/stage-edge-handles";
-import { ItemSurface } from "@/components/surface-fill";
+import { ItemSurface, edgeFootprint } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { pergolaFromStyle, pergolaGeometry, pergolaPostOf, postSquare, type Pergola } from "@/lib/venues/pergola";
@@ -3821,7 +3823,11 @@ const TableNode = memo(function TableNode({
           <g className="pointer-events-none">
             <ItemSurface appearance={tableSurface} footprint={footprint} color={table.style?.fill ?? tableSurface.style?.fill} seed={table.id} />
           </g>
-          <FootprintShape footprint={footprint} {...shape} fill="none" className="pointer-events-none" />
+          {/* Selected, the whole edge says so; at rest a shape with a line of its own keeps it. */}
+          {(() => {
+            const edged = selected ? footprint : edgeFootprint(tableSurface, footprint);
+            return edged && <FootprintShape footprint={edged} {...shape} fill="none" className="pointer-events-none" />;
+          })()}
         </>
       )}
       {/* The LABEL, when the pass asks for it (the hall pass and the full studio — never the design
@@ -4584,6 +4590,7 @@ function PlacementNodeView({
           overhead={overhead}
           chairStyle={chairStyleOf(product)}
           drawStyle={drawStyleOf(product)}
+          chandelier={chandelierDrawOf(product.appearance, product.variants)} chuppah={chuppahDrawOf(product.appearance)}
           postMm={pergolaPostOf(product)}
           rise={rise}
           turnDeg={rise ? placement.rotation : undefined}
@@ -4652,7 +4659,10 @@ function PlacementNodeView({
           <g className="pointer-events-none">
             <ItemSurface appearance={product?.appearance} footprint={footprint} color={own} seed={placement.id} />
           </g>
-          <FootprintShape footprint={footprint} fill="none" {...edge} className="pointer-events-none" />
+          {(() => {
+            const edged = selected ? footprint : edgeFootprint(product?.appearance, footprint);
+            return edged && <FootprintShape footprint={edged} fill="none" {...edge} className="pointer-events-none" />;
+          })()}
         </>
       )}
       </>

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Check, Palette, Plus } from "lucide-react";
 import type { MarketItem } from "@/lib/marketplace/types";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
+import { isSupplierCategory } from "@/lib/catalog/built-in";
 import { formatDimensions, formatPrice } from "@/lib/catalog/format";
 import { Button } from "@/components/button";
 import { ProductImage } from "../catalog/product-image";
@@ -44,6 +45,10 @@ export function MarketCard({ item, busy, onAdd }: { item: MarketItem; busy: bool
             <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
             בקטלוג שלי
           </Link>
+        ) : isSupplierCategory(product.category) ? (
+          // A cut stem is not copied: it reaches the studio as a line of an arrangement's spec
+          // (lib/catalog/built-in.ts — CategoryDef.supplierOnly).
+          <span className="max-w-[11rem] text-end text-xs leading-snug text-muted">נבחר בשורות המפרט של סידור פרחים</span>
         ) : (
           <Button size="sm" variant="outline" disabled={busy} onClick={onAdd}>
             <Plus className="h-4 w-4" strokeWidth={2.5} />

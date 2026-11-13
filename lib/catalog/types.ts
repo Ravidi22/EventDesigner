@@ -197,6 +197,115 @@ export interface HollowSpec {
   gapAt?: "start" | "center" | "end";
 }
 
+/** One point of a round shape's SIDE PROFILE (the element model, lib/element/revolve.ts): `r` the
+ *  radius as a fraction of the shape's own radius (1 = its rim as drawn on the plan), `z` the height
+ *  as a fraction of the shape's height (0 the bottom, 1 the top). Fractions, so a bowl stays a bowl
+ *  when its diameter or height is typed again. Bottom to top. */
+export interface RevolvePoint {
+  r: number;
+  z: number;
+}
+
+/** How a shape FOLLOWS A RESIZE of its item (the element model, Stage 3 — Figma's constraints, no
+ *  formula): per axis, against the base shape's box. `scale` = its place and size scale with the
+ *  box (what every part did before — the default); `start` / `end` = it keeps its distance from that
+ *  edge of the base and its size (a shelf against the back; in plan x, start is −x; in y, start is
+ *  −y, the top of the plan); `center` = it keeps its offset from the middle and its size; `stretch`
+ *  = both edges keep their distance, so it grows with the base. Read by sizedShapes (lib/studio/
+ *  footprint.ts) — only when some shape of the item carries a pin or a repeat; else the composite
+ *  is scaled whole, as it always was. */
+export type PinMode = "scale" | "start" | "end" | "center" | "stretch";
+export interface Pin {
+  x?: PinMode;
+  y?: PinMode;
+}
+
+/** A shape LAID IN COPIES against the base shape (the element model, Stage 3): the drawn shape is
+ *  the prototype — its size the copies' cross-section — and the copies are derived on every read,
+ *  at the catalog's size and at every stretched size, so a 4×4 pergola laid 6×4 keeps its posts at
+ *  the corners and its slats at their spacing.
+ *    corners — one copy inside every corner of the base's outline, its outer faces on the lines.
+ *    edges   — one copy along every side, as long as the side (less `marginMm` each end), its
+ *              depth the prototype's, its outer face on the line (a beam, a kerb, a rail).
+ *    row     — copies across the base at `spacingMm` centre to centre, struck from the middle,
+ *              along `axis` (absent = the base's long side), each spanning the base from side to
+ *              side (slats, joists, treads) — its thickness the prototype's across the run.
+ *    grid    — copies of the prototype's own size on a grid of `spacingMm` × `spacingYMm`, struck
+ *              from the middle, those whose centre lies inside the base (balusters, columns).
+ *  The prototype itself is one of the copies' positions only when the rule puts one there. */
+export type RepeatAlong = "corners" | "edges" | "row" | "grid";
+export interface Repeat {
+  along: RepeatAlong;
+  /** Centre to centre, mm (row: along the run; grid: along x). */
+  spacingMm?: number;
+  /** Grid only: centre to centre along y, mm. Absent = spacingMm. */
+  spacingYMm?: number;
+  /** Kept clear at the ends of a side (edges) or of the span (row), mm. */
+  marginMm?: number;
+  /** Row only: the axis the copies are spread along. Absent = the base's longer side. */
+  axis?: "x" | "y";
+}
+
+/** Whether a shape stands as a solid in the room: absent = yes (an extrude of its outline — or its
+ *  body of revolution); `none` = the shape is an OUTLINE ONLY — the item's footprint on the plan, no
+ *  body of its own in 3D — so a pergola's first shape is the roof's reach while its posts, beams and
+ *  slats are the parts (the element model, Stage 3). */
+export type PartBody = "none";
+
+/** What crystal a chandelier hangs (lib/catalog/chandelier.ts): nothing, a drop under every light,
+ *  strands of beads down from every tier, garlands of beads swagged from arm to arm. */
+export type ChandelierCrystals = "none" | "drops" | "strands" | "garlands";
+/** A glass pendant's metal: its cap, socket, cord and canopy. */
+export type PendantFitting = "black" | "brass" | "chrome" | "white";
+/** A chandelier's build, beyond its style (the user, 2026-11-07: "more customisable — קומות, חרוזי
+ *  קריסטל"): how many TIERS of lights stand one above the other, what CRYSTAL hangs from them, and
+ *  how many strands a tier carries. Every field absent = the style's own (lib/catalog/chandelier.ts
+ *  chandelierOf), so no existing row changes by itself. The plan and the room read ONE layout. */
+export interface ChandelierSpec {
+  tiers?: number;
+  crystals?: ChandelierCrystals;
+  /** Strands (or garlands) per tier; absent/0 = two per light. */
+  strands?: number;
+  /** GLASS PENDANTS (the `pendants` style — one globe or a group, 2026-11-08): the metal of the cap,
+   *  socket and cord (absent = black). The glass is the SHADE (its swatch and name: ענבר, עשן,
+   *  שקוף, כרום — lib/catalog/chandelier.ts glassFinishOf), its shape the base's body. */
+  fitting?: PendantFitting;
+  /** Every globe in the next of the row's shades, in order (a group of amber, smoke, clear and
+   *  chrome) — absent = every globe in the placed shade. */
+  glassMix?: boolean;
+  /** Every globe the same size (absent = sizes vary, packed as the plan packs them). */
+  equal?: boolean;
+}
+
+/** What a chuppah's posts are made of (lib/catalog/chuppah.ts). */
+export type ChuppahFinish = "metal" | "gold" | "wood" | "white" | "acrylic" | "birch";
+/** What covers a chuppah: a cloth, a sheer, a cloud of flowers, open beams, or nothing at all. */
+export type ChuppahRoof = "cloth" | "sheer" | "flowers" | "open" | "none";
+/** Where a chuppah's flowers are: on the two front posts (as always), on top of every post, two
+ *  big clusters on opposite corners, falling down the front posts, or none. */
+export type ChuppahFlowers = "front" | "corners" | "asym" | "cascade" | "none";
+/** A chuppah's build beyond its style (2026-11-09, the high-end pieces the round was built
+ *  against — a floral cloud on clear posts, a suspended canopy, sheer drapes, a hexagon of timber, a
+ *  domed birdcage, birch branches). Every field absent = the chuppah it always was (lib/catalog/
+ *  chuppah.ts chuppahOf), so no row changes by itself; the plan and the room read ONE layout. A round
+ *  chuppah's ROOF takes its section from the base's body (`revolve`): a dome, an onion, a peak. */
+export interface ChuppahSpec {
+  /** How many posts; 0 = hung from the ceiling. Absent = four, or the drawn outline's corners. */
+  posts?: number;
+  /** Absent = metal in a darker cut of the row's tone. */
+  finish?: ChuppahFinish;
+  /** Absent = cloth. */
+  roof?: ChuppahRoof;
+  /** Absent = on the two front posts. */
+  flowers?: ChuppahFlowers;
+  /** The flowers' colour (a cloud's, the clusters'); absent = the blush every arrangement defaults to. */
+  bloom?: string;
+  /** Low flowers on the floor round every post's foot. */
+  meadow?: boolean;
+  /** A sheer panel let fall at every post. */
+  drapes?: boolean;
+}
+
 /** A shape added to an item beside its base shape — a bar that is a counter with a round end, a
  *  head table with a piece set against it. The item is still ONE catalog row, dragged, priced and
  *  counted once; the parts only change what the plan draws.
@@ -228,10 +337,35 @@ export interface ShapePart {
   x: number;
   y: number;
   rotation: number;
+  /** A HEIGHT OF ITS OWN (the element model, docs/superpowers/specs/2026-11-07-element-model-design.md,
+   *  Stage 2): where this shape's bottom stands above the item's floor, and how far it rises from
+   *  there. Absent = on the floor, as tall as the item (`dimensions.heightMm`) — which is what every
+   *  part was. Read by the 3D room through lib/element and by the editor's side view; the plan draws a
+   *  raised part over the parts under it and measures it as before. The base shape has no z of its
+   *  own: it stands on the floor and is the row's height. */
+  zMm?: number;
+  heightMm?: number;
+  /** A ROUND shape (circle, ellipse) stood up as a body of revolution — a bowl, a vase, a basin's
+   *  tier — from this side profile (lib/element/revolve.ts, REVOLVE_PRESETS or the designer's own
+   *  points). Absent = a straight extrude. The plan is unchanged: the circle is the body's widest
+   *  ring. Ignored on any other shape and on a hollow one. */
+  revolve?: RevolvePoint[];
+  /** How this shape follows a resize of the item — see Pin. Absent = scaled with the whole. */
+  pin?: Pin;
+  /** Laid in copies against the base shape — see Repeat. Absent = this one shape, where it is drawn. */
+  repeat?: Repeat;
+  /** `none` = an outline with no body in the room — see PartBody. */
+  body?: PartBody;
   /** This shape's own surface — a layer of its own, never inherited from the base or another part
    *  (see surfaceLayers, lib/catalog/textures.ts). Absent = the item's flat fill. */
   texture?: Texture;
   textureImage?: TextureImage;
+  /** This shape's OWN colours (2026-11-09, the user: "pick [the look] by shapes") — its fill and
+   *  its line, laid over the item's look (MapAppearance.style) and PINNED: a black counter stays
+   *  black in every shade the item comes in. Absent = the item's colour, as before. Drawn where the
+   *  item is drawn as its outline (ItemSurface, lib/catalog/textures.ts surfaceLayers); the room
+   *  takes the fill where the element model builds the shape. */
+  style?: ElementStyle;
 }
 
 // Map appearance (studio 2D plan). Footprint is always drawn at true scale; `content`
@@ -265,6 +399,9 @@ export interface MapAppearance {
    *  `texture`. Like `texture`, it surfaces the BASE shape; each part carries its own. */
   textureImage?: TextureImage;
   style?: ElementStyle; // free-form footprint look (fill/stroke/dash); absent = the renderer's default
+  /** The BASE shape's own colours — ShapePart.style for the first shape (lib/catalog/shape-list.ts).
+   *  `style` above is the whole item's; this is laid over it on the base shape alone. */
+  baseStyle?: ElementStyle;
   /** A RUG's or a CLOTH's contour (lib/catalog/border.ts): a coloured band inside its edge, a second
    *  one inside a gap, the fringe in a colour of its own. The row's; a placement may override it
    *  (Placement.border). Absent = the drawing it always had. Ignored on every other category. */
@@ -278,6 +415,15 @@ export interface MapAppearance {
    *  drawing is then the OUTSIDE of the band. Absent = solid. Read only for a shape that canHollow;
    *  a row switched to one that cannot keeps nothing of it (the editor drops it). */
   hollow?: HollowSpec;
+  /** The base shape's body of revolution — see ShapePart.revolve. Read only for a round base. */
+  revolve?: RevolvePoint[];
+  /** `none` = the base shape is the item's outline only, with no body in the room — the parts are
+   *  the body (a pergola, a canopy's reach). See PartBody. */
+  body?: PartBody;
+  /** A chandelier's tiers and crystal — see ChandelierSpec. Read for the `chandeliers` picture only. */
+  chandelier?: ChandelierSpec;
+  /** A chuppah's posts, roof and flowers — see ChuppahSpec. Read for the `chuppahs` picture only. */
+  chuppah?: ChuppahSpec;
   parts?: ShapePart[]; // shapes drawn beside the base one, as one item (see ShapePart)
   /** The sides nobody sits on — a head table facing the room, a table against a wall. Indices into
    *  seatSides() (lib/studio/seating.ts) of the item's resolved footprint. The chairs are not lost:

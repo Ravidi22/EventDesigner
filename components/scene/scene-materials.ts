@@ -417,6 +417,20 @@ function baseMaterial(ref: MaterialRef): MeshStandardMaterial {
       mat.roughness = 0.04;
       mat.envMapIntensity = 1.8;
       break;
+    case "crystal":
+      // Cut glass: flat-shaded so every facet catches the room on its own (a six-segment sphere is
+      // an octagon bead), mirror-smooth, a little metallic so the environment shows in it like a
+      // prism's, and lit from within a touch — a crystal in a lit hall is never darker than the air.
+      mat.transparent = true;
+      mat.opacity = ref.opacity ?? 0.78;
+      mat.depthWrite = false;
+      mat.flatShading = true;
+      mat.roughness = 0.02;
+      mat.metalness = 0.45;
+      mat.envMapIntensity = 3;
+      mat.emissive = colour.clone();
+      mat.emissiveIntensity = 0.18;
+      break;
     case "water":
       mat.roughness = 0.08;
       mat.metalness = 0.1;
@@ -467,7 +481,7 @@ function baseMaterial(ref: MaterialRef): MeshStandardMaterial {
     if (finish.metalness !== undefined) mat.metalness = finish.metalness;
     if (finish.env !== undefined) mat.envMapIntensity = finish.env;
   }
-  if (ref.kind !== "glass" && ref.opacity !== undefined && ref.opacity < 1) {
+  if (ref.kind !== "glass" && ref.kind !== "crystal" && ref.opacity !== undefined && ref.opacity < 1) {
     mat.transparent = true;
     mat.opacity = ref.opacity;
   }

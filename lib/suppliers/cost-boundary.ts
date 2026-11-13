@@ -35,6 +35,9 @@ export const CLIENT_FACING = [
   "components/scene",
   "app/(app)/scene",
   "app/v",
+  // The element model: one definition read by the sketch, the print, the room and the client's
+  // surfaces alike (spec 2026-11-07-element-model §3) — no price may ever enter it.
+  "lib/element",
 ];
 
 /** What none of them may reference. Import paths and identifiers, not loose words: matching the

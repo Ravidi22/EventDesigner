@@ -136,6 +136,23 @@ export const DESIGN_ITEMS: DesignItem[] = [
     { name: "לבן", swatch: WHITE },
   ], { categoryFields: { arms: 10 }, styleTags: ["מודרני", "זוהר"], appearance: drawn("circle", "hoop") }),
 
+  // The user's photographs of אמרה (2026-11-08): stacked drum shades, a cascade of crystal rods, an
+  // empire basket. Each is its style's own build (lib/catalog/chandelier.ts) — tiers and strands
+  // are changed in the appearance editor.
+  item("chandelier-drums-100", "אהילי תוף 100", "chandeliers", { diameterMm: 1000, heightMm: 700 }, [
+    { name: "אפרסק", swatch: "#F2C9A8" },
+    { name: "שמנת", swatch: CREAM },
+  ], { categoryFields: { arms: 8 }, styleTags: ["מודרני"], appearance: drawn("circle", "drums") }),
+
+  item("chandelier-prisms-120", "מפל קריסטל 120", "chandeliers", { diameterMm: 1200, heightMm: 1500 }, [
+    { name: "קריסטל שקוף", swatch: GLASS },
+  ], { categoryFields: { arms: 10 }, styleTags: ["זוהר", "קלאסי"], appearance: drawn("circle", "prisms") }),
+
+  item("chandelier-empire-110", "סל קריסטל 110", "chandeliers", { diameterMm: 1100, heightMm: 1100 }, [
+    { name: "קריסטל שקוף", swatch: GLASS },
+    { name: "זהב", swatch: GOLD },
+  ], { categoryFields: { arms: 8 }, styleTags: ["קלאסי", "זוהר"], appearance: drawn("circle", "empire") }),
+
   // A drape is cut to the wall it hangs on, so it carries no width — only its DROP, which is the
   // one number that still tells two rolls of the same curtain apart (see CategoryDef.sizing).
   item("curtain-velvet-400", "וילון קטיפה — נפילה 4.0", "curtains", { heightMm: 4000 }, [

@@ -10,7 +10,7 @@
 // category registry, and decides what a form, a menu and the rail may offer.
 //
 // Run: npm run check:built-in
-import { CATEGORIES, CATEGORY_BY_ID, type CategoryDef } from "./categories";
+import { CATEGORIES, CATEGORY_BY_ID, type CategoryDef, type CategoryGroup, type CategoryGroupId } from "./categories";
 import type { Product } from "./types";
 import { isMain } from "../self-check";
 
@@ -43,10 +43,46 @@ export function isBuiltInCategory(id: string | undefined): boolean {
   return !!id && CATEGORY_BY_ID[id]?.builtIn === true;
 }
 
-/** The categories a NEW row may be filed under. A supplier sells LED strips and makes rows of any
- *  category; a studio has its one built-in row in each built-in-only category instead. */
-export function creatableCategories<C extends Pick<CategoryDef, "id" | "builtIn">>(categories: readonly C[], isSupplier: boolean): C[] {
-  return isSupplier ? [...categories] : categories.filter((c) => c.builtIn !== true);
+/** Is `id` a category only a SUPPLIER files rows in (CategoryDef.supplierOnly — the cut stems a
+ *  florist sells)? A studio's flowers are its arrangements; a stem reaches it as a spec line. */
+export function isSupplierCategory(id: string | undefined): boolean {
+  return !!id && CATEGORY_BY_ID[id]?.supplierOnly === true;
+}
+
+/** What a studio is told when it tries to file a stem (the marketplace's add, an import that skipped
+ *  the form). */
+export const SUPPLIER_CATEGORY_REFUSAL = "פרחים חתוכים לא נוספים לקטלוג כפריט — בוחרים אותם בשורות המפרט של סידור פרחים.";
+
+/** The categories a NEW row may be filed under. A supplier sells LED strips and cut roses and makes
+ *  rows of any category; a studio has its one built-in row in each built-in-only category instead,
+ *  and no row at all in a supplier's. */
+export function creatableCategories<C extends Pick<CategoryDef, "id" | "builtIn" | "supplierOnly">>(categories: readonly C[], isSupplier: boolean): C[] {
+  return isSupplier ? [...categories] : categories.filter((c) => c.builtIn !== true && c.supplierOnly !== true);
+}
+
+/** The fine categories a catalog's filter lets its organisation narrow to: every one for a supplier;
+ *  for a studio, a supplier's category is left out — unless a row of its own is filed there (a copy
+ *  from before), which still has to be findable. */
+export function shownCategories<C extends Pick<CategoryDef, "id" | "supplierOnly">>(
+  categories: readonly C[],
+  isSupplier: boolean,
+  products: readonly Pick<Product, "category">[],
+): C[] {
+  if (isSupplier) return [...categories];
+  const used = new Set(products.map((p) => p.category));
+  return categories.filter((c) => c.supplierOnly !== true || used.has(c.id));
+}
+
+/** The departments a catalog's filter offers, by the same rule: a department made only of a
+ *  supplier's categories (פרחים וירק) is not a studio's, unless one of its rows is. */
+export function shownGroups<G extends Pick<CategoryGroup, "id">>(
+  groups: readonly G[],
+  isSupplier: boolean,
+  products: readonly Pick<Product, "category">[],
+): G[] {
+  if (isSupplier) return [...groups];
+  const shown = new Set(shownCategories(CATEGORIES, false, products).map((c) => c.group));
+  return groups.filter((g) => shown.has(g.id as CategoryGroupId));
 }
 
 /** The categories the product drawer offers for `product`: what a new row may be, plus — for a row
@@ -96,6 +132,21 @@ if (isMain(import.meta.url)) {
   assert(!studio.includes("led-strips") && !studio.includes("stage-skirts") && !studio.includes("sails"), "a studio makes no row in a built-in-only category");
   assert(studio.includes("rugs") && studio.includes("curtains") && studio.includes("tables"), "…but rugs and curtains stay creatable, beside their built-in");
   assert(creatableCategories(CATEGORIES, true).length === CATEGORIES.length, "a supplier makes rows of every category");
+
+  // A supplier's categories (the cut stems): never a studio's to file in, see or browse by.
+  assert(isSupplierCategory("flowers") && isSupplierCategory("greenery") && isSupplierCategory("dried-flowers"), "the three stem categories are a supplier's");
+  assert(!isSupplierCategory("flower-arrangements") && !isSupplierCategory("centerpieces"), "…an arrangement and a centrepiece are the studio's");
+  assert(!studio.includes("flowers") && !studio.includes("greenery") && !studio.includes("dried-flowers"), "a studio makes no stem row");
+  assert(studio.includes("flower-arrangements"), "…but files its arrangements as ever");
+  const groups = [{ id: "grp-flowers" }, { id: "grp-table-design" }] as const;
+  assert(JSON.stringify(shownGroups(groups, false, []).map((g) => g.id)) === '["grp-table-design"]', "a studio with no stem rows is not shown the stems department");
+  assert(shownGroups(groups, false, [{ category: "dried-flowers" }]).length === 2, "…a studio holding a copy from before still finds it");
+  assert(shownGroups(groups, true, []).length === 2, "…a supplier sees every department");
+  const fine = shownCategories(CATEGORIES, false, []).map((c) => c.id);
+  assert(!fine.includes("flowers") && fine.includes("flower-arrangements") && fine.includes("tables"), "the fine list hides the stems and keeps the rest");
+  assert(shownCategories(CATEGORIES, false, [{ category: "flowers" }]).some((c) => c.id === "flowers"), "…unless a row is filed there");
+  assert(!offeredCategories(CATEGORIES, { isSupplier: false, product: { id: "", category: "flowers" } }).some((c) => c.id === "flowers"), "the drawer offers a NEW row no stem category");
+  assert(offeredCategories(CATEGORIES, { isSupplier: false, product: { id: "old", category: "flowers" } }).some((c) => c.id === "flowers"), "…an old copy keeps its own");
 
   const ledCopy = { id: "x", category: "led-strips" };
   assert(offeredCategories(CATEGORIES, { isSupplier: false, product: ledCopy }).some((c) => c.id === "led-strips"), "an existing row in a built-in category keeps its own category");

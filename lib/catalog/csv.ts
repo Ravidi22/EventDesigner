@@ -28,6 +28,8 @@ export interface CsvCategory {
   defaultLayer: Layer;
   /** A built-in-only category (CategoryDef.builtIn): a studio's import refuses rows in it. */
   builtIn?: true;
+  /** A supplier's category (CategoryDef.supplierOnly — cut stems): a studio's import refuses rows in it. */
+  supplierOnly?: true;
 }
 
 /** Split a CSV into rows of fields, per RFC 4180: a field may be quoted, and a quoted field may
@@ -77,19 +79,19 @@ export function splitCsvRows(text: string): string[][] {
 }
 
 export function parseCsvProducts(text: string, categories: CsvCategory[], makeId: () => string): Product[] {
-  return parseCsvImport(text, categories, makeId, { refuseBuiltIn: false }).products;
+  return parseCsvImport(text, categories, makeId, { isSupplier: true }).products;
 }
 
 /** The import, with the rows it REFUSES named: a studio's built-in-only categories (an LED strip, a
- *  stage skirt — lib/catalog/built-in.ts) take no row by hand, so a line filed under one is left out
- *  with a sentence saying which line and why, rather than silently re-filed under another category.
- *  `refuseBuiltIn` is false for a supplier, which sells those things. Line numbers are the sheet's
- *  own (the header is line 1). */
+ *  stage skirt — lib/catalog/built-in.ts) take no row by hand, and a supplier's categories (a cut
+ *  stem) take none from a studio at all, so a line filed under one is left out with a sentence saying
+ *  which line and why, rather than silently re-filed under another category. `isSupplier` lifts both:
+ *  a supplier sells those things. Line numbers are the sheet's own (the header is line 1). */
 export function parseCsvImport(
   text: string,
   categories: CsvCategory[],
   makeId: () => string,
-  { refuseBuiltIn }: { refuseBuiltIn: boolean },
+  { isSupplier }: { isSupplier: boolean },
 ): { products: Product[]; refused: string[] } {
   const rows = splitCsvRows(text);
   const refused: string[] = [];
@@ -105,8 +107,12 @@ export function parseCsvImport(
     });
     if (!row.name) continue;
     const cat = byLabel.get(row.category) ?? byId.get(row.category) ?? categories[0];
-    if (refuseBuiltIn && cat.builtIn) {
+    if (!isSupplier && cat.builtIn) {
       refused.push(`שורה ${index + 2} (${row.name}): "${cat.label}" היא קטגוריה מובנית — יש בקטלוג פריט אחד כזה, ועורכים אותו שם.`);
+      continue;
+    }
+    if (!isSupplier && cat.supplierOnly) {
+      refused.push(`שורה ${index + 2} (${row.name}): "${cat.label}" היא קטגוריה של ספקים — פרחים נבחרים בשורות המפרט של סידור פרחים.`);
       continue;
     }
     const num = (v?: string) => (v && !isNaN(parseFloat(v)) ? Math.round(parseFloat(v) * 10) : undefined);
@@ -260,13 +266,18 @@ if (isMain(import.meta.url)) {
   assert(english[0].category === "tablecloths" && english[0].unitPrice === 22, "english header + category id");
 
   // ── a studio's built-in-only categories (lib/catalog/built-in.ts) ─────────────────────────────
-  const withKit: CsvCategory[] = [...cats, { id: "led-strips", label: "פסי לד", defaultLayer: "ceiling", builtIn: true }];
-  const kitSheet = "שם,קטגוריה\nפס לד חם,פסי לד\nכיסא,כיסאות\n";
-  const studio = parseCsvImport(kitSheet, withKit, id, { refuseBuiltIn: true });
-  assert(studio.products.length === 1 && studio.products[0].category === "chairs", "a studio's import leaves out the built-in category's row…");
-  assert(studio.refused.length === 1 && studio.refused[0].includes("שורה 2") && studio.refused[0].includes("פס לד חם"), "…and names the line and the item");
-  const supplier = parseCsvImport(kitSheet, withKit, id, { refuseBuiltIn: false });
-  assert(supplier.products.length === 2 && supplier.refused.length === 0, "a supplier imports it like any row");
+  const withKit: CsvCategory[] = [
+    ...cats,
+    { id: "led-strips", label: "פסי לד", defaultLayer: "ceiling", builtIn: true },
+    { id: "flowers", label: "פרחים", defaultLayer: "table", supplierOnly: true },
+  ];
+  const kitSheet = "שם,קטגוריה\nפס לד חם,פסי לד\nכיסא,כיסאות\nורד אדום,פרחים\n";
+  const studio = parseCsvImport(kitSheet, withKit, id, { isSupplier: false });
+  assert(studio.products.length === 1 && studio.products[0].category === "chairs", "a studio's import leaves out the built-in category's row and the stem…");
+  assert(studio.refused.length === 2 && studio.refused[0].includes("שורה 2") && studio.refused[0].includes("פס לד חם"), "…and names the line and the item");
+  assert(studio.refused[1].includes("שורה 4") && studio.refused[1].includes("ורד אדום") && studio.refused[1].includes("ספקים"), "…the stem's line says the category is a supplier's");
+  const supplier = parseCsvImport(kitSheet, withKit, id, { isSupplier: true });
+  assert(supplier.products.length === 3 && supplier.refused.length === 0, "a supplier imports every row");
 
   // ── the quoted forms the naive split used to break on ────────────────────────────────────────
   const tricky = parseCsvProducts('שם,מפרט\n"רהיט ""מיוחד""","שתי\nשורות"\n', cats, id);
@@ -314,7 +325,7 @@ if (isMain(import.meta.url)) {
   assert(out[1][3] === "40" && out[1][11] === "500", "stock value is quantity × cost");
   assert(out[2][3] === "" && out[2][11] === "", "an uncounted item writes empty, never 0");
   assert(out[2][7] === "", "a zero height is no measurement, not a measurement of nought");
-  assert(out[1][2] === "בבעלות" && out[2][2] === "בהשכרה", "stock kind, including the absent default");
+  assert(out[1][2] === STOCK_KIND_LABEL.owned && out[2][2] === STOCK_KIND_LABEL.rented, "stock kind, including the absent default");
   assert(out[2][12] === "טקסטיל בע״מ", "the supplier id resolves to a name");
   assert(out[2][13] === "גליל" && out[2][14] === "1", "an order unit with no factor is one for one");
   assert(out[1][13] === "" && out[1][14] === "", "no order unit, no factor");

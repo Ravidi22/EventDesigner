@@ -66,3 +66,6 @@ next-env.d.ts
 
 # brainstorming mockups (superpowers visual companion)
 .superpowers/
+
+# the element model's parity sheet (npm run parity-sheet): a generated page, regenerable
+/parity-sheet.html

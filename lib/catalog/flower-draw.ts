@@ -16,6 +16,7 @@
 // memoised per spec object (the spec is cached per product/shade/size upstream), so a plan with
 // sixty arrangements lays each product out once. `npm run check:flower-draw`.
 import { FLOWER_KIND_BY_ID, type FlowerKindId } from "./flower-kinds";
+import type { RevolvePoint } from "./types";
 import { isMain } from "../self-check";
 
 export type FlowerForm = "dome" | "cushion" | "garden" | "cascade" | "runner" | "bud" | "single";
@@ -74,7 +75,80 @@ export interface FlowerDrawSpec {
   /** The shade picked for it (its variant's swatch), or the row's fill. Absent = the default blush. */
   shade?: string;
   seed: number;
+  /** The arrangement's ENVELOPE seen from the side — the base shape's body ("צללית",
+   *  MapAppearance.revolve), fractions of the radius and the height. The plan (seen from above) is
+   *  unchanged by it; the room lays the heads on its top, fills it with the mass and dresses its
+   *  side (lib/scene/flowers.ts). Absent = the form's own dome. Never a solid. */
+  profile?: RevolvePoint[];
 }
+
+/** The envelopes the editor offers as tiles (the none tile is the form's own dome), bottom to top,
+ *  each reaching r = 1 — the plan's circle — somewhere. From the high-end pieces the round of
+ *  2026-11-09 was built against: a pomander ball on a stand, a flower tower, a blossom tree on its
+ *  trunk, a Victorian cone, a low cushion, a fan opening out of a narrow vessel. */
+export type FlowerProfileForm = "ball" | "tower" | "tree" | "cone" | "cushion" | "fan";
+
+export const FLOWER_PROFILE_FORMS: FlowerProfileForm[] = ["ball", "tower", "tree", "cone", "cushion", "fan"];
+
+export const FLOWER_PROFILE_LABEL: Record<FlowerProfileForm, string> = {
+  ball: "כדור",
+  tower: "מגדל",
+  tree: "עץ",
+  cone: "פירמידה",
+  cushion: "כרית",
+  fan: "מניפה",
+};
+
+export const FLOWER_PROFILES: Record<FlowerProfileForm, RevolvePoint[]> = {
+  ball: [
+    { r: 0.18, z: 0 },
+    { r: 0.62, z: 0.08 },
+    { r: 0.9, z: 0.25 },
+    { r: 1, z: 0.5 },
+    { r: 0.9, z: 0.75 },
+    { r: 0.62, z: 0.92 },
+    { r: 0.02, z: 1 },
+  ],
+  tower: [
+    { r: 0.75, z: 0 },
+    { r: 0.85, z: 0.1 },
+    { r: 0.95, z: 0.5 },
+    { r: 1, z: 0.85 },
+    { r: 0.7, z: 0.96 },
+    { r: 0.02, z: 1 },
+  ],
+  tree: [
+    { r: 0.07, z: 0 },
+    { r: 0.07, z: 0.42 },
+    { r: 0.55, z: 0.5 },
+    { r: 0.92, z: 0.62 },
+    { r: 1, z: 0.76 },
+    { r: 0.82, z: 0.9 },
+    { r: 0.45, z: 0.98 },
+    { r: 0.02, z: 1 },
+  ],
+  cone: [
+    { r: 1, z: 0 },
+    { r: 0.72, z: 0.33 },
+    { r: 0.42, z: 0.67 },
+    { r: 0.12, z: 0.95 },
+    { r: 0.02, z: 1 },
+  ],
+  cushion: [
+    { r: 1, z: 0 },
+    { r: 0.98, z: 0.45 },
+    { r: 0.85, z: 0.82 },
+    { r: 0.5, z: 0.98 },
+    { r: 0.02, z: 1 },
+  ],
+  fan: [
+    { r: 0.3, z: 0 },
+    { r: 0.55, z: 0.4 },
+    { r: 0.9, z: 0.8 },
+    { r: 1, z: 0.93 },
+    { r: 0.02, z: 1 },
+  ],
+};
 
 export type Point = { x: number; y: number };
 

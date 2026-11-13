@@ -1,6 +1,9 @@
 "use client";
 
+import { useId, type ReactNode } from "react";
 import type { Product } from "@/lib/catalog/types";
+import { chandelierDrawOf } from "@/lib/catalog/chandelier";
+import { chuppahDrawOf } from "@/lib/catalog/chuppah";
 import { resolveFootprint, resolveContent, footprintBounds, type ResolvedContent } from "@/lib/studio/footprint";
 import { labelAnchor } from "@/lib/studio/label-anchor";
 import type { Point } from "@/lib/design-document/types";
@@ -8,7 +11,7 @@ import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
 import { isDark, resolveStyle } from "@/lib/element-style";
 import { FootprintShape } from "@/components/footprint-shape";
 import { ClothDrape, CLOTH_DROP_MM, DrapePleats, ItemSymbol, RugPattern, SeatChair } from "@/components/item-symbol";
-import { ItemSurface } from "@/components/surface-fill";
+import { ItemSurface, edgeFootprint } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { CATEGORY_BY_ID, anchorOf } from "@/lib/catalog/categories";
 import { seatsAround, CHAIR_D_MM, CHAIR_W_MM } from "@/lib/studio/seating";
@@ -23,10 +26,9 @@ import { borderOf } from "@/lib/catalog/border";
 import { isLedStrip } from "@/lib/venues/led";
 import { isCeilingClothCategory } from "@/lib/studio/ceiling-cloth";
 import { CeilingDrapeSymbol, SailSymbol } from "@/components/ceiling-cloth";
+import { Dim, type DimTone } from "@/components/venue-dims";
 
 export function AppearancePreview({ product, className }: { product: Product; className?: string }) {
-  const f = resolveFootprint(product);
-  const content = resolveContent(product);
   const cat = CATEGORY_BY_ID[product.category];
   // The colour the plan draws it in when nothing else says: its first shade.
   const swatch = product.variants.find((v) => !v.archived && v.swatch)?.swatch;
@@ -63,6 +65,29 @@ export function AppearancePreview({ product, className }: { product: Product; cl
     );
   }
 
+  const { art, w, h, reach } = planArt(product);
+  const pad = Math.max(w, h) * 0.12 + 80 + reach;
+  const vb = `${-(w / 2 + pad)} ${-(h / 2 + pad)} ${w + pad * 2} ${h + pad * 2}`;
+  return (
+    <svg viewBox={vb} className={"text-ink-soft " + (className ?? "")} role="img" aria-label="תצוגה מקדימה של המראה על התוכנית">
+      {art}
+    </svg>
+  );
+}
+
+/** The categories whose picture is not drawn from a footprint at all — an LED strip, a sail or a
+ *  ceiling drape, a curtain: each previews as a length of itself in a frame of its own. */
+const ownFrame = (product: Product) =>
+  isLedStrip(product) || isCeilingClothCategory(product.category) || CATEGORY_BY_ID[product.category]?.anchor === "wall";
+
+/** What the plan draws of an item drawn from its footprint, in plan mm about (0,0): the shape or the
+ *  category's picture, a table's chairs, a cloth's fall — and how far beyond the footprint's box that
+ *  reaches (`reach`), so a frame round it can leave room. The card's preview and the drawer's figured
+ *  preview (PlanPreview) both frame this one drawing. */
+function planArt(product: Product): { art: ReactNode; w: number; h: number; reach: number; round: boolean } {
+  const f = resolveFootprint(product);
+  const content = resolveContent(product);
+  const swatch = product.variants.find((v) => !v.archived && v.swatch)?.swatch;
   // Bounds in mm, centered on (0,0) to match the map's local frame. "currentColor" is the
   // pass-through default: with no style set, resolveStyle hands it straight back and the
   // wrapping <svg>'s text-ink-soft class still drives it exactly as before.
@@ -94,10 +119,8 @@ export function AppearancePreview({ product, className }: { product: Product; cl
   const ring = seats > 0 ? seatsAround(f, seats, undefined, product.appearance?.blockedSides ?? []) : [];
   const reach = ring.length ? CHAIR_D_MM + 120 : cloth ? CLOTH_DROP_MM : 0;
 
-  const pad = Math.max(w, h) * 0.12 + 80 + reach;
-  const vb = `${-(w / 2 + pad)} ${-(h / 2 + pad)} ${w + pad * 2} ${h + pad * 2}`;
-  return (
-    <svg viewBox={vb} className={"text-ink-soft " + (className ?? "")} role="img" aria-label="תצוגה מקדימה של המראה על התוכנית">
+  const art = (
+    <>
       {ring.map((seat, i) => (
         <g key={i} transform={`translate(${seat.x} ${seat.y}) rotate(${seat.facingDeg})`}>
           <SeatChair widthMm={CHAIR_W_MM} depthMm={CHAIR_D_MM} />
@@ -115,6 +138,7 @@ export function AppearancePreview({ product, className }: { product: Product; cl
           overhead={product.layer === "ceiling"}
           chairStyle={chairStyleOf(product)}
           drawStyle={drawStyleOf(product)}
+          chandelier={chandelierDrawOf(product.appearance, product.variants)} chuppah={chuppahDrawOf(product.appearance)}
           postMm={pergolaPostOf(product)}
           rise={climbRise(product)}
           border={symbol === "runner" ? borderOf(undefined, product) : undefined}
@@ -129,7 +153,10 @@ export function AppearancePreview({ product, className }: { product: Product; cl
           {surfaced && (
             <>
               <ItemSurface appearance={product.appearance} footprint={f} color={product.appearance?.style?.fill ?? swatch} seed={product.id} />
-              <FootprintShape footprint={f} fill="none" stroke={resolved.stroke} strokeWidth={resolved.strokeWidth} vectorEffect="non-scaling-stroke" />
+              {(() => {
+                const edged = edgeFootprint(product.appearance, f);
+                return edged && <FootprintShape footprint={edged} fill="none" stroke={resolved.stroke} strokeWidth={resolved.strokeWidth} vectorEffect="non-scaling-stroke" />;
+              })()}
             </>
           )}
           {product.category === "rugs" && f.kind === "rect" && <RugPattern w={f.widthMm} h={f.depthMm} border={borderOf(undefined, product)} />}
@@ -137,6 +164,76 @@ export function AppearancePreview({ product, className }: { product: Product; cl
           {!cloth && <PlanContent content={content} w={w} h={h} at={labelAnchor(f)} />}
         </>
       )}
+    </>
+  );
+  return { art, w, h, reach, round: f.kind === "circle" };
+}
+
+/** The product drawer's preview (2026-11-09, the user's redesign: "the plan preview leads the form at
+ *  full width, with the measurements typed right under it"): the item drawn to scale on a faint grid,
+ *  its width and depth figured outside it — a diameter for a round one — so the numbers typed under
+ *  it are seen landing. Framed for a 374×200 box (the drawer's card), which it fills edge to edge.
+ *
+ *  `ghost`: nothing measured yet — the shape the category seeds is drawn dashed with "?" figures, in
+ *  `tone` (alert once a save has been refused for it). */
+const PREVIEW_W = 374;
+const PREVIEW_H = 200;
+const GRID_STEPS = [100, 200, 500, 1000, 2000, 5000];
+
+export function PlanPreview({ product, ghost, tone = "ink", className }: { product: Product; ghost?: "round" | "box"; tone?: DimTone; className?: string }) {
+  const gridId = useId();
+  if (ownFrame(product)) return <AppearancePreview product={product} className={className} />;
+  const drawn = ghost ? null : planArt(product);
+  const w = drawn?.w ?? (ghost === "round" ? 1200 : 1600);
+  const h = drawn?.h ?? (ghost === "round" ? 1200 : 1000);
+  const reach = drawn?.reach ?? 0;
+  const round = drawn ? drawn.round : ghost === "round";
+  // The drawing sits in the part of the box nothing else uses: under the width figure (top ~40px),
+  // left of the depth figure (end ~34px), and above the "עריכת המראה" pill along the bottom (~48px).
+  const mpp = Math.max((w + 2 * reach) / (PREVIEW_W - 84), (h + 2 * reach) / (PREVIEW_H - 92), 0.5);
+  const mm = (px: number) => px * mpp;
+  const vw = PREVIEW_W * mpp;
+  const vh = PREVIEW_H * mpp;
+  const cx = mm(10);
+  const cy = mm(6);
+  const grid = GRID_STEPS.find((g) => g / mpp >= 14) ?? 10000;
+  const gap = mm(14);
+  const top = -h / 2 - reach - gap;
+  const side = w / 2 + reach + gap;
+  const cm = (v: number) => Math.round(v / 10);
+  return (
+    <svg
+      viewBox={`${cx - vw / 2} ${cy - vh / 2} ${vw} ${vh}`}
+      className={"text-ink-soft " + (className ?? "")}
+      role="img"
+      aria-label="תצוגה מקדימה של המראה על התוכנית"
+    >
+      <defs>
+        <pattern id={gridId} patternUnits="userSpaceOnUse" width={grid} height={grid}>
+          <path d={`M ${grid} 0 L 0 0 0 ${grid}`} fill="none" stroke="var(--color-border-soft)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        </pattern>
+      </defs>
+      {/* Three frames wide, so a box a little wider than 374px still shows the grid edge to edge. */}
+      <rect x={cx - vw * 1.5} y={cy - vh * 1.5} width={vw * 3} height={vh * 3} fill={`url(#${gridId})`} />
+      {drawn ? (
+        drawn.art
+      ) : (
+        <>
+          <path
+            d={round ? `M ${-w / 2} 0 A ${w / 2} ${h / 2} 0 1 0 ${w / 2} 0 A ${w / 2} ${h / 2} 0 1 0 ${-w / 2} 0 Z` : `M ${-w / 2} ${-h / 2} H ${w / 2} V ${h / 2} H ${-w / 2} Z`}
+            fill="var(--color-inset)"
+            stroke="var(--color-faint)"
+            strokeWidth={1.5}
+            strokeDasharray="6 4"
+            vectorEffect="non-scaling-stroke"
+          />
+          <text x={0} y={0} textAnchor="middle" dominantBaseline="central" fill="var(--color-muted)" style={{ fontSize: mm(11) }}>
+            הקלידו מידות, או ערכו בעורך
+          </text>
+        </>
+      )}
+      <Dim a={{ x: -w / 2, y: top }} b={{ x: w / 2, y: top }} text={`${round ? `⁦⌀${drawn ? cm(w) : "?"}⁩` : drawn ? cm(w) : "?"} ס״מ`} mm={mm} tone={tone} rtl />
+      {!round && <Dim a={{ x: side, y: -h / 2 }} b={{ x: side, y: h / 2 }} text={`${drawn ? cm(h) : "?"} ס״מ`} mm={mm} tone={tone} rtl />}
     </svg>
   );
 }

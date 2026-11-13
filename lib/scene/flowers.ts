@@ -22,9 +22,10 @@
 // over further), spun by its seeded `rot` so no two are stamped. The mass under them is the shade
 // gone dark and green — the depth between flowers — not a pale ball, and two rings of the main
 // bloom dress its side, where the plan (seen from above) lays none.
-import { FORMS, type FlowerDrawSpec, type FlowerItem, composeFlowers } from "@/lib/catalog/flower-draw";
+import { FLOWER_PROFILES, FORMS, type FlowerDrawSpec, type FlowerItem, composeFlowers } from "@/lib/catalog/flower-draw";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import type { FlowerKindId } from "@/lib/catalog/flower-kinds";
+import { profileAt, profileTop } from "@/lib/element/revolve";
 import { isMain } from "../self-check";
 import type { InstanceRequest, ItemBuild } from "./collect";
 import { applyTransform } from "./frame";
@@ -78,6 +79,18 @@ const RING_SPACING = 2.05;
  *  seeded jitter of ± this. */
 const MAX_TILT = 105;
 const TILT_JITTER = 9;
+/** Inside a drawn envelope a head may look further down: under a ball's equator, under a crown. */
+const MAX_TILT_ENVELOPE = 160;
+/** Where an envelope is narrower than this share of its widest it holds no flowers: a neck, a trunk. */
+const NECK_SHARE = 0.22;
+/** A neck is this many stems, in this woody colour; the side is dressed with at most this many rings. */
+const TRUNK_STEMS = 7;
+const TRUNK = "#6f5b45";
+const MAX_RINGS = 14;
+/** The side's rings go down until the envelope is this narrow: under a ball, a lens of a cloud. */
+const RING_MIN_SHARE = 0.1;
+/** A side this steep (degrees from upright) is dressed by rings even where the plan's heads reach. */
+const STEEP_DEG = 50;
 
 /** `a` a share `t` of the way to `b`, then scaled by `k` (0–1 darker). */
 function mixHex(a: string, b: string, t: number, k = 1): string {
@@ -340,7 +353,16 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
   const greenCol = items.find((it): it is Green => it.t === "green")?.col ?? LEAF;
   const build: ItemBuild = { parts: [], material: foliageMaterial(greenCol), instanced: [], emitters: [] };
 
-  const dome = (x: number, y: number): number => H * Math.sqrt(Math.max(0, 1 - (Math.hypot(x - cx, y) / rim) ** 2));
+  // The ENVELOPE the designer drew (the base shape's "צללית", spec.profile — lib/scene/items.ts
+  // PROFILE_IS_PICTURE): the heads lie on its top surface and lean with its slope, the mass fills
+  // it, rings of the main bloom dress its side and underside, a neck too thin for flowers is a bundle
+  // of stems. A runner, a bud vase and a single stem have no envelope; absent = the dome, as always.
+  const P = F && spec.profile && spec.profile.length >= 2 ? spec.profile : undefined;
+  const topOf = (d: number) => (P ? (profileTop(P, d / rim) ?? profileTop(P, 1)) : null);
+  const dome = (x: number, y: number): number => {
+    if (!P) return H * Math.sqrt(Math.max(0, 1 - (Math.hypot(x - cx, y) / rim) ** 2));
+    return H * (topOf(Math.hypot(x - cx, y))?.z ?? 0.5);
+  };
   const inFall = (it: Head) => it.x >= fallFrom - R * 0.06;
   const fallT = (it: Head) => clamp((it.x - fallFrom) / (R * 0.72), 0, 1);
   /** The height of a head's CENTRE. */
@@ -354,7 +376,7 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
       return start + (H * FALL_END - start) * fallT(it);
     }
     const z = dome(it.x, it.y);
-    return form === "cushion" ? H - (H - z) * CUSHION_FLATTEN : z;
+    return form === "cushion" && !P ? H - (H - z) * CUSHION_FLATTEN : z;
   };
   /** Which way a head looks: out along `outRad` on the plan, leant `tiltDeg` from upright — the
    *  normal of the surface it sits on — give or take a seeded few degrees. */
@@ -368,10 +390,18 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
     // The dome is (d/rim)² + (z/H)² = 1; its normal leans atan((d/rim²) / (z/H²)) from upright. A
     // cushion's slope is CUSHION_FLATTEN of the dome's.
     const d = Math.hypot(it.x - cx, it.y);
+    if (P) {
+      // The envelope's outward normal there: (dz·H, −dr·R) of its run (lib/element/revolve.ts).
+      const top = topOf(d);
+      return { outRad: Math.atan2(it.y, it.x - cx), tiltDeg: top ? deg(Math.atan2(top.dz * H, -top.dr * rim)) : 90 };
+    }
     const lean = Math.atan2(d / (rim * rim), Math.max(z, H * 0.05) / (H * H));
     return { outRad: Math.atan2(it.y, it.x - cx), tiltDeg: deg(form === "cushion" ? Math.atan(CUSHION_FLATTEN * Math.tan(lean)) : lean) };
   };
-  const leafZ = form === "runner" ? H * 0.3 : form === "bud" ? H * 0.6 : H * LEAF_Z;
+  // Inside an envelope the sprigs and the orchids leave it at its widest ring — a tree's crown, not
+  // halfway up its trunk.
+  const wideZ = P ? H * Array.from({ length: 51 }, (_, i) => i / 50).reduce((best, z) => (profileAt(P, z) > profileAt(P, best) + 1e-9 ? z : best), 0) : 0;
+  const leafZ = P ? wideZ : form === "runner" ? H * 0.3 : form === "bud" ? H * 0.6 : H * LEAF_Z;
 
   /** A head with its centre at `z`, looking out along `outRad` leant `tiltDeg`; spun by its `rot`.
    *  A ball of florets has no face to turn and only spins. */
@@ -379,7 +409,7 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
     const part = headPart(it);
     const jitter = ((it.rot * 5.17) % 1) - 0.5;
     const at: Transform = part.shape === "bloom" ? { ...transform(vec3(it.x, it.y, z), deg(look.outRad) - 90), spinDeg: deg(it.rot) } : transform(vec3(it.x, it.y, z), deg(it.rot));
-    const tilt = clamp(look.tiltDeg + jitter * 2 * TILT_JITTER, 0, MAX_TILT);
+    const tilt = clamp(look.tiltDeg + jitter * 2 * TILT_JITTER, 0, P ? MAX_TILT_ENVELOPE : MAX_TILT);
     if (part.shape === "bloom" && tilt > 0.5) at.tiltDeg = Math.round(tilt * 10) / 10;
     const req: InstanceRequest = { key: headKey(it.kind, it.col, it.r), parts: [part], material: petal(it.col), tag, at, castShadow: false };
     if (it.t === "fill") req.lod = { tier: "near", beyondMm: FILL_LOD_MM };
@@ -425,7 +455,83 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
   // scoop of ice cream under the heads, a dark grey one as a bowling ball (both 2026-10-27); a bright
   // GREEN one, bare, as a camouflage egg (2026-10-24); heads alone floated over the vase like a bunch
   // of balloons.
-  if (F) {
+  if (F && P) {
+    // The envelope filled: clumps stacked up its axis wherever it is wide enough to hold flowers,
+    // each as wide as the envelope there, under the leaf cards — a ball is round, a tower tall, a
+    // tree's crown up on its neck — and below them a neck too thin for flowers is a bundle of stems.
+    const wide = (z: number) => profileAt(P, z) >= NECK_SHARE;
+    let zA = 0;
+    while (zA < 1 && !wide(zA)) zA += 0.02;
+    let zB = 1;
+    while (zB > zA && !wide(zB)) zB -= 0.02;
+    const span = Math.max(0.02, zB - zA) * H;
+    const levels = clamp(Math.round(span / (rim * 0.55)), 1, 8);
+    const gap = span / levels;
+    const masses: Extract<Part, { shape: "blob" }>[] = [];
+    for (let k = 0; k < levels; k++) {
+      const zc = zA * H + gap * (k + 0.5);
+      const r = Math.max(rim * 0.12, rim * MASS_SHARE * profileAt(P, zc / H));
+      masses.push({ shape: "blob", r, at: vec3(cx, 0, zc), seed: spec.seed + k, squash: clamp((gap * 0.62) / r, 0.35, 1.3), lumps: 15, rough: 0.1, detail: 3, material: petal(mixHex(greenCol, MASS_DEEP, MASS_GREEN, MASS_DARK)) });
+    }
+    build.parts.push(...masses);
+    const widest = Math.max(...masses.map((m) => m.r));
+    const cards = leafCards(masses, clamp(widest * CARD_SHARE, 70, 180), spec.seed);
+    if (cards.length) build.parts.push({ shape: "leaves", at: vec3(0, 0, 0), centre: vec3(cx, 0, (zA + zB) * H / 2), cards, material: { colour: greenCol, kind: "leaves" } });
+    if (zA > 0.06) {
+      const spread = rim * Math.max(0.03, profileAt(P, 0)) * 0.7;
+      const r = clamp(rim * 0.025, 4, 14);
+      for (let k = 0; k < TRUNK_STEMS; k++) {
+        const a = (2 * Math.PI * k) / TRUNK_STEMS + spec.seed;
+        const s = k === 0 ? 0 : spread * (0.4 + 0.6 * ((k * 0.618) % 1));
+        build.parts.push({ shape: "cylinder", rTop: r * 0.8, rBottom: r, h: zA * H + gap * 0.4, at: vec3(cx + s * Math.cos(a), s * Math.sin(a), 0), segments: 6, material: { colour: TRUNK, kind: "matte" } });
+      }
+    }
+    // …and its side dressed from where the plan's heads stop down to the neck: a ring of the main
+    // bloom every RING_SPACING heads along the envelope's side, each looking out along its normal —
+    // under a ball's equator they look down.
+    const heads = items.filter((it): it is Head => it.t === "head");
+    if (heads.length) {
+      const tally = new Map<string, { it: Head; n: number }>();
+      for (const it of heads) {
+        const k = headKey(it.kind, it.col, it.r);
+        tally.set(k, { it, n: (tally.get(k)?.n ?? 0) + 1 });
+      }
+      const main = [...tally.values()].sort((x, y) => y.n - x.n)[0].it;
+      const N = 64;
+      const side = Array.from({ length: N + 1 }, (_, i) => ({ r: profileAt(P, i / N) * rim, z: (i / N) * H }));
+      // From where the plan's heads stop — or higher, where the side turns steep: the plan lays its
+      // heads by the area seen from above, which a steep side stretches thin (a cone, a tower's top).
+      let steep = 0;
+      for (let i = N; i > 0; i--) {
+        if (deg(Math.atan2(side[i].z - side[i - 1].z, -(side[i].r - side[i - 1].r))) >= STEEP_DEG) {
+          steep = side[i].z;
+          break;
+        }
+      }
+      const cover = Math.max((profileTop(P, (R * F.core) / rim)?.z ?? 1) * H, steep) - main.r;
+      const step = RING_SPACING * main.r * 0.9;
+      let along = step * 0.5;
+      let rings = 0;
+      for (let i = N; i > 0 && rings < MAX_RINGS; i--) {
+        const hi = side[i];
+        const lo = side[i - 1];
+        if (lo.z > cover) continue;
+        along += Math.hypot(hi.r - lo.r, hi.z - lo.z);
+        if (along < step) continue;
+        along = 0;
+        if (lo.r < RING_MIN_SHARE * rim) break;
+        const tilt = deg(Math.atan2(hi.z - lo.z, -(hi.r - lo.r)));
+        const ring = lo.r * 0.97;
+        const n = clamp(Math.floor(((2 * Math.PI * ring) / (RING_SPACING * main.r)) * 0.9), 5, 48);
+        const phase = (rings % 2) * 0.5;
+        for (let k = 0; k < n; k++) {
+          const ang = (2 * Math.PI * (k + phase)) / n;
+          head({ ...main, x: cx + ring * Math.cos(ang), y: ring * Math.sin(ang), rot: ang * 3.7 + k + rings }, lo.z, { outRad: ang, tiltDeg: tilt });
+        }
+        rings++;
+      }
+    }
+  } else if (F) {
     const massTop = H * (form === "cushion" ? 0.78 : 0.8);
     const a = (massTop + MASS_SINK * H) / 2;
     const r = rim * MASS_SHARE;
@@ -486,7 +592,7 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
         leaf(it);
         break;
       case "trail":
-        trail(it, form === "bud" ? H * BUD_HEAD : H * 0.75);
+        trail(it, P ? Math.max(wideZ, H * 0.4) : form === "bud" ? H * BUD_HEAD : H * 0.75);
         break;
       case "bottle": {
         const bottle: Part = { shape: "cylinder", rTop: it.r, rBottom: it.r * 0.9, h: H * BUD_BOTTLE, at: vec3(it.x, it.y, 0), material: { colour: "#e8f0f5", kind: "glass", opacity: 0.35 } };
@@ -617,5 +723,21 @@ if (isMain(import.meta.url)) {
   const single = flowerBuild({ form: "single", w: 80, h: 80, lines: [{ kind: "rose", qty: 1 }], shade: "#e8bcce", seed: 1 }, 500, tag);
   const sHead = single.instanced.find((r) => r.key.startsWith("flower:rose:"));
   assert(!!sHead && Math.abs(centreOf(sHead) + 80 * 0.47 - 500) < 1e-6 && single.parts.some((p) => p.shape === "cylinder"), "a single stem: one head topping at h on a stem");
+
+  // An ENVELOPE (the base's צללית): the heads on its top and round its side, the mass inside it,
+  // never a solid — and no envelope builds exactly what it always built.
+  const roses = [{ kind: "rose" as const, qty: 120 }, { kind: "euca" as const, qty: 10 }];
+  const domeSpec = { form: "dome" as const, w: 500, h: 500, lines: roses, shade: "#f4f1ea", seed: 9 };
+  assert(JSON.stringify(flowerBuild({ ...domeSpec, profile: undefined }, 500, tag)) === JSON.stringify(flowerBuild(domeSpec, 500, tag)), "no envelope: the dome, to the digit");
+  const ballB = flowerBuild({ ...domeSpec, profile: FLOWER_PROFILES.ball }, 500, tag);
+  const ballHeads = ballB.instanced.filter((r) => r.key.startsWith("flower:rose:"));
+  const below = ballHeads.filter((r) => centreOf(r) < 250 && (r.at.tiltDeg ?? 0) > 95);
+  assert(below.length >= 8, `a ball: heads under its equator, looking down (${below.length})`);
+  assert(ballHeads.every((r) => centreOf(r) <= 500 + 1e-6 && centreOf(r) >= 0), "…and none above the row's height or under its foot");
+  assert(!ballB.parts.some((p) => p.shape === "lathe") && ballB.parts.filter((p) => p.shape === "blob").length >= 2, "…filled by a stack of clumps, never a lathe");
+  const treeB = flowerBuild({ ...domeSpec, profile: FLOWER_PROFILES.tree }, 900, tag);
+  const trunk = treeB.parts.filter((p) => p.shape === "cylinder" && p.material?.colour === TRUNK);
+  assert(trunk.length === TRUNK_STEMS && trunk.every((p) => p.at.z === 0), "a tree: its neck a bundle of stems from the foot");
+  assert(treeB.instanced.filter((r) => r.key.startsWith("flower:")).every((r) => centreOf(r) > 900 * 0.4), "…and every flower up in its crown");
   console.log("scene flowers ok");
 }

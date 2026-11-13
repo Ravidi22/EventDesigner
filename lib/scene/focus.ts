@@ -17,6 +17,8 @@ import type { ResolvedZone } from "@/lib/venues/zone";
 import type { DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
 import { resolve } from "@/lib/studio/catalog-resolver";
 import { hangHeightOf } from "@/lib/studio/hang";
+import { roofAt } from "@/lib/venues/roofs";
+import { ceilingUndersideMm } from "./overhead";
 import { placementFootprint, tableBlock, tableFootprint } from "@/components/footprint-shape";
 import { footprintBounds } from "@/lib/studio/footprint";
 import { isMain } from "../self-check";
@@ -49,6 +51,8 @@ export const TABLE_TOP_MM = 760;
 /** A tall thing (a column, a structure) is looked at no higher than this: the eye goes to the mass,
  *  not the tip. */
 export const LOOK_CAP_MM = 2000;
+/** A floor piece taller than this is framed whole, from its middle (a chuppah, a flower tower). */
+export const TALL_MM = 1800;
 /** Looking at a WIDE selection the eye rises with its reach — this fraction of it over a table top —
  *  so a whole row of tables is seen from a little above rather than through the first one. */
 export const RISE = 0.35;
@@ -73,7 +77,7 @@ function tableSubject(doc: DesignDocumentContent, t: DesignTable): Subject {
   return { centre: t.position, reachMm: Math.hypot(b.w, b.h) / 2 || 900, zMm: TABLE_TOP_MM };
 }
 
-function placementSubject(doc: DesignDocumentContent, p: Placement): Subject | null {
+function placementSubject(doc: DesignDocumentContent, p: Placement, structure: Pick<VenueStructure, "features">, zones: readonly ResolvedZone[]): Subject | null {
   // An item on a table is the table being dressed; one on a banquette is its stage.
   if (p.tableId) {
     const t = doc.tables.find((x) => x.id === p.tableId);
@@ -81,14 +85,29 @@ function placementSubject(doc: DesignDocumentContent, p: Placement): Subject | n
   }
   if (p.perch) {
     const stage = doc.placements.find((x) => x.id === p.perch?.stageId);
-    return stage && stage !== p ? placementSubject(doc, stage) : null;
+    return stage && stage !== p ? placementSubject(doc, stage, structure, zones) : null;
   }
   const b = footprintBounds(placementFootprint(p));
   const reachMm = (Math.hypot(b.w, b.h) / 2) * (p.scale || 1) || 500;
   if (p.stage) return { centre: p.position, reachMm, zMm: p.stage.heightMm ?? 600 };
   const product = resolve(p.variantId)?.product;
-  if (p.layer === "ceiling") return { centre: p.position, reachMm, zMm: hangHeightOf(p, product) ?? 2500 };
+  if (p.layer === "ceiling") {
+    // Looked at the middle of its body, from far enough back to hold its height too — a tall
+    // cascade's crown and its tail both in the frame (seen headless, 2026-11-08: looked at its
+    // underside, a 90 cm chandelier lost its top past the pane's edge).
+    // Where the ROOM hangs it (build.ts ceilingPlacement): its own hang height, else under the roof
+    // over it, else the open sky's — a guess of 2.5 m looked half a metre under a chandelier the
+    // room had hung at 3 m, and a tall one lost its top (seen headless, 2026-11-08). Backed off
+    // enough to hold a 1.8 m cascade with the 50° lens.
+    const h = product?.dimensions.heightMm ?? 0;
+    const hang = hangHeightOf(p, product) ?? ceilingUndersideMm(roofAt(p.position, structure, zones)?.heightMm ?? null, h);
+    return { centre: p.position, reachMm: Math.max(reachMm, h * 0.85), zMm: hang + h / 2 };
+  }
   const h = product?.dimensions.heightMm ?? TABLE_TOP_MM;
+  // A piece taller than a person (a chuppah, a flower tower, a tree) is looked at its middle from
+  // far enough back to hold its height, as a hung one is: looked at a metre up from its footprint's
+  // reach, a chuppah's canopy was over the top of the pane (seen headless, 2026-11-09).
+  if (h > TALL_MM) return { centre: p.position, reachMm: Math.max(reachMm * 1.35, h), zMm: Math.min(h / 2, LOOK_CAP_MM) };
   return { centre: p.position, reachMm, zMm: Math.min(h, LOOK_CAP_MM) / 2 };
 }
 
@@ -124,7 +143,7 @@ export function focusViewpoint({ doc, structure, zones, bounds, selection, sight
     } else if (ref.kind === "placement") {
       const p = doc.placements.find((x) => x.id === ref.id);
       if (!p) continue;
-      s = placementSubject(doc, p);
+      s = placementSubject(doc, p, structure, zones);
       if (s) ids.push(ref.id);
     } else {
       s = featureSubject(structure, ref.id);

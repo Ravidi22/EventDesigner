@@ -1,6 +1,8 @@
 "use client";
 
 import { createElement } from "react";
+import { chandelierDrawOf } from "@/lib/catalog/chandelier";
+import { chuppahDrawOf } from "@/lib/catalog/chuppah";
 import type { Product } from "@/lib/catalog/types";
 import { ICON_BY_NAME } from "@/lib/catalog/map-icons";
 import { resolveContent, resolveFootprint, footprintBounds } from "@/lib/studio/footprint";
@@ -10,7 +12,7 @@ import { FootprintShape, productStyle } from "@/components/footprint-shape";
 import { FootprintBorder, ItemSymbol, RugPattern } from "@/components/item-symbol";
 import { borderOf } from "@/lib/catalog/border";
 import { anchorOf } from "@/lib/catalog/categories";
-import { ItemSurface } from "@/components/surface-fill";
+import { ItemSurface, edgeFootprint } from "@/components/surface-fill";
 import { anySurface } from "@/lib/catalog/textures";
 import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
 import { pergolaPostOf } from "@/lib/venues/pergola";
@@ -95,6 +97,7 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
           overhead={product.layer === "ceiling"}
           chairStyle={chairStyleOf(product)}
           drawStyle={drawStyleOf(product)}
+          chandelier={chandelierDrawOf(product.appearance, product.variants)} chuppah={chuppahDrawOf(product.appearance)}
           postMm={pergolaPostOf(product)}
           rise={climbRise(product)}
           border={symbol === "runner" ? border : undefined}
@@ -120,7 +123,10 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
             color={product.variants.find((v) => !v.archived && v.swatch)?.swatch ?? product.appearance?.style?.fill}
             seed={product.id}
           />
-          <FootprintShape footprint={footprint} fill="none" stroke={style.stroke} strokeOpacity={style.strokeOpacity} strokeWidth={style.strokeWidth} vectorEffect="non-scaling-stroke" />
+          {(() => {
+            const edged = edgeFootprint(product.appearance, footprint);
+            return edged && <FootprintShape footprint={edged} fill="none" stroke={style.stroke} strokeOpacity={style.strokeOpacity} strokeWidth={style.strokeWidth} vectorEffect="non-scaling-stroke" />;
+          })()}
         </>
       )}
       {border && !symbol && product.category === "rugs" && footprint.kind === "rect" && <RugPattern w={footprint.widthMm} h={footprint.depthMm} border={border} />}

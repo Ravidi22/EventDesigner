@@ -1,5 +1,5 @@
 import { memo, type ReactNode } from "react";
-import { footprintOutlines, type Footprint } from "@/lib/studio/footprint";
+import { footprintBounds, footprintOutlines, type Footprint } from "@/lib/studio/footprint";
 import { evenInset } from "@/lib/studio/footprint";
 import {
   CLOTH_DROP_MM,
@@ -30,6 +30,8 @@ import { pergolaFromStyle } from "@/lib/venues/pergola";
 import { pleatsAlongD } from "./curtain-cloth";
 import { CeilingDrapeSymbol, SailSymbol } from "./ceiling-cloth";
 import type { CurtainStyle } from "@/lib/catalog/symbols";
+import { CASCADE, EMPIRE, FITTING_COLOUR, chandelierOf, chandelierTiers, crystalBeads, empireCrownR, equalGlobes, glassFinishOf, ringGlobe, type ChandelierDraw, type CrystalBead } from "@/lib/catalog/chandelier";
+import { CHUPPAH_FINISH_COLOUR, chuppahLayout, chuppahOf, cloudFlowers, cloudPieces, type ChuppahDraw } from "@/lib/catalog/chuppah";
 import { FlowerDrawing } from "./flower-symbol";
 import { SurfaceFill } from "./surface-fill";
 import { defaultMix, seedOf, type FlowerDrawSpec, type FlowerForm } from "@/lib/catalog/flower-draw";
@@ -130,6 +132,12 @@ export interface ItemSymbolProps {
   /** Which version of the picture (drawStyleOf) — a candlestick's, a chuppah's, a chandelier's, a
    *  gate's entrance… Absent = the category's default. */
   drawStyle?: DrawStyle;
+  /** A chandelier's tiers and crystal (MapAppearance.chandelier, lib/catalog/chandelier.ts). Absent
+   *  = the style's own. */
+  chandelier?: ChandelierDraw;
+  /** A chuppah's posts, roof and flowers (MapAppearance.chuppah, lib/catalog/chuppah.ts) and its roof's
+   *  section. Absent = the chuppah it always was, drawn exactly as before. */
+  chuppah?: ChuppahDraw;
   /** For a flight or a ramp: the height it climbs and which way (climbRise, lib/studio/climb-item.ts). */
   rise?: PlacementClimb & { heightMm: number };
   /** How the caller turns and flips the item — so a ramp's slope, written along it, reads upright. */
@@ -154,7 +162,7 @@ export interface ItemSymbolProps {
   label?: string;
 }
 
-function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, drawStyle, rise, turnDeg, mirrored, textMm, bench, chairs = true, border, postMm, label }: ItemSymbolProps) {
+function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, drawStyle, chandelier: chandelierSpec, chuppah: chuppahSpec, rise, turnDeg, mirrored, textMm, bench, chairs = true, border, postMm, label }: ItemSymbolProps) {
   // A pergola — posts on its outline's corners, its roof across them — is the venue's own drawing
   // (components/pergola-glyph.tsx), on ANY outline: a bowed or rounded one too (symbolOf lets it
   // through), so it is drawn before the primitive-box rule below. On paper its posts are solid ink.
@@ -166,7 +174,8 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       </g>
     );
   }
-  const { w, h, round } = boxOf(footprint);
+  // A chuppah on a drawn outline (a hexagon of timber) stands in that outline's box.
+  const { w, h, round } = kind === "chuppah" && footprint.kind === "custom" ? { ...footprintBounds(footprint), round: false } : boxOf(footprint);
   // A bar of any shape — a ח, an oval ring, a horseshoe — is laid along its band (lib/catalog/
   // bar-draw.ts); every other picture is drawn in a box and needs a primitive one.
   // …and a banquette too: laid along its band (lib/design-document/bench.ts benchLayoutFor).
@@ -223,7 +232,7 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       body = round ? pouf(w, h, c, line) : sofa(w, h, c, line, drawStyle as SofaStyle | undefined);
       break;
     case "chandelier":
-      body = chandelier(w, h, count, c, line, drawStyle as ChandelierStyle | undefined, ink, detail);
+      body = chandelier(w, h, count, c, line, drawStyle as ChandelierStyle | undefined, ink, detail, chandelierSpec);
       break;
     case "column":
       body = column(w, h, round, c, line, drawStyle as ColumnStyle | undefined);
@@ -238,7 +247,7 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       body = along(w, h, (L, D) => gate(L, D, c, line, drawStyle as GateStyle | undefined));
       break;
     case "chuppah":
-      body = drawStyle === "rotunda" ? rotunda(w, h, c, line) : chuppah(w, h, round, c, line, ink, detail);
+      body = drawStyle === "rotunda" ? rotunda(w, h, c, line) : chuppahSpec ? chuppahBuilt(w, h, round, footprint, chuppahSpec, c, line, ink, detail) : chuppah(w, h, round, c, line, ink, detail);
       break;
     case "bar":
       body = shaped ? shapedBar(footprint, c, line) : round ? roundBar(w, h, c, line) : along(w, h, (L, D) => bar(L, D, c, line));
@@ -1387,10 +1396,26 @@ function pouf(w: number, h: number, c: Colours, line: Line) {
 
 /** A chandelier: hub, arms and bulbs, and its crystal ring — lines only, dashed where it is a ring,
  *  because the thing is overhead and a filled shape reads as something you walk round. The other
- *  styles (ChandelierStyle) keep to the same rule: metal as heavy lines, glass and light as tints. */
-function chandelier(w: number, h: number, n: number, c: Colours, line: Line, style?: ChandelierStyle, ink?: string, detail?: boolean) {
+ *  styles (ChandelierStyle) keep to the same rule: metal as heavy lines, glass and light as tints.
+ *  The tiered styles (arms, crystal, hoop; the cascades drums and prisms; the empire basket) draw
+ *  the layout lib/catalog/chandelier.ts lays — every tier's ring of lights, and every bead of
+ *  crystal where it is seen from above — the same layout the room hangs (lib/scene/overhead.ts),
+ *  so a two-tier piece with strands is one on both. */
+function chandelier(w: number, h: number, n: number, c: Colours, line: Line, style?: ChandelierStyle, ink?: string, detail?: boolean, spec?: ChandelierDraw) {
   const R = Math.min(w, h) / 2;
   const count = Math.max(3, n);
+  const built = chandelierOf(style, spec);
+  const tiers = chandelierTiers(built, n);
+  // A strand's beads hang under one another: from above they are one dot (the widest).
+  const dots = (() => {
+    const seen = new Map<string, CrystalBead>();
+    for (const b of crystalBeads(built, tiers)) {
+      const key = `${Math.round(b.x * 1000)}|${Math.round(b.y * 1000)}`;
+      const prev = seen.get(key);
+      if (!prev || b.r > prev.r) seen.set(key, b);
+    }
+    return [...seen.values()];
+  })();
   // Clear crystal or white has no colour to draw its metal in — drawn in its own tone it vanished
   // into the cloth under it — so a pale piece is drawn in a soft ink, its bulbs as warm light.
   const pale = !c.print && paleTone(c.tone);
@@ -1415,39 +1440,179 @@ function chandelier(w: number, h: number, n: number, c: Colours, line: Line, sty
     />
   );
   const ringAt = (k: number, m: number, turn = -90) => Array.from({ length: m }, (_, i) => polar(R * k, turn + (i * 360) / m));
+  const bead = (key: string, b: CrystalBead) => (
+    <circle key={key} cx={b.x * R} cy={b.y * R} r={Math.max(b.r * R, R * 0.018)} fill={c.print ? "none" : "#ffffff"} fillOpacity={0.75} {...line} stroke={stroke} strokeOpacity={0.8} />
+  );
+  // The tiers' arms and lights: the lowest tier's arms heaviest, each tier above a touch lighter.
+  const tierArms = tiers.flatMap((t, k) =>
+    t.angles.map((a, i) => {
+      const p = polar(R * t.r, a);
+      return <line key={`a${k}-${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...metal} strokeOpacity={metal.strokeOpacity * (k ? 0.75 : 1)} />;
+    }),
+  );
+  const tierGlows = tiers.flatMap((t, k) => {
+    const r = Math.min(R * 0.1, ((Math.PI * R * t.r) / t.count) * 0.35);
+    return t.angles.map((a, i) => {
+      const p = polar(R * t.r, a);
+      return glow(`b${k}-${i}`, p.x, p.y, r);
+    });
+  });
   switch (style) {
     case "crystal": {
-      // Rings of drops round the lights — the outer one the widest, the second turned half a drop.
-      const bulbs = ringAt(0.48, count);
-      const bulb = Math.min(R * 0.08, ((Math.PI * R * 0.48) / count) * 0.35);
-      const drop = (key: string, p: { x: number; y: number }, r: number) => (
-        <circle key={key} cx={p.x} cy={p.y} r={r} fill={c.print ? "none" : "#ffffff"} fillOpacity={0.75} {...line} stroke={stroke} strokeOpacity={0.8} />
-      );
+      // Tiers of lights, each ring dressed in crystal — strands just outside it (dots from above),
+      // the outer reach dashed, the finial's hub in the middle.
       return (
         <>
-          <circle r={R * 0.9} fill="none" {...line} strokeOpacity={c.print ? line.strokeOpacity : 0.5} strokeDasharray="4 3" />
-          {ringAt(0.9, 32).map((p, i) => drop(`o${i}`, p, R * 0.042))}
-          {ringAt(0.72, 24, -90 + 7.5).map((p, i) => drop(`m${i}`, p, R * 0.036))}
-          {bulbs.map((p, i) => (
-            <line key={`a${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...metal} />
-          ))}
-          {bulbs.map((p, i) => glow(`b${i}`, p.x, p.y, bulb))}
-          {ringAt(0.26, 12, -75).map((p, i) => drop(`i${i}`, p, R * 0.03))}
+          <circle r={R * tiers[0].r * 1.07} fill="none" {...line} strokeOpacity={c.print ? line.strokeOpacity : 0.5} strokeDasharray="4 3" />
+          {tierArms}
+          {dots.map((b, i) => bead(`c${i}`, b))}
+          {tierGlows}
           <circle r={R * 0.12} fill="none" {...metal} />
         </>
       );
     }
     case "hoop": {
-      // One ring of light, its lamps along it, hung from a plate in the middle by three cables.
-      const bulbs = ringAt(0.9, count);
+      // Rings of light, the lamps along each, hung from a plate in the middle by three cables.
       return (
         <>
-          {ringAt(0.9, 3, -60).map((p, i) => (
+          {ringAt(tiers[0].r, 3, -60).map((p, i) => (
             <line key={`k${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...line} strokeOpacity={c.print ? line.strokeOpacity : 0.7} strokeDasharray="3 3" />
           ))}
-          <circle r={R * 0.9} fill="none" {...metal} strokeWidth={sw * 1.5} />
-          {bulbs.map((p, i) => glow(`b${i}`, p.x, p.y, Math.min(R * 0.06, ((Math.PI * R * 0.9) / count) * 0.3)))}
+          {tiers.map((t, k) => (
+            <circle key={`h${k}`} r={R * t.r} fill="none" {...metal} strokeWidth={sw * (k ? 1.2 : 1.5)} />
+          ))}
+          {dots.map((b, i) => bead(`c${i}`, b))}
+          {tiers.flatMap((t, k) => t.angles.map((a, i) => {
+            const p = polar(R * t.r, a);
+            return glow(`b${k}-${i}`, p.x, p.y, Math.min(R * 0.06, ((Math.PI * R * t.r) / t.count) * 0.3));
+          }))}
           <circle r={R * 0.08} fill="none" {...metal} />
+        </>
+      );
+    }
+    case "drums": {
+      // Stacked drum shades, the widest on top (lib/catalog/chandelier.ts CASCADE): every band's
+      // rim, the top one heaviest and warm inside — it is lit — the rest seen through it; the top
+      // band's lights where they shine through its cloth; the rod down the middle.
+      const top = tiers[tiers.length - 1];
+      return (
+        <>
+          {[...tiers].reverse().map((t, k) => (
+            <circle
+              key={`d${k}`}
+              r={R * t.r}
+              fill={k === 0 && !c.print ? "#FFE9A8" : "none"}
+              fillOpacity={k === 0 ? (pale ? 0.5 : 0.28) : undefined}
+              {...metal}
+              strokeWidth={sw * (k === 0 ? 1.4 : 1)}
+              strokeOpacity={metal.strokeOpacity * (k === 0 ? 1 : 0.7)}
+            />
+          ))}
+          {top.angles.map((a, i) => {
+            const p = polar(R * top.r * CASCADE.lightR, a);
+            return glow(`b${i}`, p.x, p.y, Math.min(R * 0.07, ((Math.PI * R * top.r * CASCADE.lightR) / top.count) * 0.35));
+          })}
+          <circle r={R * 0.05} fill="none" {...metal} />
+        </>
+      );
+    }
+    case "prisms": {
+      // A cascade of crystal rods, the widest band on top: every band's circle dashed where its rods
+      // hang, every rod a dot (hidden at hall zoom — the rings say enough there), the top band's
+      // lights inside it, the rod down the middle.
+      const top = tiers[tiers.length - 1];
+      return (
+        <>
+          {tiers.map((t, k) => (
+            <circle key={`p${k}`} r={R * t.r} fill="none" {...line} stroke={stroke} strokeOpacity={c.print ? line.strokeOpacity : 0.55} strokeDasharray="3 3" />
+          ))}
+          <g className="fl-d">{dots.map((b, i) => bead(`c${i}`, b))}</g>
+          {top.angles.map((a, i) => {
+            const p = polar(R * top.r * CASCADE.lightR, a);
+            return glow(`b${i}`, p.x, p.y, Math.min(R * 0.07, ((Math.PI * R * top.r * CASCADE.lightR) / top.count) * 0.35));
+          })}
+          <circle r={R * 0.05} fill="none" {...metal} />
+        </>
+      );
+    }
+    case "empire": {
+      // A crystal basket (EMPIRE): the wide ring, the crown inside it and the small ring the strands
+      // sweep in to, every strand a dotted line from the ring to the small ring — its beads seen
+      // from above — the lights inside the bag, the finial in the middle.
+      // Baskets stacked: every ring over the lowest drawn inside it, a touch lighter.
+      const m = built.strands || EMPIRE.strands;
+      const t = tiers[0];
+      const dotted = { ...line, stroke, strokeOpacity: c.print ? line.strokeOpacity : 0.45, strokeDasharray: "2 3" };
+      return (
+        <>
+          <circle r={R * t.r} fill="none" {...metal} strokeWidth={sw * 1.4} />
+          {tiers.slice(1).map((u, k) => (
+            <circle key={`u${k}`} r={R * u.r} fill="none" {...metal} strokeOpacity={metal.strokeOpacity * 0.75} />
+          ))}
+          <circle r={R * empireCrownR(tiers)} fill="none" {...metal} />
+          <circle r={R * EMPIRE.bottomR} fill="none" {...metal} strokeWidth={sw * 0.75} />
+          {Array.from({ length: m }, (_, i) => {
+            const a = -90 + (i * 360) / m;
+            const o = polar(R * t.r * 0.98, a);
+            const q = polar(R * EMPIRE.bottomR, a);
+            return <line key={`s${i}`} x1={o.x} y1={o.y} x2={q.x} y2={q.y} {...dotted} />;
+          })}
+          {t.angles.map((a, i) => {
+            const p = polar(R * EMPIRE.lightR * t.r, a);
+            return glow(`b${i}`, p.x, p.y, Math.min(R * 0.07, ((Math.PI * R * EMPIRE.lightR * t.r) / t.count) * 0.35));
+          })}
+          <circle r={R * 0.05} fill={c.print ? "none" : "#ffffff"} fillOpacity={0.75} {...line} stroke={stroke} />
+        </>
+      );
+    }
+    case "spiral": {
+      // A raindrop spiral: the plate the size of the piece (dashed — it is overhead), every strand's
+      // ball a dot where it hangs, the helix they trace drawn faint through them.
+      const balls = dots.filter((b) => b.r > 0.03);
+      const helix = balls.map((b, i) => `${i ? "L" : "M"}${(b.x * R).toFixed(1)},${(b.y * R).toFixed(1)}`).join(" ");
+      return (
+        <>
+          <circle r={R * 0.98} fill="none" {...metal} strokeDasharray="4 3" />
+          {helix && <path d={helix} fill="none" {...line} stroke={stroke} strokeOpacity={c.print ? line.strokeOpacity : 0.35} />}
+          {balls.map((b, i) => bead(`c${i}`, b))}
+          {tiers[0].angles.map((a, i) => {
+            const p = polar(R * tiers[0].r, a);
+            return glow(`b${i}`, p.x, p.y, R * 0.045);
+          })}
+        </>
+      );
+    }
+    case "rings": {
+      // Floating rings seen from above: every leaned ring an ellipse — its long axis along the lean,
+      // its short one cos(tilt) of it — the widest (the top) heaviest; the globe inside each lit;
+      // the crown in the middle.
+      return (
+        <>
+          {[...tiers].reverse().map((t, k) => {
+            const tilt = ((t.tiltDeg ?? 0) * Math.PI) / 180;
+            return (
+              <ellipse
+                key={`r${k}`}
+                rx={R * t.r}
+                ry={R * t.r * Math.cos(tilt)}
+                transform={`rotate(${t.turnDeg ?? 0})`}
+                fill="none"
+                {...metal}
+                strokeWidth={sw * (k === 0 ? 1.4 : 1)}
+                strokeOpacity={metal.strokeOpacity * (k === 0 ? 1 : 0.75)}
+              />
+            );
+          })}
+          {tiers.map((t, k) => {
+            const g = ringGlobe(t, k);
+            return (
+              <g key={`g${k}`}>
+                <circle cx={g.x * R} cy={g.y * R} r={g.r * R} fill={c.print ? "none" : "#FFE9A8"} fillOpacity={c.print ? undefined : 0.45} {...line} stroke={stroke} strokeOpacity={0.6} />
+                {glow(`gb${k}`, g.x * R, g.y * R, g.r * R * 0.35)}
+              </g>
+            );
+          })}
+          <circle r={R * 0.3} fill="none" {...metal} strokeDasharray="4 3" />
         </>
       );
     }
@@ -1467,18 +1632,27 @@ function chandelier(w: number, h: number, n: number, c: Colours, line: Line, sty
       );
     }
     case "pendants": {
-      // Globes of different sizes hung from one canopy plate, each with its bulb.
+      // Glass pendants — one globe or a group (lib/catalog/chandelier.ts), packed in sizes or all one
+      // size: every globe in its glass (the shade, or the next of the row's shades), its cap in the
+      // fitting's metal over its bulb. A single globe is the plan's circle.
+      const m = Math.max(1, Math.round(n) || 8);
+      const globes = m === 1 ? [{ x: 0, y: 0, r: 0.98 / 0.94 }] : built.equal ? equalGlobes(m) : packCircles(m);
+      const shades = built.glassMix && spec?.palette?.length ? spec.palette : null;
+      const fit = FITTING_COLOUR[built.fitting];
       return (
         <>
-          <circle r={R * 0.98} fill="none" {...line} strokeOpacity={c.print ? line.strokeOpacity : 0.45} strokeDasharray="4 3" />
-          {packCircles(count).map((g, i) => {
+          {m > 1 && <circle r={R * 0.98} fill="none" {...line} strokeOpacity={c.print ? line.strokeOpacity : 0.45} strokeDasharray="4 3" />}
+          {globes.map((g, i) => {
             const x = (g.x * w) / 2;
             const y = (g.y * h) / 2;
             const r = g.r * R * 0.94;
+            const shade = shades?.[i % shades.length];
+            const tint = shade ? (glassFinishOf(shade.name, shade.swatch) === "clear" ? "#ffffff" : shade.swatch) : pale ? "#ffffff" : c.tone;
             return (
               <g key={i}>
-                <circle cx={x} cy={y} r={r} fill={c.print ? "none" : pale ? "#ffffff" : stroke} fillOpacity={c.print ? undefined : pale ? 0.7 : 0.16} {...metal} strokeWidth={sw * 0.75} />
-                {glow(`b${i}`, x, y, r * 0.24)}
+                <circle cx={x} cy={y} r={r} fill={c.print ? "none" : tint} fillOpacity={c.print ? undefined : 0.42} {...line} stroke={stroke} strokeOpacity={0.8} strokeWidth={sw * 0.75} />
+                <circle cx={x} cy={y} r={Math.max(r * 0.22, R * 0.03)} fill={c.print ? "none" : fit} {...line} stroke={stroke} strokeOpacity={0.7} />
+                {glow(`b${i}`, x, y, r * 0.12)}
               </g>
             );
           })}
@@ -1523,15 +1697,14 @@ function chandelier(w: number, h: number, n: number, c: Colours, line: Line, sty
       );
     }
   }
-  const arms = ringAt(0.74, count);
-  const bulb = Math.min(R * 0.1, ((Math.PI * R * 0.74) / arms.length) * 0.35);
+  // Arms: the crystal ring at 0.48 R dashed, every tier's arms out to its lights, the crystal (drops
+  // under the arm ends by default) as dots, the hub.
   return (
     <>
       <circle r={R * 0.48} fill="none" {...line} strokeOpacity={c.print ? line.strokeOpacity : 0.8} strokeDasharray="4 3" />
-      {arms.map((p, i) => (
-        <line key={`a${i}`} x1={0} y1={0} x2={p.x} y2={p.y} {...metal} />
-      ))}
-      {arms.map((p, i) => glow(`b${i}`, p.x, p.y, bulb))}
+      {tierArms}
+      {dots.map((b, i) => bead(`c${i}`, b))}
+      {tierGlows}
       <circle r={R * 0.13} fill="none" {...metal} strokeOpacity={pale ? metal.strokeOpacity : 1} />
     </>
   );
@@ -1794,6 +1967,109 @@ function gate(L: number, D: number, c: Colours, line: Line, style?: GateStyle) {
 
 /** A chuppah: the canopy, its four poles, the folds of the cloth corner to corner, and flowers at the
  *  two front poles — the side the couple face the guests from. */
+/** A chuppah WITH a spec (lib/catalog/chuppah.ts — the room's own layout, lib/scene/floor-kinds.ts
+ *  chuppahBody): its canopy as its roof is — a cloth (as always), a sheer (pale, its folds dashed), a
+ *  cloud of flowers (the flowers ARE what is seen from above, the posts under them dashed, the hidden-
+ *  line convention), open slats or ribs (overhead: dashed), or nothing (the outline alone, dashed);
+ *  a domed roof's seams run to its crown; the posts in their finish; a sheer gathered at every post;
+ *  the flowers where the layout puts them, a meadow at the posts' feet. A plain chuppah never comes
+ *  here: it keeps its drawing to the digit. */
+function chuppahBuilt(w: number, h: number, round: boolean, footprint: Footprint, draw: ChuppahDraw, c: Colours, line: Line, ink: string, detail: boolean) {
+  const r = chuppahOf(draw);
+  const drawn = !round && footprint.kind === "custom" ? footprint.outline : undefined;
+  const L = chuppahLayout(w, h, round, r, drawn);
+  const m = Math.min(w, h);
+  const fold = { ...line, strokeOpacity: line.strokeOpacity * 0.55, strokeDasharray: "4 3" };
+  const overhead = { ...line, strokeOpacity: line.strokeOpacity * 0.7, strokeDasharray: "6 4" };
+  const canopy = (props: Record<string, unknown>, key: string) =>
+    round ? <ellipse key={key} rx={w / 2} ry={h / 2} {...props} /> : drawn ? <path key={key} d={outlinePathD(drawn)} {...props} /> : <rect key={key} x={-w / 2} y={-h / 2} width={w} height={h} {...props} />;
+  const bloom = r.bloom;
+  const posy = (s: { x: number; y: number; size: number; form: FlowerForm }, key: string) => (
+    <g key={key} transform={`translate(${s.x} ${s.y})`}>
+      <FlowerDrawing spec={plainFlowers(s.size, s.size, bloom, s.form)} ink={ink} print={c.print} detail={detail} />
+    </g>
+  );
+  const finish = CHUPPAH_FINISH_COLOUR[r.finish];
+  const hidden = r.roof === "flowers";
+  const post = (p: { x: number; y: number }, i: number) =>
+    hidden ? (
+      <circle key={`p${i}`} cx={p.x} cy={p.y} r={L.planPostR} fill="none" {...line} strokeDasharray="4 3" />
+    ) : (
+      <circle key={`p${i}`} cx={p.x} cy={p.y} r={L.planPostR} fill={c.print ? "#ffffff" : (finish ?? c.ink)} fillOpacity={c.print ? 1 : finish ? (r.finish === "acrylic" ? 0.5 : 0.9) : 0.55} {...line} />
+    );
+  // The roof's own lines: a dome's seams to its crown, open slats across the short span, spokes.
+  const seams: ReactNode[] = [];
+  const ringK = L.posts.length ? 0.82 : 0.96;
+  if (round && r.profile && r.roof !== "none" && r.roof !== "flowers") {
+    for (let k = 0; k < 8; k++) {
+      const p = polar(1, 45 * k);
+      seams.push(<line key={`s${k}`} x1={(w / 2) * p.x} y1={(h / 2) * p.y} x2={0} y2={0} {...fold} />);
+    }
+    seams.push(<ellipse key="crown" rx={m * 0.06} ry={m * 0.06} fill="none" {...fold} />);
+  } else if (r.roof === "open" && (round || drawn)) {
+    const tips = round ? Array.from({ length: 8 }, (_, k) => ({ x: (w / 2) * ringK * polar(1, 45 * k).x, y: (h / 2) * ringK * polar(1, 45 * k).y })) : L.posts;
+    tips.forEach((t, k) => seams.push(<line key={`s${k}`} x1={t.x} y1={t.y} x2={0} y2={0} {...overhead} />));
+  } else if (r.roof === "open" && L.posts.length) {
+    const long = w >= h;
+    const spanL = Math.max(...L.posts.map((p) => Math.abs(long ? p.x : p.y)));
+    const spanS = Math.max(...L.posts.map((p) => Math.abs(long ? p.y : p.x)));
+    const n = Math.max(2, Math.floor((2 * spanL) / 350));
+    for (let i = 0; i <= n; i++) {
+      const t = -spanL + (2 * spanL * i) / n;
+      seams.push(long ? <line key={`s${i}`} x1={t} y1={-spanS} x2={t} y2={spanS} {...overhead} /> : <line key={`s${i}`} x1={-spanS} y1={t} x2={spanS} y2={t} {...overhead} />);
+    }
+  } else if (r.roof === "cloth" || r.roof === "sheer") {
+    // The cloth's folds, as always: corner to corner across the posts.
+    const ps = L.posts.length >= 4 ? L.posts : [];
+    if (ps.length >= 4) {
+      const sorted = [...ps].sort((p, q) => Math.atan2(p.y, p.x) - Math.atan2(q.y, q.x));
+      const half = Math.floor(sorted.length / 2);
+      for (let i = 0; i < half; i++) seams.push(<line key={`f${i}`} x1={sorted[i].x} y1={sorted[i].y} x2={sorted[i + half].x} y2={sorted[i + half].y} {...fold} />);
+    }
+  }
+  const roof: ReactNode =
+    r.roof === "cloth"
+      ? canopy({ fill: c.tone, fillOpacity: c.print ? 1 : 0.55, ...line }, "roof")
+      : r.roof === "sheer"
+        ? canopy({ fill: c.print ? "#ffffff" : c.tone, fillOpacity: c.print ? 1 : 0.22, ...line, strokeDasharray: "8 4" }, "roof")
+        : canopy({ fill: "none", ...overhead }, "roof");
+  // A cloud of flowers is what is seen from above — the room's own cloud (lib/catalog/chuppah.ts
+  // cloudFlowers), one per square-ish stretch as it lays them.
+  const clouds: ReactNode[] =
+    r.roof === "flowers"
+      ? cloudPieces(w, h, round).map((piece, k) => (
+          <g key={`cloud${k}`} transform={`translate(${piece.x} ${piece.y})`}>
+            <FlowerDrawing spec={cloudFlowers(piece.w * 0.98, piece.d * 0.98, bloom, "plan")} ink={ink} print={c.print} detail={detail} />
+          </g>
+        ))
+      : [];
+  // A sheer gathered at every post: its folds round the post's outer side.
+  const drapes = r.drapes
+    ? L.posts.map((p, i) => {
+        const out = Math.atan2(p.y, p.x);
+        const R = L.planPostR * 1.9;
+        let d = "";
+        for (let k = 0; k <= 12; k++) {
+          const a = out - 1.2 + (2.4 * k) / 12;
+          const rr = R * (1 + 0.12 * Math.sin(k * 1.6));
+          d += `${k ? " L" : "M"} ${p.x + rr * Math.cos(a)} ${p.y + rr * Math.sin(a)}`;
+        }
+        return <path key={`d${i}`} d={d} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.6} strokeLinejoin="round" />;
+      })
+    : [];
+  return (
+    <>
+      {roof}
+      {seams}
+      {L.meadow.map((s, i) => posy(s, `m${i}`))}
+      {drapes}
+      {clouds}
+      {L.posts.map(post)}
+      {L.spots.map((s, i) => posy(s, `f${i}`))}
+    </>
+  );
+}
+
 function chuppah(w: number, h: number, round: boolean, c: Colours, line: Line, ink: string, detail: boolean) {
   const m = Math.min(w, h);
   const pole = m * 0.045;

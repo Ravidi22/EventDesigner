@@ -82,6 +82,10 @@ export function flowerDrawSpecOf(product: Product, footprint: Footprint, shade?:
     shade,
     seed: seedOf(product.id || product.name),
   };
+  // The base's body is the arrangement's envelope (flower-draw.ts FlowerDrawSpec.profile); a stem
+  // has none.
+  const profile = product.appearance?.revolve;
+  if (!stem && profile && profile.length >= 2) spec.profile = profile;
   byKey.set(key, spec);
   return spec;
 }

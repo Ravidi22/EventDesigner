@@ -16,7 +16,7 @@
 import { memo } from "react";
 import type { Point } from "@/lib/studio/hall";
 import type { RailSheet } from "@/lib/studio/rail";
-import { runGatherTicks, runOutline, type ClothRun } from "@/lib/studio/ceiling-cloth";
+import { runGatherTicks, runLights, runOutline, type ClothRun } from "@/lib/studio/ceiling-cloth";
 import { DrapePleatsAlong, polygonD } from "./curtain-cloth";
 
 /** The plan's dash for anything overhead, in screen px (non-scaling strokes). */
@@ -134,6 +134,15 @@ function DrapeRunsView({
             <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke={ink} strokeOpacity={inkOpacity} strokeWidth={1} vectorEffect="non-scaling-stroke" />
           ))}
           {pleats && <DrapePleatsAlong line={[run.a, run.b]} depthMm={run.widthMm * 0.35} ink={ink} opacity={inkOpacity * 0.55} />}
+          {/* Fairy lights woven in (ClothRun.lights): a warm point at each, where the room hangs it;
+              hidden at hall zoom like every other detail. */}
+          {run.lights && (
+            <g className="fl-d">
+              {runLights(run).map((q, k) => (
+                <circle key={`l${k}`} cx={q.x} cy={q.y} r={Math.max(20, run.widthMm * 0.03)} fill="#FFE9A8" fillOpacity={0.95} stroke={ink} strokeOpacity={inkOpacity * 0.7} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+              ))}
+            </g>
+          )}
         </g>
       ))}
     </g>
@@ -169,6 +178,6 @@ export function SailSymbol({ w, h, tone, ink, print }: { w: number; h: number; t
 export function CeilingDrapeSymbol({ L, D, tone, ink, print }: { L: number; D: number; tone: string; ink: string; print?: boolean }) {
   const widthMm = D * 0.8;
   const lengthMm = L * 0.94;
-  const run: ClothRun = { a: { x: -lengthMm / 2, y: 0 }, b: { x: lengthMm / 2, y: 0 }, heightMm: 0, sagMm: 0, widthMm, waves: Math.max(2, Math.round(lengthMm / Math.max(1, widthMm * 1.4))), lengthMm };
+  const run: ClothRun = { a: { x: -lengthMm / 2, y: 0 }, b: { x: lengthMm / 2, y: 0 }, heightMm: 0, sagMm: 0, widthMm, waves: Math.max(2, Math.round(lengthMm / Math.max(1, widthMm * 1.4))), lengthMm, lights: false };
   return <DrapeRuns runs={[run]} fill={tone} fillOpacity={print ? 1 : 0.6} ink={ink} inkOpacity={print ? 1 : 0.6} />;
 }

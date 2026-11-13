@@ -8,6 +8,7 @@
 // candelabrum: lib/catalog/symbols.ts) is its picture, and ignores it. The colour stays the
 // designer's: a shade's swatch, or the row's own fill, tints the material; absent, the material's own.
 import { SURFACE_MATERIALS, SURFACE_MATERIAL_LABEL, type SurfaceMaterial } from "@/lib/venues/structure";
+import type { ElementStyle } from "@/lib/element-style";
 
 /** The floor materials, plus wood and marble — which are the catalog's and are NOT offered to a
  *  venue's surface (nobody lays a hall in marble slabs this size; the list there stays as it was). */
@@ -50,17 +51,40 @@ export function hasSurface(s: Surface | undefined): boolean {
   return !!(s?.textureImage?.url || s?.texture);
 }
 
-/** Each shape's surface, in the order the item's footprint draws its shapes: the base shape first
- *  (MapAppearance.texture / textureImage), then every added part (ShapePart's own), so a bar can be a
- *  marble counter with a timber end — one layer each, none of them inheriting another's. */
-export function surfaceLayers(
-  a: (Surface & { parts?: readonly Surface[] }) | undefined,
-): Surface[] {
-  if (!a) return [];
-  return [{ texture: a.texture, textureImage: a.textureImage }, ...(a.parts ?? []).map((p) => ({ texture: p.texture, textureImage: p.textureImage }))];
+/** One shape's layer: what it is made of, and its own colours (ShapePart.style — pinned over the
+ *  item's look and shade). */
+export interface ShapeLayer extends Surface {
+  style?: ElementStyle;
 }
 
-/** Whether any shape of the item is surfaced at all. */
-export function anySurface(a: (Surface & { parts?: readonly Surface[] }) | undefined): boolean {
-  return surfaceLayers(a).some(hasSurface);
+/** What an appearance is read as for its layers: the base shape's surface and own colours
+ *  (MapAppearance.texture / textureImage / baseStyle), then every added part's. */
+export type LayeredLook = Surface & { baseStyle?: ElementStyle; parts?: readonly (Surface & { style?: ElementStyle })[] };
+
+/** Whether a layer carries colours of its own. */
+export function hasOwnPaint(l: ShapeLayer | undefined): boolean {
+  return !!(l?.style && (l.style.fill || l.style.stroke));
+}
+
+/** Whether a layer is drawn over the item's flat fill at all: a material, a picture, or a colour of
+ *  its own. */
+export function hasLayer(l: ShapeLayer | undefined): boolean {
+  return hasSurface(l) || hasOwnPaint(l);
+}
+
+/** Each shape's layer, in the order the item's footprint draws its shapes: the base shape first
+ *  (MapAppearance.texture / textureImage / baseStyle), then every added part (ShapePart's own), so a
+ *  bar can be a marble counter with a timber end and a black back-bar — one layer each, none of them
+ *  inheriting another's. */
+export function surfaceLayers(a: LayeredLook | undefined): ShapeLayer[] {
+  if (!a) return [];
+  return [
+    { texture: a.texture, textureImage: a.textureImage, style: a.baseStyle },
+    ...(a.parts ?? []).map((p) => ({ texture: p.texture, textureImage: p.textureImage, style: p.style })),
+  ];
+}
+
+/** Whether any shape of the item has a layer of its own — a surface or its own colours. */
+export function anySurface(a: LayeredLook | undefined): boolean {
+  return surfaceLayers(a).some(hasLayer);
 }

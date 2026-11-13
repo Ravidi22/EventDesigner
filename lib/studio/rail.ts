@@ -80,6 +80,10 @@ export interface RunRail {
   widthMm?: number;
   /** How many scallops the cloth makes along the line. Absent = one per 1.5 m of it. */
   waves?: number;
+  /** Fairy lights woven into the cloth (./ceiling-cloth.ts runLights — the user's photograph of
+   *  אמרה's dance floor, 2026-11-08): points of light along the run, on the plan and in the room.
+   *  A drawing fact, never counted or quoted; an LED strip ignores it. */
+  lights?: true;
 }
 
 /** An AREA of parallel runs — a draped ceiling: the runs are cut across `outline` at `directionDeg`,
@@ -95,6 +99,8 @@ export interface CanopyRail {
   widthMm?: number;
   /** Scallops along EACH run. Absent = one per 1.5 m of that run. */
   waves?: number;
+  /** Fairy lights woven into every run (RunRail.lights). */
+  lights?: true;
 }
 
 /** A SHEET stretched between three or four ties, each at its own height — a sail (מפרש). */

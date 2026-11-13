@@ -4,6 +4,8 @@
 import type { Footprint } from "@/lib/studio/footprint";
 import { buildHollow, footprintOutlines } from "@/lib/studio/footprint";
 import type { Product } from "@/lib/catalog/types";
+import type { ChandelierDraw } from "@/lib/catalog/chandelier";
+import type { ChuppahDraw } from "@/lib/catalog/chuppah";
 import type { Resolved } from "@/lib/studio/catalog-resolver";
 import type { ChairStyle, DrawStyle } from "@/lib/catalog/symbols";
 import type { FlowerDrawSpec } from "@/lib/catalog/flower-draw";
@@ -14,6 +16,7 @@ import type { CarpetShape } from "@/lib/studio/cover";
 import type { Pergola } from "@/lib/venues/pergola";
 import type { Border } from "@/lib/catalog/border";
 import type { ItemBuild } from "./collect";
+import { LINE_WALL_MM, elementBody } from "./element-body";
 import { type MaterialRef, type NodeTag, type Part, vec3 } from "./types";
 
 /** Everything a kind's builder may need, resolved by the caller once per item. Sizes are the
@@ -58,16 +61,24 @@ export interface ItemContext {
   /** A VENUE's pergola (StructureFeature.pergola, lib/venues/pergola.ts): its spec, which a catalog
    *  row says through its post field and drawing style instead. Absent = read off the row. */
   pergola?: Pergola;
+  /** A chandelier's tiers and crystal (MapAppearance.chandelier, lib/catalog/chandelier.ts) and its
+   *  silhouette (the base's body). Absent = the style's own. */
+  chandelier?: ChandelierDraw;
+  /** A chuppah's posts, roof and flowers (MapAppearance.chuppah, lib/catalog/chuppah.ts) and its roof's
+   *  section (the base's body). Absent = the chuppah it always was. */
+  chuppah?: ChuppahDraw;
 }
 
-/** How thick a shape drawn as lines only stands in the room — a rope, a rail, a hedge-line. */
-const LINE_WALL_MM = 40;
-
-/** The ADR-5 fallback: the footprint extruded to the item's height, the row's photo on it when it
- *  has one. What an unknown category, a `symbol === false` row and "other" get. */
+/** The ADR-5 fallback: the item's PARTS, each stood up at its own z and height in its own surface
+ *  (lib/element — a row with no heights of its own is its footprint extruded to the row's height,
+ *  exactly as before), the row's photo on the body when it has one. What an unknown category, a
+ *  `symbol === false` row and "other" get. A footprint the row's element does not describe (a
+ *  carpet laid to an outline) is extruded as it always was. */
 export function fallbackBody(ctx: ItemContext): ItemBuild {
   const material: MaterialRef = { colour: ctx.tone, kind: "matte" };
   if (ctx.product?.imageUrl) material.image = { url: ctx.product.imageUrl, fit: "stretch" };
+  const element = elementBody(ctx.product, ctx.footprint, material);
+  if (element) return element;
   // A shape drawn as lines only stands as a thin wall along its lines: the band of a hollow shape
   // whose closing side is open (buildHollow), so the side never drawn is never built.
   const parts: Part[] = footprintOutlines(ctx.footprint)

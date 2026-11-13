@@ -3,6 +3,8 @@
 import { Combine, FileDown, FileUp, Grid3x3, List, Plus } from "lucide-react";
 import { CATEGORIES, CATEGORY_BY_ID, CATEGORY_GROUPS, LAYERS } from "@/lib/catalog/categories";
 import { styleTagsOf } from "@/lib/catalog/categories";
+import { shownCategories, shownGroups } from "@/lib/catalog/built-in";
+import { useIsSupplier } from "@/components/org-kind-context";
 import type { Layer, Product } from "@/lib/catalog/types";
 import { TagToggle } from "@/components/tag-toggle";
 import { Select } from "@/components/select";
@@ -82,15 +84,20 @@ export function Filters({
   searchValue: string;
   onSearchChange: (v: string) => void;
 }) {
+  const supplierOrg = useIsSupplier();
   const set = (patch: Partial<FilterState>) => onChange({ ...value, ...patch });
   const toggleTag = (tag: string) =>
     set({ tags: value.tags.includes(tag) ? value.tags.filter((t) => t !== tag) : [...value.tags, tag] });
 
+  // The departments and categories THIS organisation browses by: a supplier's categories (the cut
+  // stems, lib/catalog/built-in.ts) are not a studio's — unless a row of its own is filed there.
+  const groupOptions = shownGroups(CATEGORY_GROUPS, supplierOrg, products);
+  const categoryOptions = shownCategories(CATEGORIES, supplierOrg, products);
   // The product dropdown cascades from the category: once a category is picked, only its own
   // products make sense to offer (picking one from a different category would just zero out the
   // results). Changing the category clears whatever product was picked, since it may no longer
   // belong to the new one.
-  const subcategoryOptions = value.category ? CATEGORIES.filter((c) => c.group === value.category) : CATEGORIES;
+  const subcategoryOptions = value.category ? categoryOptions.filter((c) => c.group === value.category) : categoryOptions;
 
   return (
     <div className="flex flex-col gap-2.5">
@@ -101,7 +108,7 @@ export function Filters({
           value={value.category ?? ""}
           onChange={(v) => set({ category: v || null, subcategory: null })}
           aria-label="קטגוריה"
-          options={[{ value: "", label: "כל הקטגוריות" }, ...CATEGORY_GROUPS.map((g) => ({ value: g.id, label: g.label }))]}
+          options={[{ value: "", label: "כל הקטגוריות" }, ...groupOptions.map((g) => ({ value: g.id, label: g.label }))]}
           className="w-40 shrink-0"
         />
 

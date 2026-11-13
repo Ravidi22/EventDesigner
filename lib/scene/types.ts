@@ -47,7 +47,10 @@ export interface Transform {
 /** `leaves` is a crown's leaf cards: a sprite of a leaf cluster cut out by its own alpha, two-sided,
  *  casting no shadow of its own (the clumps under it do). `petal` is a flower's: two-sided (a petal
  *  is a thin sheet seen from both faces) and shaded by its geometry's vertex colours. */
-export type MaterialKind = "matte" | "fabric" | "gloss" | "glass" | "metal" | "water" | "foliage" | "leaves" | "petal" | "emissive" | "glow";
+export type MaterialKind = "matte" | "fabric" | "gloss" | "glass" | "metal" | "water" | "foliage" | "leaves" | "petal" | "emissive" | "glow" | "crystal";
+// `crystal` is cut glass — a chandelier's beads, drops and rods: faceted (flat-shaded, so a low sphere
+// is an octagon bead), mirror-bright and clearer-than-clear but never invisible. Plain `glass` at a
+// fifth opacity is a window pane's; on a bead 2 cm across it was a ghost (2026-11-08, the photographs).
 // `glow` is a surface that is its own light — an LED strip's face, a screen's (spec 2026-11-07 §7):
 // emissive, its strength set by the MOOD (faint by day, full at night; the viewer's GLOW_BY_MOOD),
 // and never a point light — the viewer's light pool stays the size it is (CLAUDE.md, 2026-10-27).
@@ -80,8 +83,9 @@ export type Part =
   | { shape: "cylinder"; rTop: number; rBottom: number; h: number; at: Vec3; segments?: number; rotDeg?: number; tiltDeg?: number; material?: MaterialRef }
   | { shape: "sphere"; r: number; at: Vec3; segments?: number; material?: MaterialRef }
   /** A ring lying flat at `at.z`: `r` to the tube's centre line, `tube` its radius (a chandelier's
-   *  ring, a rotunda's entablature, a vase's rim). */
-  | { shape: "torus"; r: number; tube: number; at: Vec3; segments?: number; material?: MaterialRef }
+   *  ring, a rotunda's entablature, a vase's rim). `tiltDeg` leans it about its own x axis through
+   *  its centre, AFTER `rotDeg` turns that axis on the plan (a floating ring of light). */
+  | { shape: "torus"; r: number; tube: number; at: Vec3; segments?: number; rotDeg?: number; tiltDeg?: number; material?: MaterialRef }
   /** A closed outline (bezier edges honoured) extruded `h` up from `at.z`; `holes` are cut out. */
   | { shape: "extrude"; outline: BuiltOutline; holes?: BuiltOutline[]; h: number; at: Vec3; rotDeg?: number; material?: MaterialRef }
   /** A profile of (radius, height) pairs, bottom to top, revolved about the vertical axis at `at`;

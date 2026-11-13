@@ -33,7 +33,7 @@ import { borderBands } from "@/lib/catalog/border";
 import { evenInset } from "@/lib/studio/footprint";
 import { hexOf } from "./materials";
 import { flatRing, signedDistance } from "@/lib/studio/label-anchor";
-import type { Product } from "@/lib/catalog/types";
+import type { ChuppahFinish, Product, RevolvePoint } from "@/lib/catalog/types";
 import type { SymbolKind } from "@/lib/catalog/symbols";
 import { type FlowerDrawSpec, type FlowerForm, defaultMix, seedOf } from "@/lib/catalog/flower-draw";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
@@ -44,6 +44,8 @@ import { FALLBACK_CHAIR, chairRowsLayout } from "@/lib/design-document/chair-row
 import { type ClimbHost, climbRisers, climbTreads, riserHeightMm, treadDepthMm } from "@/lib/venues/climb";
 import { isMain } from "../self-check";
 import { pergolaFromStyle, pergolaGeometry, pergolaLines, pergolaPostOf } from "@/lib/venues/pergola";
+import { CHUPPAH_FINISH_COLOUR, CHUPPAH_PROFILES, CLOUD_LENS, chuppahLayout, chuppahOf, cloudFlowers, cloudPieces } from "@/lib/catalog/chuppah";
+import { profileAt } from "@/lib/element/revolve";
 import type { InstanceRequest, ItemBuild } from "./collect";
 import { type ItemContext, fallbackBody } from "./item-context";
 import { chairParts, chairRequest, darkened, pale } from "./items";
@@ -90,6 +92,12 @@ const BOTTLE_GLASS = "#7fa6b8";
 const CANOPY_SAG_MM = 60;
 const CANOPY_INSET = 0.9;
 const POSY_SHARE = 2 / 3;
+/** A sheer is the cloth at this opacity; open slats stand this far apart. */
+const SHEER_OPACITY = 0.45;
+const SLAT_PITCH_MM = 350;
+/** A hung chuppah's cables reach this far up under open sky; their colour. */
+const HUNG_CABLE_MM = 1500;
+const CABLE = "#8d8f94";
 const ROTUNDA_PLINTH_MM = 100;
 const ROTUNDA_CLOTH = "#fbf7f1";
 const ROTUNDA_STONE = "#f3f0ea";
@@ -674,7 +682,19 @@ function shapedBar(ctx: ItemContext, h: number): ItemBuild {
   const d = barDrawing(ctx.footprint);
   for (let i = 0; i < pieces.length; i++) if (pieceOf(pieces[i], i) === 0) b.parts.push(extrude(pieces[i], h, vec3(0, 0, 0), body));
   const backRings = d.backs.map((o) => flatRing(o));
-  for (const o of d.backs) b.parts.push(extrude(o, BACK_BAR_MM, vec3(0, 0, 0), body));
+  // A back bar stands BACK_BAR_MM from the floor — unless the shape it is drawn from carries a height
+  // of its own (ShapePart.zMm / heightMm, the element model): then it stands at its z, as tall as it
+  // says — a shelf a metre up the back wall, a raised display — and its bottles stand on its top.
+  // d.backs is the pieces that are not the base's, in order, so the j-th back is the j-th such piece.
+  const backShapes = pieces.map((p, i) => pieceOf(p, i)).filter((k) => k !== 0);
+  const backTops = d.backs.map((o, j) => {
+    const spec = ctx.product?.appearance?.parts?.[backShapes[j] - 1];
+    const own = !!spec && (spec.zMm !== undefined || spec.heightMm !== undefined);
+    const z = own ? (spec.zMm ?? 0) : 0;
+    const hh = own ? (spec.heightMm ?? h) : BACK_BAR_MM;
+    b.parts.push(extrude(o, Math.max(10, hh), vec3(0, 0, z), body));
+    return z + Math.max(10, hh);
+  });
 
   for (const s of d.front) {
     const { base, inner, loop } = stripEdges(s);
@@ -696,8 +716,9 @@ function shapedBar(ctx: ItemContext, h: number): ItemBuild {
 
   const tag = tagOf(ctx, "item");
   for (const o of d.bottles) {
-    if (backRings.some((ring) => signedDistance(o.x, o.y, ring) > 0)) {
-      b.instanced.push(bottle(o.x, o.y, BACK_BAR_MM, o.r, tag));
+    const onBack = backRings.findIndex((ring) => signedDistance(o.x, o.y, ring) > 0);
+    if (onBack >= 0) {
+      b.instanced.push(bottle(o.x, o.y, backTops[onBack], o.r, tag));
       continue;
     }
     if (!shelves.length) {
@@ -721,40 +742,191 @@ function shapedBar(ctx: ItemContext, h: number): ItemBuild {
 
 // ── chuppah (item-symbol.tsx:1011 chuppah, :1065 rotunda) ──────────────────────────────────────
 
-/** A chuppah: four poles m·0.045 thick (item-symbol.tsx:1013) standing pole·1.6 in from the
- *  corners (:1042) — on a round one at 45° steps at 0.82 of the radii (:1027) — up to h; the
- *  canopy a cloth plane the whole footprint at h and a second one, inset a tenth, sagging 60
- *  below it, so from under it the cloth reads as draped; the two front (+y) poles carrying dome
- *  posies m·0.28 across (:1019) in the blush every arrangement defaults to (:1017), hung at 2/3 h. */
+/** A chuppah (lib/catalog/chuppah.ts — ONE layout with the plan's, item-symbol.tsx chuppah): its
+ *  posts at their REAL size in their finish (the plan's pole is m·0.045, a disc to be seen from
+ *  above; built that thick it was a 27 cm column) up to the eave, a frame along their tops — what the
+ *  cloth, the cloud and the drapes hang from, so nothing floats — and the roof: a cloth and the sag
+ *  under it (as always), a sheer, a cloud of flowers, open slats, or nothing. A ROUND one's roof
+ *  follows the base's body (a dome, an onion, a peak — PROFILE_IS_PICTURE) as a two-sided sheet, a
+ *  flower envelope or ribs, never a solid. The flowers go where the layout puts them (the two front
+ *  posts' posies at 2/3 h unless told otherwise), a meadow at the posts' feet, a sheer let fall at
+ *  every post with a valance between them; hung (no posts) it rides on cables to the ceiling. */
 function chuppahBody(ctx: ItemContext): ItemBuild {
   const { widthMm: w, depthMm: d, heightMm: h, tone } = ctx;
   const m = Math.min(w, d);
-  const pole = m * 0.045;
-  const cloth = clothMaterial(tone);
-  const post = metalMaterial(darkened(tone, 0.45));
+  const c = chuppahOf(ctx.chuppah);
   const round = isRound(ctx.footprint);
-  const poles: Point[] = round
-    ? [45, 135, 225, 315].map((deg) => ({ x: (w / 2) * 0.82 * Math.cos(rad(deg)), y: (d / 2) * 0.82 * Math.sin(rad(deg)) }))
-    : (() => {
-        const x = w / 2 - pole * 1.6;
-        const y = d / 2 - pole * 1.6;
-        return [{ x: -x, y: -y }, { x, y: -y }, { x, y }, { x: -x, y }];
-      })();
-  let b = make(cloth);
-  for (const p of poles) b.parts.push(cyl(pole, h, vec3(p.x, p.y, 0), post));
-  for (const outline of footprintOutlines(ctx.footprint)) {
-    b.parts.push(plane(outline, vec3(0, 0, h), cloth, "both"));
-    b.parts.push(plane(scaleOutline(outline, CANOPY_INSET, CANOPY_INSET), vec3(0, 0, h - CANOPY_SAG_MM), cloth, "both"));
-  }
-  const posy = m * 0.28;
-  const spec = flowersFor(ctx.product, posy, posy, "dome", undefined, "chuppah");
+  const drawn = !round && ctx.footprint.kind === "custom" ? ctx.footprint.outline : undefined;
+  const L = chuppahLayout(w, d, round, c, drawn);
+  const eaveZ = h * L.eave;
+  const cloth = clothMaterial(tone);
+  const sheer: MaterialRef = { ...clothMaterial(tone), opacity: SHEER_OPACITY };
+  const post = chuppahPostMaterial(c.finish, tone);
   const tag = tagOf(ctx, "flowers");
-  for (const p of poles) {
-    if (p.y <= 0) continue;
-    b = merge(b, shifted(flowerBuild(spec, posy * 0.5, tag), p.x, p.y, h * POSY_SHARE));
+  let b = make(cloth);
+  for (const p of L.posts) b.parts.push(cyl(L.postR, eaveZ, vec3(p.x, p.y, 0), post));
+
+  // The frame along the posts' tops (a hung one's along its rim): a ring on a round one.
+  const foot = round && c.profile ? profileAt(c.profile, 0) : 1;
+  const ringK = L.posts.length ? 0.82 : 0.96;
+  const frame: Point[] = round
+    ? Array.from({ length: 33 }, (_, i) => polarXY((w / 2) * foot * ringK, (d / 2) * foot * ringK, (360 * i) / 32))
+    : L.posts.length >= 3
+      ? closed([...L.posts].sort((p, q) => Math.atan2(p.y, p.x) - Math.atan2(q.y, q.x)))
+      : closed(drawn ? [...drawn] : [{ x: -w * 0.48, y: -d * 0.48 }, { x: w * 0.48, y: -d * 0.48 }, { x: w * 0.48, y: d * 0.48 }, { x: -w * 0.48, y: d * 0.48 }]);
+  const beam = L.postR * 0.55;
+  if (c.roof !== "none" || c.drapes) {
+    for (let i = 1; i < frame.length; i++) b.parts.push(rodPart(vec3(frame[i - 1].x, frame[i - 1].y, eaveZ), vec3(frame[i].x, frame[i].y, eaveZ), beam, post));
+  }
+
+  // The roof.
+  if (c.roof === "cloth" || c.roof === "sheer") {
+    const mat = c.roof === "cloth" ? cloth : sheer;
+    if (round && c.profile) b.parts.push(roofSheet(c.profile, w / 2, d / 2, L.eave, h, mat));
+    else
+      for (const outline of footprintOutlines(ctx.footprint)) {
+        b.parts.push(plane(outline, vec3(0, 0, h), mat, "both"));
+        b.parts.push(plane(scaleOutline(outline, CANOPY_INSET, CANOPY_INSET), vec3(0, 0, h - CANOPY_SAG_MM), mat, "both"));
+      }
+  } else if (c.roof === "flowers") {
+    // A cloud of flowers (lib/catalog/chuppah.ts cloudFlowers — the plan's own): on a round one's
+    // roof section when it has one, else a lens on the frame — one per square-ish stretch of a long
+    // chuppah — dressed top, side and UNDER, which is what the couple under it see.
+    const seedKey = ctx.product?.id ?? "chuppah";
+    if (round && c.profile) {
+      b = merge(b, shifted(flowerBuild(cloudFlowers(w, d, c.bloom, seedKey, roofSection(c.profile, L.eave)), Math.max(200, (1 - L.eave) * h), tag), 0, 0, eaveZ));
+    } else {
+      const th = Math.max(300, Math.min(700, m * 0.2));
+      for (const piece of cloudPieces(w, d, round)) {
+        b = merge(b, shifted(flowerBuild(cloudFlowers(piece.w, piece.d, c.bloom, seedKey, CLOUD_LENS), th, tag), piece.x, piece.y, eaveZ - th * 0.45));
+      }
+    }
+  } else if (c.roof === "open") {
+    if (round && c.profile) {
+      // Ribs up the roof's section from the ring to its crown — a birdcage.
+      const profile = c.profile;
+      const ribs = Math.max(8, L.posts.length);
+      for (let k = 0; k < ribs; k++) {
+        const a = (360 * k) / ribs;
+        let prev: Vec3 | null = null;
+        for (let i = 0; i <= 10; i++) {
+          const z = L.eave + (1 - L.eave) * (i / 10);
+          const s = profileAt(profile, z) * ringK;
+          const q = polarXY((w / 2) * s, (d / 2) * s, a);
+          const v = vec3(q.x, q.y, z * h);
+          if (prev) b.parts.push(rodPart(prev, v, beam * 0.7, post));
+          prev = v;
+        }
+      }
+    } else if (round || drawn) {
+      // Spokes from the ring (every 45°) or from every post to the middle.
+      const tips = round ? Array.from({ length: 8 }, (_, k) => polarXY((w / 2) * ringK, (d / 2) * ringK, 45 * k)) : L.posts;
+      for (const t of tips) b.parts.push(rodPart(vec3(t.x, t.y, eaveZ), vec3(0, 0, eaveZ + m * 0.04), beam * 0.8, post));
+    } else if (L.posts.length) {
+      // Slats across the short span, every SLAT_PITCH_MM along the long one.
+      const long = w >= d;
+      const spanL = Math.max(...L.posts.map((p) => Math.abs(long ? p.x : p.y)));
+      const spanS = Math.max(...L.posts.map((p) => Math.abs(long ? p.y : p.x)));
+      const n = Math.max(2, Math.floor((2 * spanL) / SLAT_PITCH_MM));
+      for (let i = 0; i <= n; i++) {
+        const t = -spanL + (2 * spanL * i) / n;
+        const a = long ? vec3(t, -spanS, eaveZ + beam) : vec3(-spanS, t, eaveZ + beam);
+        const z = long ? vec3(t, spanS, eaveZ + beam) : vec3(spanS, t, eaveZ + beam);
+        b.parts.push(rodPart(a, z, beam * 0.7, post));
+      }
+    }
+  }
+
+  // Sheer drapes: a panel gathered at every post, a valance swagged between them.
+  if (c.drapes) {
+    for (const p of L.posts) {
+      const out = Math.atan2(p.y, p.x);
+      const path = Array.from({ length: 7 }, (_, i) => {
+        const a = out - 1.2 + (2.4 * i) / 6;
+        return { x: p.x + (L.postR + 35) * Math.cos(a), y: p.y + (L.postR + 35) * Math.sin(a) };
+      });
+      b.parts.push({ shape: "ribbon", path, h: eaveZ, at: vec3(0, 0, 0), pleatMm: 70, amplitudeMm: 18, material: sheer });
+    }
+    const drop = Math.min(500, h * 0.18);
+    b.parts.push({ shape: "ribbon", path: frame, h: drop, at: vec3(0, 0, eaveZ - drop), pleatMm: 160, amplitudeMm: 40, material: sheer });
+  }
+
+  // Hung: on cables from the frame up to the ceiling (a metre and a half, under open sky).
+  if (!L.posts.length) {
+    const up = ctx.chainMm ? h + ctx.chainMm : eaveZ + HUNG_CABLE_MM;
+    const anchors = round ? [0, 8, 16, 24].map((i) => frame[i]) : frame.slice(0, -1);
+    for (const q of anchors) b.parts.push(rodPart(vec3(q.x, q.y, eaveZ), vec3(q.x, q.y, up), 2, metalMaterial(CABLE)));
+  }
+
+  // The flowers, and the meadow at the posts' feet.
+  for (const s of L.spots) {
+    const tall = s.size * 0.5;
+    const atTop = s.z >= L.eave - 1e-6;
+    const spec = flowersFor(ctx.product, s.size, s.size, s.form, c.bloom, "chuppah");
+    b = merge(b, shifted(flowerBuild(spec, tall, tag), s.x, s.y, s.z * h - (atTop ? tall * 0.35 : 0)));
+  }
+  for (const s of L.meadow) {
+    const spec = flowersFor(ctx.product, s.size, s.size, "cushion", c.bloom, "chuppah-meadow");
+    b = merge(b, shifted(flowerBuild(spec, Math.min(350, h * 0.13), tag), s.x, s.y, 0));
   }
   return b;
 }
+
+/** A post in its finish; metal in a darker cut of the row's tone, as a chuppah always was. */
+function chuppahPostMaterial(f: ChuppahFinish, tone: string): MaterialRef {
+  switch (f) {
+    case "gold":
+      return metalMaterial(CHUPPAH_FINISH_COLOUR.gold!);
+    case "wood":
+      return matte(CHUPPAH_FINISH_COLOUR.wood!);
+    case "white":
+      return glossMaterial(CHUPPAH_FINISH_COLOUR.white!);
+    case "acrylic":
+      return { colour: CHUPPAH_FINISH_COLOUR.acrylic!, kind: "glass", opacity: 0.4 };
+    case "birch":
+      return matte(CHUPPAH_FINISH_COLOUR.birch!);
+    default:
+      return metalMaterial(darkened(tone, 0.45));
+  }
+}
+
+/** A point on an ellipse `rx` × `ry`, `deg` round from +x. */
+const polarXY = (rx: number, ry: number, deg: number): Point => ({ x: rx * Math.cos(rad(deg)), y: ry * Math.sin(rad(deg)) });
+const closed = (pts: Point[]): Point[] => (pts.length ? [...pts, pts[0]] : pts);
+
+/** A cylinder from `a` to `c` — a beam, a slat, a rib, a cable. */
+function rodPart(a: Vec3, c: Vec3, r: number, material: MaterialRef): Part {
+  const dx = c.x - a.x;
+  const dy = c.y - a.y;
+  const dz = c.z - a.z;
+  const across = Math.hypot(dx, dy);
+  const p: Part = { shape: "cylinder", rTop: r, rBottom: r, h: Math.max(1, Math.hypot(dx, dy, dz)), at: a, segments: 8, material };
+  if (across > 1e-6) {
+    p.rotDeg = (Math.atan2(dy, dx) * 180) / Math.PI - 90;
+    p.tiltDeg = (Math.atan2(across, dz) * 180) / Math.PI;
+  } else if (dz < 0) p.tiltDeg = 180;
+  return p;
+}
+
+/** A round roof's cloth: the base's body from the eave to the crown, a two-sided sheet. */
+function roofSheet(profile: RevolvePoint[], rx: number, ry: number, eave: number, h: number, material: MaterialRef): Part {
+  const rows: Vec3[][] = [];
+  for (let k = 0; k <= 10; k++) {
+    const z = eave + (1 - eave) * (k / 10);
+    const s = profileAt(profile, z);
+    rows.push(Array.from({ length: 37 }, (_, i) => vec3(rx * s * Math.cos((2 * Math.PI * i) / 36), ry * s * Math.sin((2 * Math.PI * i) / 36), z * h)));
+  }
+  return { shape: "sheet", rows, at: vec3(0, 0, 0), material };
+}
+
+/** The roof's part of a round chuppah's body, as a flower envelope of its own (fractions again). */
+function roofSection(profile: RevolvePoint[], eave: number): RevolvePoint[] {
+  return Array.from({ length: 13 }, (_, i) => {
+    const z = eave + (1 - eave) * (i / 12);
+    return { r: Math.max(0.02, profileAt(profile, z)), z: i / 12 };
+  });
+}
+
 
 /** A rotunda chuppah (item-symbol.tsx:1065): eight columns at 90 + 45·(i + ½)° on 0.92 of the
  *  radii (:1075, :1093) — so the front is an opening — each m·0.075 thick (:1076) on a square
@@ -1179,15 +1351,35 @@ if (isMain(import.meta.url)) {
   const hull = (p: Point) => Math.max(Math.abs(p.x) - 2400, Math.abs(p.y) - 900);
   assert(counters.some((p) => p.shape === "extrude" && p.outline.outline.some((q) => hull(q) > 45)), "ח bar: the counter top stands 50 proud of the edge");
 
-  // A chuppah 3000×3000×2600: four poles to 2600, the canopy at 2600, posies on the +y poles only.
+  // A chuppah 3000×3000×2600: four posts to 2600 at their REAL size (a 6 cm tube, not the plan's
+  // m·0.045), where the plan stands them; a frame along their tops; the canopy at 2600; posies on
+  // the +y posts only.
   const chuppah = floorKindBody("chuppah", ctxOf({ kind: "rect", widthMm: 3000, depthMm: 3000 }, 2600, DEFAULT_TONE.chuppah));
-  const poles = cyls(chuppah).filter((p) => near(p.rBottom, 135) && near(top(p), 2600));
-  assert(poles.length === 4 && poles.every((p) => near(Math.abs(p.at.x), 1500 - 216) && near(Math.abs(p.at.y), 1500 - 216)), `chuppah: four poles m·0.045 thick, pole·1.6 in from the corners (${poles.length})`);
+  const poles = cyls(chuppah).filter((p) => near(p.rBottom, 30) && near(top(p), 2600) && !p.tiltDeg);
+  assert(poles.length === 4 && poles.every((p) => near(Math.abs(p.at.x), 1500 - 216) && near(Math.abs(p.at.y), 1500 - 216)), `chuppah: four posts 6 cm thick, the plan's pole·1.6 in from the corners (${poles.length})`);
+  assert(cyls(chuppah).filter((p) => near(p.tiltDeg ?? 0, 90) && near(p.at.z, 2600)).length === 4, "…a beam along the top of every side, so the cloth hangs from something");
   assert(chuppah.parts.filter((p) => p.shape === "plane").length === 2 && chuppah.parts.some((p) => p.shape === "plane" && near(p.at.z, 2600) && p.material?.kind === "fabric"), "chuppah: a cloth canopy at h, and its sag under it");
   assert(chuppah.instanced.some((r) => r.key.startsWith("flower:")) && chuppah.instanced.every((r) => r.at.at.y > 0), "chuppah: posies (heads and their leaves) on the front (+y) poles only");
   assert(chuppah.instanced.every((r) => r.at.at.z >= 2600 * POSY_SHARE - 1e-6), "…hung at 2/3 h");
   const roundChuppah = floorKindBody("chuppah", ctxOf({ kind: "circle", diameterMm: 3000 }, 2600, DEFAULT_TONE.chuppah));
-  assert(cyls(roundChuppah).filter((p) => near(p.rBottom, 135)).every((p) => near(Math.hypot(p.at.x, p.at.y), 1500 * 0.82)), "a round chuppah's poles stand at 0.82 of the radius");
+  const roundPosts = cyls(roundChuppah).filter((p) => near(p.rBottom, 30) && !p.tiltDeg);
+  assert(roundPosts.length === 4 && roundPosts.every((p) => near(Math.hypot(p.at.x, p.at.y), 1500 * 0.82)), "a round chuppah's posts stand at 0.82 of the radius");
+
+  // The spec (lib/catalog/chuppah.ts): a domed sheer on gold posts, a floral cloud on clear ones, a
+  // hung one, a hexagon, never a solid.
+  const domed = floorKindBody("chuppah", ctxOf({ kind: "circle", diameterMm: 3000 }, 2800, DEFAULT_TONE.chuppah, { chuppah: { roof: "sheer", finish: "gold", profile: CHUPPAH_PROFILES.dome } }));
+  const sheet = domed.parts.find((p) => p.shape === "sheet");
+  assert(!!sheet && sheet.shape === "sheet" && sheet.material?.opacity === SHEER_OPACITY && !domed.parts.some((p) => p.shape === "lathe"), "a dome: the roof a two-sided sheer sheet up the base's body, never a lathe");
+  assert(sheet!.shape === "sheet" && near(Math.max(...sheet!.rows.flat().map((v) => v.z)), 2800) && cyls(domed).filter((p) => !p.tiltDeg && near(p.rBottom, 30)).every((p) => p.h < 2800 * 0.8 && p.material?.colour === "#c9a24a"), "…its crown at h, the gold posts rising only to the eave");
+  const cloud = floorKindBody("chuppah", ctxOf({ kind: "rect", widthMm: 3000, depthMm: 3000 }, 2700, DEFAULT_TONE.chuppah, { chuppah: { roof: "flowers", finish: "acrylic", flowers: "none", bloom: "#f6f3ec" } }));
+  const cloudHeads = cloud.instanced.filter((r) => r.key.startsWith("flower:"));
+  assert(cloudHeads.length > 150 && cloudHeads.every((r) => r.at.at.z > 2000) && !cloud.parts.some((p) => p.shape === "plane"), `a floral cloud: hundreds of heads over the top, no cloth (${cloudHeads.length})`);
+  assert(cyls(cloud).filter((p) => !p.tiltDeg && near(p.rBottom, 50)).every((p) => p.material?.kind === "glass"), "…on 10 cm clear acrylic posts");
+  const hung = floorKindBody("chuppah", ctxOf({ kind: "circle", diameterMm: 3000 }, 2600, DEFAULT_TONE.chuppah, { chainMm: 1400, chuppah: { posts: 0, roof: "flowers" } }));
+  assert(cyls(hung).filter((p) => near(p.rBottom, 2)).length === 4 && cyls(hung).filter((p) => near(p.rBottom, 2)).every((p) => near(p.at.z + p.h, 2600 + 1400)) && !cyls(hung).some((p) => near(p.rBottom, 30)), "hung: no posts, four cables up to the ceiling");
+  const hexOutline = Array.from({ length: 6 }, (_, i) => ({ x: 1500 * Math.cos((i * Math.PI) / 3), y: 1300 * Math.sin((i * Math.PI) / 3) }));
+  const hex = floorKindBody("chuppah", ctxOf({ kind: "custom", outline: hexOutline }, 2600, DEFAULT_TONE.chuppah, { widthMm: 3000, depthMm: 2600, chuppah: { finish: "wood", roof: "open" } }));
+  assert(cyls(hex).filter((p) => !p.tiltDeg && near(p.rBottom, 45)).length === 6, "a hexagon of timber: a post at every corner");
 
   // A rotunda ⌀4000 × 3000: eight columns, two rings, drapes at the back.
   const rotunda = floorKindBody("chuppah", ctxOf({ kind: "circle", diameterMm: 4000 }, 3000, DEFAULT_TONE.chuppah, { drawStyle: "rotunda" }));

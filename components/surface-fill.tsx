@@ -14,7 +14,8 @@ import { memo, useId, useMemo } from "react";
 import type { SurfaceMaterial } from "@/lib/venues/structure";
 import type { Point } from "@/lib/studio/hall";
 import { footprintBounds, pieceOf, type Footprint } from "@/lib/studio/footprint";
-import { TEXTURE_TILE_MM, TEXTURE_TILE_RANGE, hasSurface, surfaceLayers, type Surface, type Texture, type TextureImage } from "@/lib/catalog/textures";
+import { TEXTURE_TILE_MM, TEXTURE_TILE_RANGE, hasLayer, hasSurface, surfaceLayers, type LayeredLook, type ShapeLayer, type Surface, type Texture, type TextureImage } from "@/lib/catalog/textures";
+import { resolveStyle } from "@/lib/element-style";
 import { FootprintShape, sameDrawProps } from "@/components/footprint-shape";
 
 // `Texture` is the venue's SurfaceMaterial plus the two the catalog adds (wood, marble —
@@ -386,42 +387,73 @@ function OneSurface({ surface, footprint, w, d, at, color, seed }: { surface: Su
   return null;
 }
 
-/** Every surfaced shape of an item, each in its own material or picture — the base shape by the
- *  item's own texture, each added part by its own (surfaceLayers). A shape with none is left out,
- *  so the item's flat fill drawn underneath shows through it. Draw it OVER that fill, under the
- *  outline's stroke. Nothing surfaced, nothing drawn. */
+/** A shape's own line, when it names a colour and no width. */
+const OWN_LINE_PX = 1.5;
+
+/** One shape's own layer: its own fill (a colour pinned over the item's), the material or picture
+ *  over it — tinted by that colour, else the item's — and its own line on top. */
+function OneLayer({ layer, footprint, w, d, at, color, seed }: { layer: ShapeLayer; footprint: Footprint; w: number; d: number; at: { x: number; y: number }; color?: string; seed: string }) {
+  const own = layer.style;
+  const line = own?.stroke ? resolveStyle(own, "screen", { fill: "none", stroke: own.stroke, strokeWidth: OWN_LINE_PX }) : null;
+  // Lines only (ShapePart.open) have no inside to fill.
+  const open = footprint.kind === "multi" ? footprint.parts.every((p) => p.open) : footprint.kind === "custom" && !!footprint.open;
+  return (
+    <>
+      {own?.fill && !open && <FootprintShape footprint={footprint} fill={own.fill} fillOpacity={own.fillOpacity ?? 1} stroke="none" />}
+      {hasSurface(layer) && <OneSurface surface={layer} footprint={footprint} w={w} d={d} at={at} color={own?.fill ?? color} seed={seed} />}
+      {line && (
+        <FootprintShape
+          footprint={footprint}
+          fill="none"
+          stroke={line.stroke}
+          strokeOpacity={line.strokeOpacity}
+          strokeWidth={line.strokeWidth}
+          strokeDasharray={line.dashArray.length ? line.dashArray.join(" ") : undefined}
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
+    </>
+  );
+}
+
+/** Every shape of an item that has a layer of its own — a material, a picture, colours of its own —
+ *  each in it: the base shape by the item's own (MapAppearance.texture / textureImage / baseStyle),
+ *  each added part by its own (surfaceLayers). A shape with none is left out, so the item's flat
+ *  fill drawn underneath shows through it. Draw it OVER that fill; a caller that strokes the edge
+ *  again on top strokes `edgeFootprint`, which leaves the shapes with a line of their own to it.
+ *  Nothing layered, nothing drawn. */
 export function ItemSurface({
   appearance,
   footprint,
   color,
   seed,
 }: {
-  appearance: (Surface & { parts?: readonly Surface[] }) | undefined;
+  appearance: LayeredLook | undefined;
   footprint: Footprint;
   color?: string;
   seed: string;
 }) {
   const layers = surfaceLayers(appearance);
-  if (!layers.some(hasSurface)) return null;
+  if (!layers.some(hasLayer)) return null;
   const b = footprintBounds(footprint);
   if (footprint.kind !== "multi") {
-    return hasSurface(layers[0]) ? <OneSurface surface={layers[0]} footprint={footprint} w={b.w} d={b.h} at={{ x: 0, y: 0 }} color={color} seed={seed} /> : null;
+    return hasLayer(layers[0]) ? <OneLayer layer={layers[0]} footprint={footprint} w={b.w} d={b.h} at={{ x: 0, y: 0 }} color={color} seed={seed} /> : null;
   }
   return (
     <g className="pointer-events-none">
       {footprint.parts.map((piece, i) => {
         // By the SHAPE the piece belongs to: a hollow shape opened in two places is two pieces of
-        // one shape, and both wear its surface (BuiltOutline.of).
+        // one shape, and both wear its layer (BuiltOutline.of).
         const s = layers[pieceOf(piece, i)];
-        if (!hasSurface(s)) return null;
+        if (!hasLayer(s)) return null;
         // Laid in units from the ITEM's corner, so a material running across two shapes lines up;
         // a picture spread over its own shape.
         const own = pieceBox(piece.outline);
         const stretch = s.textureImage?.url && s.textureImage.fit === "stretch";
         return (
-          <OneSurface
+          <OneLayer
             key={i}
-            surface={s}
+            layer={s}
             footprint={{ kind: "multi", parts: [piece] }}
             w={stretch ? own.w : b.w}
             d={stretch ? own.h : b.h}
@@ -433,4 +465,16 @@ export function ItemSurface({
       })}
     </g>
   );
+}
+
+/** The footprint a caller strokes its edge on AFTER ItemSurface: every piece but those whose shape
+ *  draws a line of its own (which ItemSurface has drawn), so the item's edge never covers it. The
+ *  footprint itself when no shape has one; null when every one does. */
+export function edgeFootprint(appearance: LayeredLook | undefined, footprint: Footprint): Footprint | null {
+  const layers = surfaceLayers(appearance);
+  const lined = (i: number) => !!layers[i]?.style?.stroke;
+  if (!layers.some((_, i) => lined(i))) return footprint;
+  if (footprint.kind !== "multi") return lined(0) ? null : footprint;
+  const parts = footprint.parts.filter((piece, i) => !lined(pieceOf(piece, i)));
+  return parts.length === footprint.parts.length ? footprint : parts.length ? { kind: "multi", parts } : null;
 }

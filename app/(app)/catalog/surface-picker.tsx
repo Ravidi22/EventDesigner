@@ -15,6 +15,8 @@ import { fileProblem, uploadFile } from "@/lib/files/upload";
 import { NumberField } from "@/components/number-field";
 import { Segmented } from "@/components/segmented";
 import { fieldLabelClassName } from "@/components/control";
+import { Note, PanelRow } from "@/components/inspector-bar";
+import { Button } from "@/components/button";
 
 const FIT_OPTIONS = [
   ["tile", "חוזרת"],
@@ -136,7 +138,7 @@ export function SurfacePicker({
       </div>
 
       {image && (
-        <div className="space-y-2 rounded-md border border-border-soft p-2">
+        <div className="space-y-2.5">
           <Segmented
             label="פריסת התמונה"
             value={image.fit}
@@ -144,25 +146,27 @@ export function SurfacePicker({
             onChange={(fit) => onChange({ ...value, textureImage: { ...image, fit } })}
           />
           {image.fit === "tile" && (
-            <NumberField
-              id={`${idPrefix}-tile`}
-              label="רוחב חזרה אחת (ס״מ)"
-              decimals={0}
-              min={TEXTURE_TILE_RANGE.min / 10}
-              max={TEXTURE_TILE_RANGE.max / 10}
-              commitOnBlur
-              value={Math.round((image.tileMm ?? TEXTURE_TILE_MM) / 10)}
-              onChange={(cm) => onChange({ ...value, textureImage: { ...image, tileMm: Math.round(cm * 10) } })}
-            />
+            <PanelRow label="רוחב חזרה אחת (ס״מ)" htmlFor={`${idPrefix}-tile`}>
+              <NumberField
+                id={`${idPrefix}-tile`}
+                decimals={0}
+                min={TEXTURE_TILE_RANGE.min / 10}
+                max={TEXTURE_TILE_RANGE.max / 10}
+                commitOnBlur
+                value={Math.round((image.tileMm ?? TEXTURE_TILE_MM) / 10)}
+                onChange={(cm) => onChange({ ...value, textureImage: { ...image, tileMm: Math.round(cm * 10) } })}
+                className="w-20"
+              />
+            </PanelRow>
           )}
-          <p className="text-xs text-muted">
+          <Note>
             {image.fit === "tile"
               ? "התמונה חוזרת על פני הצורה בגודל אמיתי — כמו דוגמה של בד או אריח."
               : "עותק אחד של התמונה מכסה את כל הצורה — רחבת ריקודים מודפסת, לוגו."}
-          </p>
-          <button type="button" onClick={() => onChange({ texture: value.texture })} className="text-xs font-medium text-alert hover:underline">
+          </Note>
+          <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => onChange({ texture: value.texture })}>
             הסרת התמונה
-          </button>
+          </Button>
         </div>
       )}
     </div>

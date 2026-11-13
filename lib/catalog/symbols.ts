@@ -128,6 +128,9 @@ export function symbolOf(product: Product | undefined, footprint: Footprint): Sy
   if (kind === "pergola") return kind;
   // A dance floor's panels are clipped to whatever outline it has (lib/catalog/dance-floor.ts).
   if (kind === "dance-floor") return kind;
+  // A chuppah stands its posts on its outline's corners (lib/catalog/chuppah.ts) — a hexagon of timber
+  // as well as a square; several shapes at once are not one chuppah.
+  if (kind === "chuppah") return footprint.kind === "multi" ? null : kind;
   return footprint.kind === "circle" || footprint.kind === "ellipse" || footprint.kind === "rect" ? kind : null;
 }
 
@@ -216,8 +219,11 @@ export const CHUPPAH_STYLE_LABEL: Record<ChuppahStyle, string> = {
 // by itself. Like a chair's style, it is what the thing looks like from above; never a count.
 
 /** A chandelier: arms and bulbs round a hub (the default), crystal tiers, a hoop of lights, a
- *  sputnik, a cluster of pendant globes, a linear piece, a ring dressed in flowers. */
-export type ChandelierStyle = "arms" | "crystal" | "hoop" | "sputnik" | "pendants" | "linear" | "floral";
+ *  sputnik, a cluster of pendant globes, a linear piece, a ring dressed in flowers — and the three
+ *  the user's photographs asked for (2026-11-08): stacked drum shades, a cascade of crystal rods,
+ *  an empire basket of bead strands (lib/catalog/chandelier.ts lays all three); and the next round's
+ *  two: a raindrop spiral of crystal strands and floating rings, each leaned, a globe inside. */
+export type ChandelierStyle = "arms" | "crystal" | "hoop" | "sputnik" | "pendants" | "linear" | "floral" | "drums" | "prisms" | "empire" | "spiral" | "rings";
 /** A sofa: back, arms and cushions (the default), a buttoned Chesterfield, an L corner, a curved
  *  one, armless modules, a backless upholstered bench. */
 export type SofaStyle = "classic" | "chesterfield" | "corner" | "curved" | "armless" | "ottoman";
@@ -283,7 +289,7 @@ export const SYMBOL_STYLES: Partial<Record<SymbolKind, SymbolStyleSet>> = {
   },
   chandelier: {
     title: "סוג השנדליר",
-    styles: ["arms", "crystal", "hoop", "sputnik", "pendants", "linear", "floral"],
+    styles: ["arms", "crystal", "hoop", "sputnik", "pendants", "linear", "floral", "drums", "prisms", "empire", "spiral", "rings"],
     label: {
       arms: "קנים ונורות",
       crystal: "קריסטל בקומות",
@@ -292,6 +298,11 @@ export const SYMBOL_STYLES: Partial<Record<SymbolKind, SymbolStyleSet>> = {
       pendants: "מקבץ גלובוסים",
       linear: "שנדליר אורך",
       floral: "טבעת פרחים",
+      drums: "אהילי תוף",
+      prisms: "מפל קריסטל",
+      empire: "סל קריסטל",
+      spiral: "ספירלת קריסטל",
+      rings: "טבעות מרחפות",
     },
     hint: {
       arms: "זרועות מרכזיות ונורה או נר בקצה כל אחת — השנדליר הקלאסי",
@@ -301,6 +312,11 @@ export const SYMBOL_STYLES: Partial<Record<SymbolKind, SymbolStyleSet>> = {
       pendants: "גלובוסים בגדלים שונים התלויים מאותה פלטה",
       linear: "מוט ארוך עם מנורות בשורה — מעל שולחן אבירים",
       floral: "חישוק עטוף פרחים וירק",
+      drums: "אהילי בד עגולים זה מתחת לזה, הרחב למעלה — מוארים מבפנים",
+      prisms: "קומות של מוטות קריסטל תלויים, הרחבה למעלה ומצטמצמות לזנב",
+      empire: "כתר, טבעת רחבה ומחרוזות חרוזים שיורדות פנימה — אמפייר; בכמה קומות — סלים זה מעל זה",
+      spiral: "מחרוזות חרוזים מצלחת בתקרה, וכדורי הקריסטל בקצותיהן יורדים בספירלה",
+      rings: "טבעות אור מוטות בגדלים יורדים, כדור זכוכית מואר בתוך כל טבעת",
     },
     sample: (s) => (s === "linear" ? rect(1400, 320) : circle(900)),
   },

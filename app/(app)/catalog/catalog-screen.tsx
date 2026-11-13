@@ -97,13 +97,14 @@ export function CatalogScreen({
     if (!file) return;
     // A composite is made of other rows (lib/catalog/composition.ts) and a spreadsheet line cannot say
     // which: its category is not one a row can be imported into.
-    // A studio's built-in-only categories (lib/catalog/built-in.ts) take no row by hand: those lines
-    // are left out and named, one sentence each. A supplier sells those things and imports them.
+    // A studio's built-in-only categories and the suppliers' own (lib/catalog/built-in.ts) take no row
+    // by hand: those lines are left out and named, one sentence each. A supplier sells those things
+    // and imports them.
     const { products: added, refused } = parseCsvImport(
       await file.text(),
       CATEGORIES.filter((c) => c.id !== COMPOSITE_CATEGORY),
       () => crypto.randomUUID(),
-      { refuseBuiltIn: !supplierOrg },
+      { isSupplier: supplierOrg },
     );
     const refusedNote = refused.length ? ` לא יובאו: ${refused.join(" ")}` : "";
     if (added.length === 0) {
@@ -266,6 +267,8 @@ export function CatalogScreen({
         // act, and it was the one path that used to delete with no question at all. The drawer
         // closes itself on the way out, so the two dialogs are never open at once.
         onDelete={(id) => setDeleting(products.find((p) => p.id === id) ?? null)}
+        // The category picker's "פריט מורכב" — the same blank composite the catalog bar's button opens.
+        onComposite={() => setEditing(blankComposite())}
         onClose={() => setEditing(null)}
       />
 

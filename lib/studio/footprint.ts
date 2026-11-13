@@ -1,7 +1,7 @@
 // Pure appearance resolver (no window/localStorage) — shared by the Konva map renderer
 // and the drawer preview. Absence of `appearance` is derived from `dimensions` so every
 // legacy/seed product keeps rendering (name-in-a-shape = today's behavior).
-import type { ArcSpec, HollowSpec, MapShape, Product, ResizeSpec, RingSpec, ShapePart } from "@/lib/catalog/types";
+import type { ArcSpec, HollowSpec, MapShape, Pin, PinMode, Product, ResizeSpec, RingSpec, ShapePart } from "@/lib/catalog/types";
 import { ARC_SWEEP, MAP_SHAPES, RESIZE_DEFAULT_STEP_MM, RING_GAP, canHollow, usesDiameter } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import type { Point } from "@/lib/design-document/types";
@@ -1340,10 +1340,16 @@ export function resolveFootprint(product: Product): Footprint {
   const a = product.appearance;
   const shape = a?.shape ?? (d.diameterMm ? "circle" : "rect");
   const dims: ShapeDims = { ...d, outline: a?.outline, edgeCurves: a?.edgeCurves, open: a?.open, arc: a?.arc, ring: a?.ring, hollow: a?.hollow };
-  // With parts, the base joins the composite as its pieces in its OUTER box's frame (shapePieces) —
-  // the frame the parts' offsets are measured from — rather than re-centred on what a hollow band
-  // opened on a side leaves of it.
-  return a?.parts?.length ? composePieces(shapePieces(shape, dims), a.parts) : shapeFootprint(shape, dims);
+  return composeShapes(shape, dims, a?.parts ?? []);
+}
+
+/** A base shape and the shapes added beside it, at the catalog's own size: one shape resolved as a
+ *  base shape is (its primitive kind kept — a circle stays a circle); several composed about the
+ *  base's OUTER box — the frame the parts' offsets are measured from, rather than what a hollow band
+ *  opened on a side leaves of it — with every repeated shape laid in its copies against that outer
+ *  outline (composePieces). The one reading lib/element/geometry.ts makes of a definition too. */
+export function composeShapes(shape: MapShape, dims: ShapeDims, parts: readonly ShapePart[]): Footprint {
+  return parts.length ? composePieces(shapePieces(shape, dims), parts, hollowOuter(shape, dims)) : shapeFootprint(shape, dims);
 }
 
 // ── Outlines, for everything ───────────────────────────────────────────────────────────────────
@@ -1460,8 +1466,13 @@ export function composeFootprint(base: Footprint, parts: readonly ShapePart[]): 
  *  then each part's — and while every shape is one outline, piece k IS shape k, which is how
  *  ItemSurface reads a part's own texture. A shape drawn as several (a hollow one opened in two
  *  places) breaks that count, so then every piece says which shape it is (BuiltOutline.of). */
-function composePieces(basePieces: readonly BuiltOutline[], parts: readonly ShapePart[]): Footprint {
-  const groups = [basePieces, ...parts.map(placedPartOutlines)];
+export function composePieces(basePieces: readonly BuiltOutline[], parts: readonly ShapePart[], baseOuter: BuiltOutline = basePieces[0]): Footprint {
+  return recentred([basePieces, ...parts.map((p) => (p.repeat ? repeatCopies(p, baseOuter) : placedPartOutlines(p)))]);
+}
+
+/** Groups of pieces — the base's, then each part's — as one multi re-centred on the lot, every piece
+ *  saying which shape it is once any shape is drawn as several. */
+function recentred(groups: readonly (readonly BuiltOutline[])[]): Footprint {
   const several = groups.some((g) => g.length !== 1);
   const pieces = groups.flatMap((g, k) => g.map((p) => (several ? { ...p, of: k } : p)));
   const b = sampledBounds(pieces);
@@ -1469,6 +1480,286 @@ function composePieces(basePieces: readonly BuiltOutline[], parts: readonly Shap
     kind: "multi",
     parts: pieces.map((p) => ({ ...p, outline: p.outline.map((v) => ({ x: v.x - b.cx, y: v.y - b.cy })) })),
   };
+}
+
+// ── Pins and repeats (the element model, Stage 3 — docs/superpowers/specs/2026-11-07-element-model-
+// design.md §2.1 Pin, §2.3 Repeat) ───────────────────────────────────────────────────────────────
+//
+// A shape may say how it FOLLOWS a resize of its item (ShapePart.pin) or that it is LAID IN COPIES
+// against the base shape (ShapePart.repeat). Both are read here, by the one engine every plan goes
+// through, so the sketch, the printed map, the clearance check and the element model's geometry all
+// see the same copies in the same places — a pergola's posts at its corners whatever size it is laid
+// at. A shape with neither is placed and scaled exactly as every part was.
+
+/** Whether any shape of the item carries a pin or a repeat — then a stretched item is sized by them
+ *  (sizedShapes) rather than scaled whole. */
+export function hasBindings(parts: readonly ShapePart[] | undefined): boolean {
+  return !!parts?.some((p) => p.pin || p.repeat);
+}
+
+/** An outline walked as a polygon, its curves sampled. */
+function flatPolygon(o: BuiltOutline): Point[] {
+  return o.outline.flatMap((a, i) => flattenEdge(a, o.outline[(i + 1) % o.outline.length], o.edgeCurves?.[i]).slice(0, -1));
+}
+
+/** +1 when the outline's inside is to the RIGHT of each edge as drawn (y down), −1 to the left. */
+function windingOf(pts: readonly Point[]): 1 | -1 {
+  let area = 0;
+  pts.forEach((p, i) => {
+    const q = pts[(i + 1) % pts.length];
+    area += p.x * q.y - q.x * p.y;
+  });
+  return area >= 0 ? 1 : -1;
+}
+
+/** The unit normal of direction `d` pointing INTO an outline of winding `w` (the offset engine's
+ *  `inward`, on a direction of any length). */
+const intoBase = (d: Point, w: 1 | -1): Point => inward(vUnit(d), w);
+
+function insidePolygon(pts: readonly Point[], p: Point): boolean {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const a = pts[i];
+    const b = pts[j];
+    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
+/** Where the line `axis = at` crosses the polygon: the span it is inside, or null when it misses. */
+function chordAt(pts: readonly Point[], axis: "x" | "y", at: number): { from: number; to: number } | null {
+  const hits: number[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % pts.length];
+    const pa = axis === "x" ? a.x : a.y;
+    const pb = axis === "x" ? b.x : b.y;
+    if (pa === pb || (pa - at) * (pb - at) > 0) continue;
+    const t = (at - pa) / (pb - pa);
+    hits.push(axis === "x" ? a.y + (b.y - a.y) * t : a.x + (b.x - a.x) * t);
+  }
+  if (hits.length < 2) return null;
+  return { from: Math.min(...hits), to: Math.max(...hits) };
+}
+
+/** The prototype's pieces about its own centre, un-turned, and the box they stand in. */
+function prototype(part: ShapePart): { pieces: BuiltOutline[]; w: number; h: number } {
+  const pieces = shapePieces(part.shape, part);
+  const b = sampledBounds(pieces);
+  return { pieces, w: b.w, h: b.h };
+}
+
+/** The prototype re-made `w` across and `h` deep: a derived shape from its own numbers (a rectangle
+ *  stays a rectangle, a capsule a capsule); a round or hand-drawn one pulled to the box. */
+function remade(part: ShapePart, w: number, h: number): BuiltOutline[] {
+  if (part.shape !== "custom" && !usesDiameter(part.shape)) {
+    return shapePieces(part.shape, { ...part, widthMm: w, depthMm: h });
+  }
+  const p = prototype(part);
+  if (!p.w || !p.h) return p.pieces;
+  return footprintOutlines(scaleFootprint(piecesFootprint(p.pieces), w / p.w, h / p.h));
+}
+
+/** Pieces about the origin turned by `deg` and moved to `at`. */
+function placedAt(pieces: readonly BuiltOutline[], at: Point, deg: number): BuiltOutline[] {
+  const fake: ShapePart = { id: "", shape: "rect", x: at.x, y: at.y, rotation: deg };
+  return pieces.map((o) => placeInPart(o, fake));
+}
+
+/** A repeated shape's copies against the base's outer outline — see ShapePart.repeat. The base is
+ *  centred on its box, as hollowOuter gives it; the copies come back in that frame. */
+export function repeatCopies(part: ShapePart, outer: BuiltOutline): BuiltOutline[] {
+  const r = part.repeat;
+  if (!r) return placedPartOutlines(part);
+  const pts = flatPolygon(outer);
+  if (pts.length < 3) return [];
+  const w = windingOf(pts);
+  const proto = prototype(part);
+  const margin = Math.max(0, r.marginMm ?? 0);
+  const deg = (d: Point) => (Math.atan2(d.y, d.x) * 180) / Math.PI;
+  switch (r.along) {
+    case "corners": {
+      // One copy inside every corner of the outline AS DRAWN (a bow is not a corner), its faces on
+      // the two lines that meet there.
+      const v = outer.outline;
+      const out: BuiltOutline[] = [];
+      v.forEach((c, i) => {
+        const prev = v[(i - 1 + v.length) % v.length];
+        const next = v[(i + 1) % v.length];
+        const dIn = { x: c.x - prev.x, y: c.y - prev.y };
+        const dOut = { x: next.x - c.x, y: next.y - c.y };
+        if (!Math.hypot(dIn.x, dIn.y) || !Math.hypot(dOut.x, dOut.y)) return;
+        const nIn = intoBase(dIn, w);
+        const nOut = intoBase(dOut, w);
+        // A straight-through vertex (the middle of a side) is no corner.
+        if (Math.abs(nIn.x * nOut.y - nIn.y * nOut.x) < 1e-6 && nIn.x * nOut.x + nIn.y * nOut.y > 0) return;
+        const half = (n: Point) => (Math.abs(n.x) * proto.w) / 2 + (Math.abs(n.y) * proto.h) / 2;
+        const at = { x: c.x + nIn.x * half(nIn) + nOut.x * half(nOut), y: c.y + nIn.y * half(nIn) + nOut.y * half(nOut) };
+        out.push(...placedAt(proto.pieces, at, part.rotation || 0));
+      });
+      return out;
+    }
+    case "edges": {
+      // One copy along every side, as long as the side less the margins, as deep as the prototype,
+      // its outer face on the line.
+      const v = outer.outline;
+      const out: BuiltOutline[] = [];
+      v.forEach((a, i) => {
+        const b = v[(i + 1) % v.length];
+        const d = { x: b.x - a.x, y: b.y - a.y };
+        const L = Math.hypot(d.x, d.y) - 2 * margin;
+        if (L <= 0) return;
+        const n = intoBase(d, w);
+        const t = proto.h;
+        const mid = { x: (a.x + b.x) / 2 + (n.x * t) / 2, y: (a.y + b.y) / 2 + (n.y * t) / 2 };
+        out.push(...placedAt(remade(part, L, t), mid, deg(d)));
+      });
+      return out;
+    }
+    case "row": {
+      // Copies across the base at a spacing, struck from the middle, each spanning the base from
+      // side to side where it stands.
+      const b = sampledBounds([outer]);
+      const axis = r.axis ?? (b.w >= b.h ? "x" : "y");
+      const span = axis === "x" ? b.w : b.h;
+      // The prototype's thin side is its thickness across the run; its long side is the one that
+      // spans, whichever way it was drawn.
+      const thick = Math.min(proto.w, proto.h);
+      const S = Math.max(1, r.spacingMm ?? Math.max(thick * 2, 100));
+      const free = span - 2 * margin - thick;
+      if (free < 0) return [];
+      const n = Math.floor(free / S + 1e-9) + 1;
+      const c0 = axis === "x" ? b.cx : b.cy;
+      const out: BuiltOutline[] = [];
+      for (let k = 0; k < n; k++) {
+        const at = c0 + (k - (n - 1) / 2) * S;
+        const chord = chordAt(pts, axis, at);
+        if (!chord) continue;
+        const len = chord.to - chord.from - 2 * margin;
+        if (len <= 0) continue;
+        const mid = (chord.from + chord.to) / 2;
+        const pieces = axis === "x" ? remade(part, thick, len) : remade(part, len, thick);
+        out.push(...placedAt(pieces, axis === "x" ? { x: at, y: mid } : { x: mid, y: at }, 0));
+      }
+      return out;
+    }
+    case "grid": {
+      // Copies of the prototype's own size on a grid struck from the middle, kept where their centre
+      // lies inside the base, clear of its edge by the margin.
+      const b = sampledBounds([outer]);
+      const sx = Math.max(1, r.spacingMm ?? Math.max(proto.w * 2, 100));
+      const sy = Math.max(1, r.spacingYMm ?? sx);
+      const nx = Math.floor((b.w - 2 * margin - proto.w) / sx + 1e-9) + 1;
+      const ny = Math.floor((b.h - 2 * margin - proto.h) / sy + 1e-9) + 1;
+      if (nx < 1 || ny < 1) return [];
+      const out: BuiltOutline[] = [];
+      for (let i = 0; i < nx; i++) {
+        for (let j = 0; j < ny; j++) {
+          const at = { x: b.cx + (i - (nx - 1) / 2) * sx, y: b.cy + (j - (ny - 1) / 2) * sy };
+          if (!insidePolygon(pts, at)) continue;
+          out.push(...placedAt(proto.pieces, at, part.rotation || 0));
+        }
+      }
+      return out;
+    }
+  }
+}
+
+/** A base shape sized to `w` × `h`: its solid outer outline and the pieces it is drawn as — a
+ *  derived shape re-derived from the new numbers, a hand-drawn one stretched (its band cut again
+ *  inside the stretched outline). Both centred on the base's box. */
+function sizedBase(shape: MapShape, dims: ShapeDims, w: number, h: number): { outer: BuiltOutline; pieces: BuiltOutline[] } {
+  if (shape !== "custom") {
+    const d2: ShapeDims = usesDiameter(shape)
+      ? { diameterMm: shape === "quarter-circle" ? w * 2 : w, arc: dims.arc, hollow: dims.hollow }
+      : { widthMm: w, depthMm: h, arc: dims.arc, ring: dims.ring, hollow: dims.hollow };
+    return { outer: hollowOuter(shape, d2), pieces: shapePieces(shape, d2) };
+  }
+  const outer0 = hollowOuter(shape, dims);
+  const ob = sampledBounds([outer0]);
+  const stretched = ob.w && ob.h ? footprintOutlines(scaleFootprint(piecesFootprint([outer0]), w / ob.w, h / ob.h))[0] : outer0;
+  const outer: BuiltOutline = { ...stretched, ...(dims.open ? { open: true } : {}) };
+  const hollow = hollowOf(shape, dims.hollow, dims.open);
+  return { outer, pieces: hollow ? buildHollow(outer, hollow) : [outer] };
+}
+
+/** One axis of a pinned shape: where a coordinate goes when the base's box grows from `oldSize` to
+ *  `newSize` about the same centre. `lo`/`hi` are the shape's own extent on that axis. */
+function pinAxis(mode: PinMode | undefined, v: number, lo: number, hi: number, oldSize: number, newSize: number): number {
+  const grow = newSize - oldSize;
+  switch (mode ?? "scale") {
+    case "scale":
+      return oldSize ? (v * newSize) / oldSize : v;
+    case "start":
+      return v - grow / 2;
+    case "end":
+      return v + grow / 2;
+    case "center":
+      return v;
+    case "stretch": {
+      const span = hi - lo;
+      return span ? lo - grow / 2 + ((v - lo) * (span + grow)) / span : v;
+    }
+  }
+}
+
+/** A base shape and its parts at a stretched size (sizedFootprint's rule, on shapes rather than a
+ *  row — lib/element/geometry.ts asks it of a definition):
+ *    one shape      — a derived shape re-derived at the new size; a hand-drawn hollow one stretched
+ *                     on its outside and its band cut again; a hand-drawn solid one scaled;
+ *    several, none pinned or repeated — scaled whole, the one reading of "bigger" a composite had;
+ *    several, some pinned or repeated — the base sized as one shape would be, every other shape put
+ *                     by its pin against the base's new box (absent = scaled with it), and every
+ *                     repeated shape laid again on the new base. */
+export function sizedShapes(shape: MapShape, dims: ShapeDims, parts: readonly ShapePart[], size: { widthMm: number; depthMm: number }): Footprint {
+  if (!parts.length && shape !== "custom") {
+    if (usesDiameter(shape)) {
+      // The box's width IS the circle's diameter for everything cut from one except the quarter,
+      // whose box is one radius across (see ROUND_FIELD).
+      const diameterMm = shape === "quarter-circle" ? size.widthMm * 2 : size.widthMm;
+      return shapeFootprint(shape, { diameterMm, arc: dims.arc, hollow: dims.hollow });
+    }
+    return shapeFootprint(shape, { widthMm: size.widthMm, depthMm: size.depthMm, arc: dims.arc, ring: dims.ring, hollow: dims.hollow });
+  }
+  // A hand-drawn outline drawn hollow: the OUTLINE is stretched and the band cut inside it again, so
+  // the band stays the depth of its modules, as it does on a derived shape.
+  const hollow = !parts.length ? hollowOf(shape, dims.hollow, dims.open) : undefined;
+  if (hollow) {
+    const outer = hollowOuter(shape, { outline: dims.outline, edgeCurves: dims.edgeCurves });
+    const ob = sampledBounds([outer]);
+    if (ob.w && ob.h) {
+      const stretched = scaleFootprint({ kind: "custom", outline: outer.outline, ...(outer.edgeCurves ? { edgeCurves: outer.edgeCurves } : {}) }, size.widthMm / ob.w, size.depthMm / ob.h);
+      return piecesFootprint(buildHollow(footprintOutlines(stretched)[0], hollow));
+    }
+  }
+  const catalog = composeShapes(shape, dims, parts);
+  const b = footprintBounds(catalog);
+  if (!b.w || !b.h) return catalog;
+  const sx = size.widthMm / b.w;
+  const sy = size.depthMm / b.h;
+  if (!hasBindings(parts)) return scaleFootprint(catalog, sx, sy);
+  // Anchored: the base by the lot's scale, each shape by its pin against the base's box, the
+  // repeats laid on the new base.
+  const outer0 = hollowOuter(shape, dims);
+  const ob = sampledBounds([outer0]);
+  const base = sizedBase(shape, dims, ob.w * sx, ob.h * sy);
+  const nb = sampledBounds([base.outer]);
+  const groups = parts.map((p) => {
+    if (p.repeat) return repeatCopies(p, base.outer);
+    const pieces = placedPartOutlines(p);
+    const pb = sampledBounds(pieces);
+    const px = (x: number) => pinAxis(p.pin?.x, x, pb.minX, pb.maxX, ob.w, nb.w);
+    const py = (y: number) => pinAxis(p.pin?.y, y, pb.minY, pb.maxY, ob.h, nb.h);
+    // A bezier's offsets follow the axis' scale (a translation leaves them; a stretch pulls them).
+    const kx = px(1) - px(0);
+    const ky = py(1) - py(0);
+    return pieces.map((o) => ({
+      ...o,
+      outline: o.outline.map((v) => ({ x: px(v.x), y: py(v.y) })),
+      ...(o.edgeCurves ? { edgeCurves: o.edgeCurves.map((c) => (c ? { c1: { x: c.c1.x * kx, y: c.c1.y * ky }, c2: { x: c.c2.x * kx, y: c.c2.y * ky } } : null)) } : {}),
+    }));
+  });
+  return recentred([base.pieces, ...groups]);
 }
 
 export function resolveContent(product: Product): ResolvedContent {
@@ -1592,32 +1883,9 @@ export function scaleFootprint(f: Footprint, sx: number, sy: number): Footprint 
 export function sizedFootprint(product: Product, sizeMm?: { widthMm: number; depthMm: number }): Footprint {
   if (!sizeMm || !resizeSpecOf(product)) return resolveFootprint(product);
   const a = product.appearance;
-  const shape = shapeOfProduct(product);
-  if (!a?.parts?.length && shape !== "custom") {
-    if (usesDiameter(shape)) {
-      // The box's width IS the circle's diameter for everything cut from one except the quarter,
-      // whose box is one radius across (see ROUND_FIELD).
-      const diameterMm = shape === "quarter-circle" ? sizeMm.widthMm * 2 : sizeMm.widthMm;
-      return shapeFootprint(shape, { diameterMm, arc: a?.arc, hollow: a?.hollow });
-    }
-    return shapeFootprint(shape, { widthMm: sizeMm.widthMm, depthMm: sizeMm.depthMm, arc: a?.arc, ring: a?.ring, hollow: a?.hollow });
-  }
-  // A hand-drawn outline drawn hollow: the OUTLINE is stretched and the band cut inside it again, so
-  // the band stays the depth of its modules, as it does on a derived shape. (With parts the whole
-  // composite is scaled, band and all — the one reading of "bigger" a composite has.)
-  const hollow = !a?.parts?.length ? hollowOf(shape, a?.hollow, a?.open) : undefined;
-  if (hollow) {
-    const outer = hollowOuter(shape, { outline: a?.outline, edgeCurves: a?.edgeCurves });
-    const ob = sampledBounds([outer]);
-    if (ob.w && ob.h) {
-      const stretched = scaleFootprint({ kind: "custom", outline: outer.outline, ...(outer.edgeCurves ? { edgeCurves: outer.edgeCurves } : {}) }, sizeMm.widthMm / ob.w, sizeMm.depthMm / ob.h);
-      return piecesFootprint(buildHollow(footprintOutlines(stretched)[0], hollow));
-    }
-  }
-  const base = resolveFootprint(product);
-  const b = footprintBounds(base);
-  if (!b.w || !b.h) return base;
-  return scaleFootprint(base, sizeMm.widthMm / b.w, sizeMm.depthMm / b.h);
+  const d = product.dimensions;
+  const dims: ShapeDims = { ...d, outline: a?.outline, edgeCurves: a?.edgeCurves, open: a?.open, arc: a?.arc, ring: a?.ring, hollow: a?.hollow };
+  return sizedShapes(shapeOfProduct(product), dims, a?.parts ?? [], sizeMm);
 }
 
 // ponytail: self-check. Run: node --experimental-strip-types lib/studio/footprint.ts
@@ -2144,6 +2412,88 @@ if (isMain(import.meta.url)) {
     const soft = evenInset(rounded, 50)!;
     assert(!!soft.edgeCurves?.some(Boolean) && sampledBounds([soft]).minX > -450.5, "…50 in it is the concentric R50");
     assert(evenInset(rounded, 300) === null && evenInset(rounded, 0) === rounded, "nothing left 300 in a 600 deep shape; 0 in is the shape");
+  }
+
+  // Pins and repeats (the element model, Stage 3): a pergola's posts stay at its corners, its beams
+  // along its sides and its slats at their spacing whatever size it is laid at; a pinned shelf keeps
+  // its distance from the edge it is pinned to; a shape with neither is scaled whole as ever.
+  {
+    const near = (a: number, b: number, m: string, tol = 0.6) => assert(Math.abs(a - b) < tol, `${m} (${a} vs ${b})`);
+    const roof: ShapeDims = { widthMm: 4000, depthMm: 4000 };
+    const post: ShapePart = { id: "post", shape: "rect", widthMm: 120, depthMm: 120, x: 0, y: 0, rotation: 0, repeat: { along: "corners" } };
+    const beam: ShapePart = { id: "beam", shape: "rect", widthMm: 1000, depthMm: 150, x: 0, y: 0, rotation: 0, repeat: { along: "edges" } };
+    const slat: ShapePart = { id: "slat", shape: "rect", widthMm: 50, depthMm: 1000, x: 0, y: 0, rotation: 0, repeat: { along: "row", spacingMm: 300, axis: "x", marginMm: 150 } };
+    const pergola = composeShapes("rect", roof, [post, beam, slat]);
+    assert(pergola.kind === "multi", "a pergola is a multi");
+    const of = (k: number) => (pergola.kind === "multi" ? pergola.parts.filter((p, i) => pieceOf(p, i) === k) : []);
+    assert(of(1).length === 4, `four posts (${of(1).length})`);
+    const postCentres = of(1).map((p) => sampledBounds([p]));
+    assert(postCentres.every((c) => Math.abs(Math.abs(c.cx) - 1940) < 0.6 && Math.abs(Math.abs(c.cy) - 1940) < 0.6 && Math.abs(c.w - 120) < 0.6), "…inside the four corners, 12 cm square");
+    assert(of(2).length === 4, `four beams (${of(2).length})`);
+    const beamBoxes = of(2).map((p) => sampledBounds([p]));
+    assert(beamBoxes.filter((b) => Math.abs(b.w - 4000) < 0.6 && Math.abs(b.h - 150) < 0.6 && Math.abs(Math.abs(b.cy) - 1925) < 0.6).length === 2, "…two beams run the full 4 m along the top and bottom sides, inside the line");
+    assert(beamBoxes.filter((b) => Math.abs(b.h - 4000) < 0.6 && Math.abs(b.w - 150) < 0.6 && Math.abs(Math.abs(b.cx) - 1925) < 0.6).length === 2, "…two down the left and right");
+    // (4000 − 2·150 − 50) / 300 → 12 gaps, 13 slats, struck from the middle, each spanning 4 m less the margins.
+    assert(of(3).length === 13, `thirteen slats at 30 cm (${of(3).length})`);
+    const slatBoxes = of(3).map((p) => sampledBounds([p])).sort((a, b) => a.cx - b.cx);
+    near(slatBoxes[6].cx, 0, "the middle slat is on the centre line");
+    near(slatBoxes[7].cx - slatBoxes[6].cx, 300, "…30 cm to the next");
+    assert(slatBoxes.every((b) => Math.abs(b.w - 50) < 0.6 && Math.abs(b.h - 3700) < 0.6), "…each 5 cm thick, spanning the roof less the margins");
+    near(footprintBounds(pergola).w, 4000, "the lot is the roof");
+    near(footprintBounds(pergola).h, 4000, "…both ways");
+
+    // Laid 6 × 4: the posts are still at the corners and still 12 cm; the beams along the long sides
+    // are 6 m; the slats are more, not wider apart.
+    const wide = sizedShapes("rect", roof, [post, beam, slat], { widthMm: 6000, depthMm: 4000 });
+    const ofW = (k: number) => (wide.kind === "multi" ? wide.parts.filter((p, i) => pieceOf(p, i) === k) : []);
+    near(footprintBounds(wide).w, 6000, "the stretched lot is 6 × 4");
+    near(footprintBounds(wide).h, 4000, "…deep");
+    assert(ofW(1).length === 4 && ofW(1).map((p) => sampledBounds([p])).every((c) => Math.abs(Math.abs(c.cx) - 2940) < 0.6 && Math.abs(Math.abs(c.cy) - 1940) < 0.6 && Math.abs(c.w - 120) < 0.6), "the posts stand in the new corners, still 12 cm");
+    assert(ofW(2).map((p) => sampledBounds([p])).filter((b) => Math.abs(b.w - 6000) < 0.6).length === 2, "the long beams are 6 m");
+    assert(ofW(3).length === 19, `nineteen slats at the same 30 cm (${ofW(3).length})`);
+    const wideSlats = ofW(3).map((p) => sampledBounds([p])).sort((a, b) => a.cx - b.cx);
+    near(wideSlats[1].cx - wideSlats[0].cx, 300, "…30 cm apart");
+
+    // A hexagonal roof: six posts, six beams, slats cut to the outline where they stand.
+    const hex = composeShapes("hexagon", { widthMm: 4000, depthMm: 3464 }, [post, beam, slat]);
+    const ofH = (k: number) => (hex.kind === "multi" ? hex.parts.filter((p, i) => pieceOf(p, i) === k) : []);
+    assert(ofH(1).length === 6 && ofH(2).length === 6, `six posts and six beams round a hexagon (${ofH(1).length}, ${ofH(2).length})`);
+    const hexSlats = ofH(3).map((p) => sampledBounds([p]));
+    assert(hexSlats.length > 2 && hexSlats.some((b) => b.h < 3000) && hexSlats.every((b) => b.h <= 3464 + 0.6), "…the slats near the ends are shorter than the one through the middle");
+
+    // A grid: balusters of their own size on 50 cm centres, inside a round plinth only.
+    const bal: ShapePart = { id: "b", shape: "circle", diameterMm: 80, x: 0, y: 0, rotation: 0, repeat: { along: "grid", spacingMm: 500 } };
+    const disc = composeShapes("circle", { diameterMm: 2000 }, [bal]);
+    const ofD = disc.kind === "multi" ? disc.parts.filter((p, i) => pieceOf(p, i) === 1) : [];
+    assert(ofD.length > 4 && ofD.length < 16 && ofD.every((p) => Math.hypot(sampledBounds([p]).cx, sampledBounds([p]).cy) < 1000), `a grid keeps the copies whose centres lie inside the disc (${ofD.length})`);
+
+    // Pins: a shelf pinned to the END (+x) of a 3 m counter keeps its 10 cm inset when the counter is
+    // laid 4 m; one pinned to START keeps its inset from the other end; CENTER keeps its offset;
+    // STRETCH keeps both insets; the default scales as it always did.
+    const counter: ShapeDims = { widthMm: 3000, depthMm: 600 };
+    const shelf = (pin?: Pin): ShapePart => ({ id: "s", shape: "rect", widthMm: 800, depthMm: 200, x: 1000, y: -500, rotation: 0, ...(pin ? { pin } : {}) });
+    const box = (fp: Footprint) => (fp.kind === "multi" ? sampledBounds(fp.parts.filter((p, i) => pieceOf(p, i) === 1)) : sampledBounds([]));
+    const lotOf = (fp: Footprint) => sampledBounds(footprintOutlines(fp));
+    const end = sizedShapes("rect", counter, [shelf({ x: "end" })], { widthMm: 4000, depthMm: 800 });
+    near(lotOf(end).maxX - box(end).maxX, 100, "pinned to the end: the inset from the counter's end is kept");
+    near(box(end).w, 800, "…and its width");
+    const start = sizedShapes("rect", counter, [shelf({ x: "start" })], { widthMm: 4000, depthMm: 800 });
+    near(box(start).minX - lotOf(start).minX, 2100, "pinned to the start: the distance from the other end is kept");
+    const centre = sizedShapes("rect", counter, [shelf({ x: "center" })], { widthMm: 4000, depthMm: 800 });
+    near(box(centre).cx - lotOf(centre).cx, 1000, "pinned to the centre: the offset from the middle is kept");
+    const stretch = sizedShapes("rect", counter, [shelf({ x: "stretch" })], { widthMm: 4000, depthMm: 800 });
+    near(box(stretch).w, 1800, "stretched: both insets kept, so the shelf grows by the metre the counter grew");
+    near(lotOf(stretch).maxX - box(stretch).maxX, 100, "…its end inset still 10 cm");
+    const scaled = sizedShapes("rect", counter, [shelf()], { widthMm: 4000, depthMm: 800 });
+    const plainLot = composeShapes("rect", counter, [shelf()]);
+    const plb = footprintBounds(plainLot);
+    assert(eq(scaled, scaleFootprint(plainLot, 4000 / plb.w, 800 / plb.h)), "no pin, no repeat: scaled whole, exactly as before");
+    // The y pin on the same shelf, behind the counter: the composite's box is the lot (counter +
+    // shelf), so the y scale is read off the lot — the shelf pinned to the start (−y) keeps its
+    // distance from the lot's top edge... as measured against the BASE's box, which is the rule.
+    const yStart = sizedShapes("rect", counter, [shelf({ x: "end", y: "start" })], { widthMm: 4000, depthMm: 1600 });
+    const baseY = yStart.kind === "multi" ? sampledBounds(yStart.parts.filter((p, i) => pieceOf(p, i) === 0)) : sampledBounds([]);
+    near(baseY.minY - box(yStart).minY, 300, "pinned to the start in y: the shelf keeps its 30 cm beyond the counter's top edge");
   }
 
   console.log("footprint self-check passed");

@@ -91,7 +91,8 @@ export const CATEGORY_GROUPS: CategoryGroup[] = [
   { id: "grp-table-design", label: "עיצוב שולחן" },
   { id: "grp-ceiling-design", label: "עיצובי תקרה" },
   // The flowers THEMSELVES — stems, greens, dried — as a florist sells them: what a supplier
-  // publishes on the marketplace, and what an arrangement's spec rows are picked from.
+  // publishes on the marketplace, and what an arrangement's spec rows are picked from. Every
+  // category in it is `supplierOnly`, so a STUDIO never sees this department (shownGroups).
   { id: "grp-flowers", label: "פרחים וירק" },
   { id: "grp-accessories", label: "מוצרים נלווים" },
   // Items MADE OF other items (lib/catalog/composition.ts) — a dressed head table, a lounge corner.
@@ -171,6 +172,14 @@ export interface CategoryDef {
    *  the studio's built-in (lib/catalog/standard/items.ts, installed at sign-up), so a studio's new-item
    *  form and CSV import never offer it. Absent = an ordinary category, created by hand. */
   builtIn?: true;
+  /** A SUPPLIER'S category (2026-11-07, the user: "remove the flower category, keep סידורי פרחים"):
+   *  what a florist sells and a designer never stocks as a row of its own — a cut stem reaches a
+   *  studio only as a line of an arrangement's spec (Product.flowers, picked from the marketplace's
+   *  stems through knownFlowersOf). A studio's catalog filter, drawer, rail and CSV import leave it
+   *  out, saveProduct/importProducts refuse a new row in it, and the marketplace copies none; a
+   *  supplier organisation makes and publishes rows in it as before. Absent = everyone's. The rules
+   *  are lib/catalog/built-in.ts (isSupplierCategory, creatableCategories, shownGroups). */
+  supplierOnly?: true;
   /** What a NEW product of this category is priced per (Product.priceUnit) — a seed for the drawer,
    *  like `defaultStock`, stored on the row and editable. Absent = per unit. A sail is sold by the
    *  square metre of its polygon, a ceiling drape by the metre of its runs (spec 2026-11-07 §6.3/§6.4). */
@@ -213,10 +222,11 @@ export const CATEGORIES: CategoryDef[] = [
   // is the HEAD seen from above (what the plan draws — lib/catalog/flower-kinds.ts knows the
   // usual one per kind), the height the stem's length, neither required. Consumable, and what an
   // arrangement's spec rows are made of; a supplier organisation publishes these on the
-  // marketplace, and a studio that copies one can still drop it on a table as a single head.
-  { id: "flowers", label: "פרחים", group: "grp-flowers", defaultLayer: "table", icon: Flower, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10 },
-  { id: "greenery", label: "ירק וענפים", group: "grp-flowers", defaultLayer: "table", icon: Leaf, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10 },
-  { id: "dried-flowers", label: "פרחים יבשים", group: "grp-flowers", defaultLayer: "table", icon: Wheat, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10 },
+  // marketplace. SUPPLIER ONLY: a studio has no stem rows of its own (its פרחים are its סידורי
+  // פרחים) — a copy made before 2026-11-07 keeps its category and still draws as a single head.
+  { id: "flowers", label: "פרחים", group: "grp-flowers", defaultLayer: "table", icon: Flower, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10, supplierOnly: true },
+  { id: "greenery", label: "ירק וענפים", group: "grp-flowers", defaultLayer: "table", icon: Leaf, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10, supplierOnly: true },
+  { id: "dried-flowers", label: "פרחים יבשים", group: "grp-flowers", defaultLayer: "table", icon: Wheat, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10, supplierOnly: true },
   { id: "chandeliers", label: "שנדליירים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Lightbulb, dims: "round", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
   // Cloth in the air (spec 2026-11-07 §6.3/§6.4, lib/studio/ceiling-cloth.ts): a SAIL tied at three or
   // four corners — a wall, a corner of a thing, a post of its own — billed by the square metre of its

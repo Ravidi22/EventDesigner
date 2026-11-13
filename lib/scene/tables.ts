@@ -31,6 +31,9 @@ import { CLOTH_DROP_MM, chairStyleOf, drawStyleOf, symbolCount, symbolOf, type C
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { vesselOf } from "@/lib/catalog/vessel";
 import { borderOf, type Border } from "@/lib/catalog/border";
+import { chandelierDrawOf } from "@/lib/catalog/chandelier";
+import { chuppahDrawOf } from "@/lib/catalog/chuppah";
+import { ownBodyParts } from "./element-body";
 import { type DressingSpot, dressBlockOf, dressingSpots, placementFootprint, tableBlock, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
 import { DEFAULT_TONE } from "@/components/item-symbol";
 import { primeCatalog } from "@/lib/catalog/storage";
@@ -428,6 +431,10 @@ function contextFor(product: Product | undefined, resolved: Resolved | undefined
   if (chairStyle) ctx.chairStyle = chairStyle;
   const drawStyle = drawStyleOf(product);
   if (drawStyle) ctx.drawStyle = drawStyle;
+  const chandelier = chandelierDrawOf(product?.appearance, product?.variants);
+  if (chandelier) ctx.chandelier = chandelier;
+  const chuppah = chuppahDrawOf(product?.appearance);
+  if (chuppah) ctx.chuppah = chuppah;
   if (product && (kind === "flowers" || kind === "centerpiece")) ctx.flowers = flowerDrawSpecOf(product, footprint, own);
   if (placement) {
     const climb = climbRise(product, placement.climb);
@@ -574,20 +581,24 @@ export function tableNodes(input: Pick<SceneInput, "doc" | "author"> & { setting
     const frame = roomTransform(t, z);
     const cover = coverOn(doc, t.id);
 
-    // The top on its legs — timber when the row says nothing — and the cloth over it.
+    // The top on its legs — timber when the row says nothing — and the cloth over it. A shape of the
+    // row that said something about its own body (a shelf a metre up, a raised tier — lib/element)
+    // is the element model's, built beside the top; the top, its legs and the cloth are the rest.
     const material = swatchMaterial(resolved, product, BARE_TABLE_TONE, "matte", true);
     if (!material.texture && !material.image) material.texture = "wood";
-    out.body(`table:${t.id}`, { type: "table", id: t.id, label: product?.name }, material, tableTop(footprint, heightMm, !!cover), [frame]);
+    const own = ownBodyParts(product, footprint, material);
+    const top = own ? own.rest : footprint;
+    out.body(`table:${t.id}`, { type: "table", id: t.id, label: product?.name }, material, [...tableTop(top, heightMm, !!cover), ...(own?.parts ?? [])], [frame]);
     if (cover) {
       const c = resolve(cover.variantId);
       const colour = hexOf(c?.swatch) ?? hexOf(c?.product.appearance?.style?.fill) ?? BARE_CLOTH_TONE;
-      out.body(`cloth:${cover.id}`, { type: "cloth", id: cover.id, label: c?.product.name }, clothMaterial(colour), clothParts(footprint, heightMm), [frame]);
+      out.body(`cloth:${cover.id}`, { type: "cloth", id: cover.id, label: c?.product.name }, clothMaterial(colour), clothParts(top, heightMm), [frame]);
       // Its contour (lib/catalog/border.ts): each band a stretch of the same fall at the hem, in its
       // own colour, a hair proud of the cloth.
       const hem = borderOf(cover, c?.product);
       if (hem) {
         hemBands(hem, heightMm).forEach((band, k) => {
-          out.body(`cloth-hem:${cover.id}:${k}`, { type: "cloth", id: cover.id, label: c?.product.name }, clothMaterial(hexOf(band.colour) ?? colour), clothHemParts(footprint, heightMm, band.range), [frame]);
+          out.body(`cloth-hem:${cover.id}:${k}`, { type: "cloth", id: cover.id, label: c?.product.name }, clothMaterial(hexOf(band.colour) ?? colour), clothHemParts(top, heightMm, band.range), [frame]);
         });
       }
     }
