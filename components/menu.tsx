@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { ChevronDown, Ellipsis, type LucideIcon } from "lucide-react";
 import { IconButton } from "./icon-button";
 
@@ -31,6 +31,14 @@ export interface MenuItem {
    *  with `false` when the aim leaves it or the menu closes. For a row whose effect can be shown
    *  before it is chosen (יישור draws the line the others will go to) rather than explained. */
   onHover?: (hovering: boolean) => void;
+  /** Classes for the row's icon — its own ink, as a diary kind wears its kind's colour in the
+   *  calendar's quick-add (app/(app)/dashboard/quick-add.ts). Absent = the row's ink. */
+  iconClassName?: string;
+  /** A word at the row's END, quieter than the label — what the row is called elsewhere ("אילוץ"
+   *  beside "חסימת היום"). Never a second action. */
+  hint?: string;
+  /** The row the menu is mostly FOR — drawn in the accent ink, semibold ("אירוע חדש בתאריך הזה"). */
+  emphasis?: boolean;
 }
 
 export function Menu({
@@ -43,11 +51,27 @@ export function Menu({
   trigger = "icon",
   triggerText,
   align = "end",
+  heading,
+  panelClassName = "",
+  fixed = false,
 }: {
+  /** Place the panel against the WINDOW (position: fixed, measured off the trigger, opened below
+   *  unless there is more room above, held 12px inside the screen) instead of hanging it absolutely
+   *  off the trigger. For a trigger inside a box that clips — the calendar's sideways-scrolling grid,
+   *  where a nine-row quick-add menu opened from a mid-month day was cut off at the grid's foot.
+   *  `side` is then only the preference when both fit. */
+  fixed?: boolean;
   /** "icon" — the round icon button (the "…"). "chip" — icon + words + chevron, a choice read at a
    *  glance (the venue ▾ over the canvas). "pill" — a quick bar's verb that opens a list (the wall's
-   *  "פתח" → דלת / חלון, יישור) in the ModeVerb outline (components/inspector-bar.tsx). */
-  trigger?: "icon" | "chip" | "pill";
+   *  "פתח" → דלת / חלון, יישור) in the ModeVerb outline (components/inspector-bar.tsx). "link" —
+   *  icon + words in the accent ink, no box: a verb in a panel's footer ("הוספה ביום הזה" in the
+   *  calendar's day popover). */
+  trigger?: "icon" | "chip" | "pill" | "link";
+  /** A line over the rows saying what they are for — "הוספה ביום ד׳, 18 בנוב׳". NOT a row: the
+   *  arrows skip it and it is never aimed at; it names the menu for a screen reader. */
+  heading?: string;
+  /** Classes for the panel, mostly its width ("w-[232px]"). The panel is at least `min-w-40`. */
+  panelClassName?: string;
   /** The words on a chip or pill trigger. Defaults to the label. */
   triggerText?: string;
   /** Which edge of the trigger the list hangs from — "end" (the default) keeps a menu on a card
@@ -75,7 +99,40 @@ export function Menu({
   // opening with the mouse does not pre-highlight a row the pointer is nowhere near.
   const [activeIndex, setActiveIndex] = useState(-1);
   const rootRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [placed, setPlaced] = useState<CSSProperties | null>(null);
   const menuId = useId();
+
+  // The fixed placement, measured before paint and again on any scroll or resize while open.
+  useLayoutEffect(() => {
+    if (!open || !fixed) return;
+    const place = () => {
+      const root = rootRef.current;
+      const panel = panelRef.current;
+      if (!root || !panel) return;
+      const r = root.getBoundingClientRect();
+      const w = panel.offsetWidth;
+      const h = panel.offsetHeight;
+      const M = 12;
+      const below = window.innerHeight - r.bottom - 6 - M;
+      const above = r.top - 6 - M;
+      const down = side === "top" ? !(above >= h || above >= below) : below >= h || below >= above;
+      const top = Math.min(Math.max(down ? r.bottom + 6 : r.top - 6 - h, M), window.innerHeight - M - h);
+      // "end" lines the panel's end edge up with the trigger's: its LEFT edge in a right-to-left screen.
+      const rtl = getComputedStyle(root).direction === "rtl";
+      const atStart = align === "start";
+      const left = rtl === atStart ? r.right - w : r.left;
+      const x = Math.min(Math.max(left, M), window.innerWidth - M - w);
+      setPlaced((p) => (p && p.top === top && p.left === x ? p : { position: "fixed", top, left: x }));
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, fixed, side, align]);
 
   // The aimed-at row's `onHover`: true when the aim arrives, false when it leaves — by pointer, by
   // the arrow keys, or because the menu closed under it. The rows are read through a ref so that a
@@ -94,6 +151,7 @@ export function Menu({
   const setOpen = useCallback(
     (next: boolean) => {
       setOpenState(next);
+      if (!next) setPlaced(null);
       onOpenChange?.(next);
     },
     [onOpenChange],
@@ -172,6 +230,25 @@ export function Menu({
         >
           <Icon className="h-4 w-4" strokeWidth={2} />
         </IconButton>
+      ) : trigger === "link" ? (
+        <button
+          type="button"
+          aria-label={label}
+          title={label}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-controls={open ? menuId : undefined}
+          aria-activedescendant={open && activeIndex >= 0 ? `${menuId}-${activeIndex}` : undefined}
+          onClick={() => (open ? setOpen(false) : openAt(-1))}
+          onKeyDown={onKeyDown}
+          className={
+            "inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm text-[13px] font-semibold transition-colors hover:text-accent-hover " +
+            (open ? "text-accent-hover" : "text-accent")
+          }
+        >
+          <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={2.25} />
+          <span className="truncate">{triggerText ?? label}</span>
+        </button>
       ) : (
         <button
           type="button"
@@ -203,11 +280,22 @@ export function Menu({
         <div
           id={menuId}
           role="menu"
-          aria-label={label}
-          className={`absolute ${align === "start" ? "start-0" : "end-0"} z-40 min-w-40 rounded-md border border-border bg-surface p-1 shadow-lifted ${
-            side === "top" ? "bottom-[calc(100%+6px)]" : "top-[calc(100%+6px)]"
+          aria-label={heading ? undefined : label}
+          aria-labelledby={heading ? `${menuId}-heading` : undefined}
+          ref={panelRef}
+          // Fixed: hidden for the one frame before it is measured, so it never flashes at 0,0.
+          style={fixed ? (placed ?? { position: "fixed", top: 0, left: 0, visibility: "hidden" }) : undefined}
+          className={`${fixed ? "" : `absolute ${align === "start" ? "start-0" : "end-0"} ${side === "top" ? "bottom-[calc(100%+6px)]" : "top-[calc(100%+6px)]"} `}z-40 min-w-40 rounded-md border border-border bg-surface p-1 shadow-lifted${
+            panelClassName ? ` ${panelClassName}` : ""
           }`}
         >
+          {heading && (
+            // Outside the rows' numbering: ids, aria-activedescendant and the arrows all index
+            // `items`, so this line can never be aimed at or chosen.
+            <div id={`${menuId}-heading`} role="presentation" className="px-2.5 pt-1.5 pb-1 text-xs font-semibold text-muted">
+              {heading}
+            </div>
+          )}
           {items.map((item, index) => {
             const Icon = item.icon;
             // A hairline wherever the list turns destructive — no flag to pass, and it means the
@@ -232,13 +320,18 @@ export function Menu({
                       ? index === activeIndex
                         ? "bg-alert-tint text-alert"
                         : "text-alert"
-                      : index === activeIndex
-                        ? "bg-accent-tint text-ink"
-                        : "text-ink-soft"
+                      : item.emphasis
+                        ? index === activeIndex
+                          ? "bg-accent-tint font-semibold text-accent"
+                          : "font-semibold text-accent"
+                        : index === activeIndex
+                          ? "bg-accent-tint text-ink"
+                          : "text-ink-soft"
                   }`}
                 >
-                  {Icon && <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />}
-                  <span className="truncate">{item.label}</span>
+                  {Icon && <Icon className={`h-3.5 w-3.5 shrink-0${item.iconClassName ? ` ${item.iconClassName}` : ""}`} strokeWidth={2} />}
+                  <span className={item.hint ? "min-w-0 flex-1 truncate" : "truncate"}>{item.label}</span>
+                  {item.hint && <span className="shrink-0 text-xs text-quiet">{item.hint}</span>}
                 </button>
               </Fragment>
             );

@@ -308,7 +308,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
                 + יצירת אירוע חדש
               </button>
               )}
-              <NotificationBell />
+              <NotificationBell side={user.orgKind === "venue" ? "venue" : "studio"} />
             </div>
           )}
         </header>

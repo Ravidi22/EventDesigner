@@ -1,13 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { CheckCircle2, ChevronLeft, ChevronRight, Lock, Plus, Sparkles } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, Lock, Plus, Sparkles, type LucideIcon } from "lucide-react";
 import type { EventSummary } from "@/lib/events/types";
-import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus, zonesLabelOf } from "@/lib/events/types";
+import { STATUS_LABEL, STATUS_TONE, eventProgress, eventStatus } from "@/lib/events/types";
 import type { Appointment } from "@/lib/appointments/types";
-import { APPOINTMENT_KIND_LABEL, appointmentLabel, appointmentTimeLabel, byDate } from "@/lib/appointments/types";
-import type { BusyBlock } from "@/lib/google/types";
+import { byDate } from "@/lib/appointments/types";
 import type { BusyHandle } from "@/lib/google/use-busy";
 import { useMeetingFlow } from "@/lib/meeting/use-flow";
 import { IconButton } from "@/components/icon-button";
@@ -26,24 +25,16 @@ import {
   monthLabel,
   NOTE_THEME,
   noteTone,
-  STATUS_CARD_THEME,
-  KIND_ICON,
-  kindTheme,
   PAST_DAY_FILL,
   PAST_DAY_HATCH,
-  type CardTone,
 } from "./dashboard-view-utils";
+import { AppointmentChip, BusyChip, EventCard, type EventLook } from "./calendar-cards";
+import { DayPopover } from "./day-popover";
+import { quickAddHeading } from "./quick-add";
 
-/** What an event's card says about where it stands: the word, its tone, and — for a designer's
- *  event, which moves through a meeting — how far along it is. A hall's booking has no progress;
- *  its status is the whole story (lib/hosting bookingStatus). */
-export interface EventLook {
-  label: string;
-  tone: CardTone;
-  progress?: number;
-  /** A date that is no longer held — a lapsed option, an evening that did not close. */
-  struck?: boolean;
-}
+// The cards live in ./calendar-cards.tsx (the day popover draws them too); the look type is
+// re-exported here for the callers that always took it from this file.
+export type { EventLook } from "./calendar-cards";
 
 const WEEKDAYS = ["א׳", "ב׳", "ג׳", "ד׳", "ה׳", "ו׳", "ש׳"];
 
@@ -95,6 +86,47 @@ function dayNotes(days: Date[]) {
 
 type Mode = "week" | "month";
 
+/** How an event reads on the dashboard: the caller's `look` (a hall's booking status), else a
+ *  designer's meeting status and progress against the studio's OWN flow. One hook, so the calendar
+ *  and the top row's tiles say the same word about the same event. */
+export function useEventLook(look?: (e: EventSummary) => EventLook): (e: EventSummary) => EventLook {
+  // Read once per surface, not per card: a month view renders dozens of them, all measured against
+  // the same configured meeting flow.
+  const flow = useMeetingFlow();
+  return (e) => {
+    if (look) return look(e);
+    const status = eventStatus(e, flow);
+    return { label: STATUS_LABEL[status], tone: STATUS_TONE[status], progress: eventProgress(e, flow) };
+  };
+}
+
+// WHAT THE GRID DRAWS (board 1b): the events, the diary and the person's Google entries are three
+// layers a designer can take off the month one at a time — a delivery-heavy week reads cleaner
+// without the deliveries, a busy Google calendar buries the studio's own work. A choice for this
+// sitting, not a preference: every visit starts with all three on.
+type Layer = "events" | "diary" | "google";
+const ALL_LAYERS: Record<Layer, boolean> = { events: true, diary: true, google: true };
+
+function LayerToggle({ on, icon: Icon, label, onToggle }: { on: boolean; icon: LucideIcon; label: string; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={on}
+      title={on ? `הסתרת ${label} מהיומן` : `הצגת ${label} ביומן`}
+      className={
+        "inline-flex h-8 items-center gap-1.5 rounded-pill border px-3 text-[13px] font-semibold transition-colors " +
+        (on
+          ? "border-accent-line bg-accent-wash text-accent-hover"
+          : "border-border bg-surface text-ink-soft hover:border-accent-line hover:text-accent-hover")
+      }
+    >
+      <Icon className="h-[13px] w-[13px] shrink-0" strokeWidth={2} aria-hidden />
+      {label}
+    </button>
+  );
+}
+
 // "השבוע שלי" / "החודש שלי" (F-1.1): one card, two grids. MONTH is the default: the dashboard
 // is the first thing opened in the morning, and the question it gets asked is "what is coming" —
 // which a week answers only until Thursday. Week is the toggle now, for the days actually in
@@ -122,11 +154,13 @@ export function CalendarCard({
   busy,
   onOpenEvent,
   onOpenAppointment,
-  onCreateAppointment,
   look,
   summary,
   addItems,
   suggestGoogle = false,
+  googleConnected = false,
+  eventsLabel = "אירועים",
+  jump,
 }: {
   events: EventSummary[];
   appointments: Appointment[];
@@ -135,49 +169,62 @@ export function CalendarCard({
   busy: BusyHandle;
   onOpenEvent: (e: EventSummary) => void;
   onOpenAppointment: (a: Appointment) => void;
-  /** Book a meeting on this ISO date — the day the designer clicked. */
-  onCreateAppointment: (iso: string) => void;
   /** How an event's card reads. Absent = a designer's: its meeting status and progress. A hall
    *  passes its booking status (app/(app)/dashboard/venue-dashboard.tsx). */
   look?: (e: EventSummary) => EventLook;
   /** The line under the title for the range on screen. Absent = how many events and diary entries. */
   summary?: (range: { from: string; to: string; events: EventSummary[] }) => ReactNode;
-  /** What a day's "+" offers. Absent = it books a meeting on the day; a hall offers an evening too. */
-  addItems?: (iso: string) => MenuItem[];
+  /** What a day's "+" offers — ./quick-add.ts, one menu for both businesses (board 4f). */
+  addItems: (iso: string) => MenuItem[];
   /** Google can be connected on this deployment and this person has not (or has the pull off):
    *  the header offers the way to settings → יומן Google. */
   suggestGoogle?: boolean;
+  /** This person's Google pull is on — the Google layer gets its toggle even on a month it left empty. */
+  googleConnected?: boolean;
+  /** The events layer's name: "אירועים" for a designer, a hall's "ערבים". */
+  eventsLabel?: string;
+  /** Show the week `iso` is in (the week tile's strip, board 1b). A NEW `n` jumps again, so the same
+   *  day clicked twice brings the grid back after the designer paged away from it. */
+  jump?: { iso: string; n: number } | null;
 }) {
   const [mode, setMode] = useState<Mode>("month");
   const [anchor, setAnchor] = useState(() => new Date());
-  const [expandedDate, setExpandedDate] = useState<string | null>(null);
-  // Read once here, not in each card: a month view renders dozens of them, all measuring progress
-  // against the same configured meeting flow.
-  const flow = useMeetingFlow();
-  const lookOf = (e: EventSummary): EventLook => {
-    if (look) return look(e);
-    const status = eventStatus(e, flow);
-    return { label: STATUS_LABEL[status], tone: STATUS_TONE[status], progress: eventProgress(e, flow) };
+  // The day whose "+N נוספים" is open, and the pill it hangs from (./day-popover.tsx).
+  const [openDay, setOpenDay] = useState<{ iso: string; anchor: HTMLElement } | null>(null);
+  // Stable, so the popover's listeners are bound once per opening rather than once per render.
+  const closeDay = useCallback(() => setOpenDay(null), []);
+  const lookOf = useEventLook(look);
+  const [layers, setLayers] = useState(ALL_LAYERS);
+  const toggleLayer = (l: Layer) => {
+    setOpenDay(null);
+    setLayers((s) => ({ ...s, [l]: !s[l] }));
   };
+  // Only a Google that is there to hide earns its toggle: connected, or blocks already on the grid.
+  const hasGoogle = googleConnected || busy.byDate.size > 0;
+
+  // A jump from the week tile: week mode, on that day's week. Adjusted DURING RENDER when the prop
+  // brings a new jump (React's pattern for state that follows a prop) — compared by value, so a
+  // parent that rebuilds the object on every render cannot loop it.
+  const [seenJump, setSeenJump] = useState(jump);
+  if (jump?.n !== seenJump?.n || jump?.iso !== seenJump?.iso) {
+    setSeenJump(jump);
+    if (jump) {
+      const [y, m, d] = jump.iso.split("-").map(Number);
+      setMode("week");
+      setAnchor(new Date(y, m - 1, d));
+      setOpenDay(null);
+    }
+  }
+  // ...and the grid is brought on screen: it sits under the top row, and a jump to a week the
+  // designer cannot see has done nothing they can tell. `nearest` scrolls only as far as it must.
   const rootRef = useRef<HTMLDivElement>(null);
+  const jumpN = jump?.n;
+  useEffect(() => {
+    if (jumpN !== undefined) rootRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [jumpN]);
+
   const today = new Date();
   const todayIso = toISODate(today);
-
-  useEffect(() => {
-    if (!expandedDate) return;
-    const onPointerDown = (e: PointerEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setExpandedDate(null);
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setExpandedDate(null);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [expandedDate]);
 
   const eventsByDate = useMemo(() => {
     const map = new Map<string, EventSummary[]>();
@@ -219,16 +266,23 @@ export function CalendarCard({
   const weeks = days.length / 7;
 
   const step = (n: number) => {
-    setExpandedDate(null);
+    setOpenDay(null);
     setAnchor((d) => (mode === "week" ? addDays(d, n * 7) : addMonths(d, n)));
   };
   const switchMode = (m: Mode) => {
     setMode(m);
-    setExpandedDate(null);
+    setOpenDay(null);
   };
   const goToday = () => {
-    setExpandedDate(null);
+    setOpenDay(null);
     setAnchor(new Date());
+  };
+  // The popover's "פתיחה בתצוגת שבוע": the week that day is in.
+  const openWeek = (iso: string) => {
+    const [y, m, d] = iso.split("-").map(Number);
+    setOpenDay(null);
+    setMode("week");
+    setAnchor(new Date(y, m - 1, d));
   };
   // "היום" is dead when today is already on screen. In week mode that is now a same-week test
   // rather than a same-day one: the grid snaps to Sunday, so any anchor inside this week shows it.
@@ -259,20 +313,29 @@ export function CalendarCard({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* The calendar is half a picture until the person's own Google entries are on it (the
-              busy blocks below are how a day that looks free is not quietly double-booked). Gone
-              once the pull is on; never shown where the server has no Google set up — settings
-              would only say so. */}
-          {suggestGoogle && (
-            <Link
-              href="/settings#calendar"
-              aria-label="חיבור יומן Google"
-              title="חיבור יומן Google — הפגישות שלך יופיעו ביומן הזה, והיומן יופיע ב-Google"
-              className="inline-flex h-9 w-9 items-center justify-center rounded-pill border border-border bg-canvas transition-colors hover:border-accent-line hover:bg-accent-tint"
-            >
-              <GoogleMark className="h-4 w-4" />
-            </Link>
-          )}
+          {/* The layers, before "היום", parted from the view's own controls by a hairline. */}
+          <div className="flex flex-wrap items-center gap-1.5 border-e border-border-soft pe-2">
+            <LayerToggle on={layers.events} icon={Sparkles} label={eventsLabel} onToggle={() => toggleLayer("events")} />
+            <LayerToggle on={layers.diary} icon={CalendarDays} label="יומן" onToggle={() => toggleLayer("diary")} />
+            {hasGoogle ? (
+              <LayerToggle on={layers.google} icon={Lock} label="Google" onToggle={() => toggleLayer("google")} />
+            ) : (
+              // The calendar is half a picture until the person's own Google entries are on it (the
+              // busy blocks below are how a day that looks free is not quietly double-booked). The
+              // way to connect stands in the Google layer's place until the pull is on; never shown
+              // where the server has no Google set up — settings would only say so.
+              suggestGoogle && (
+                <Link
+                  href="/settings#calendar"
+                  aria-label="חיבור יומן Google"
+                  title="חיבור יומן Google — הפגישות שלך יופיעו ביומן הזה, והיומן יופיע ב-Google"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-pill border border-border bg-canvas transition-colors hover:border-accent-line hover:bg-accent-tint"
+                >
+                  <GoogleMark className="h-4 w-4" />
+                </Link>
+              )
+            )}
+          </div>
           <button
             type="button"
             onClick={goToday}
@@ -321,9 +384,10 @@ export function CalendarCard({
           <div className="grid grid-cols-7">
             {days.map((d, i) => {
               const iso = toISODate(d);
-              const dayEvents = eventsByDate.get(iso) ?? [];
-              const dayAppointments = appointmentsByDate.get(iso) ?? [];
-              const dayBusy = busy.byDate.get(iso) ?? [];
+              // A layer taken off is gone from the cell, from its "+N" and from the day popover alike.
+              const dayEvents = layers.events ? (eventsByDate.get(iso) ?? []) : [];
+              const dayAppointments = layers.diary ? (appointmentsByDate.get(iso) ?? []) : [];
+              const dayBusy = layers.google ? (busy.byDate.get(iso) ?? []) : [];
               const isToday = sameDay(d, today);
               const isPast = !isToday && iso < todayIso;
               const inMonth = mode === "week" || d.getMonth() === anchor.getMonth();
@@ -342,7 +406,7 @@ export function CalendarCard({
                 dayEvents.length - visible.length +
                 (dayAppointments.length - visibleAppointments.length) +
                 (dayBusy.length - visibleBusy.length);
-              const isExpanded = expandedDate === iso;
+              const isOpen = openDay?.iso === iso;
               const note = notes[i];
               const dayLabel = d.toLocaleDateString("he-IL", { day: "numeric", month: "long" });
 
@@ -361,7 +425,9 @@ export function CalendarCard({
                     // able to open past the cell it stands in.
                     (lastRow && col === 0 ? "rounded-es-md " : "") +
                     (lastRow && col === 6 ? "rounded-ee-md " : "") +
-                    (isToday ? "bg-accent-tint/50" : !inMonth ? "bg-bg/60" : isPast ? PAST_DAY_FILL : "")
+                    // The day whose popover is open is lit, faintly, so the panel says which day it
+                    // belongs to without a line drawn to it (today keeps its own, stronger wash).
+                    (isToday ? "bg-accent-tint/50" : isOpen ? "bg-accent-tint/35" : !inMonth ? "bg-bg/60" : isPast ? PAST_DAY_FILL : "")
                   }
                 >
                   {/* A fixed height: a day that offers "+" (a 28px button, hidden at rest) and a past
@@ -382,18 +448,19 @@ export function CalendarCard({
                         still offers it. */}
                     {!isPast && (
                       <span className="opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-                        {addItems ? (
-                          <Menu
-                            label={`הוספה ב־${dayLabel}`}
-                            icon={Plus}
-                            items={addItems(iso)}
-                            side={lastRow && mode === "month" ? "top" : "bottom"}
-                          />
-                        ) : (
-                          <IconButton label={`הוספה ליומן ב־${dayLabel}`} onClick={() => onCreateAppointment(iso)}>
-                            <Plus className="h-3.5 w-3.5" strokeWidth={2.25} />
-                          </IconButton>
-                        )}
+                        {/* One quick-add menu for both businesses (board 4f, ./quick-add.ts), placed
+                            against the window: the grid scrolls sideways, which clips anything hung
+                            off a cell, and the menu is nine rows tall. */}
+                        <Menu
+                          label={`הוספה ב־${dayLabel}`}
+                          heading={quickAddHeading(iso)}
+                          icon={Plus}
+                          items={addItems(iso)}
+                          side={lastRow && mode === "month" ? "top" : "bottom"}
+                          panelClassName="w-[232px]"
+                          align="end"
+                          fixed
+                        />
                       </span>
                     )}
                   </div>
@@ -424,10 +491,10 @@ export function CalendarCard({
                   {/* A past day's cards fade a little, but only a little: the hatch behind them is
                       already saying "this is behind us". */}
                   <div className={"flex flex-col gap-1.5" + (isPast ? " opacity-85" : "")}>
-                    {(isExpanded ? dayEvents : visible).map((e) => (
+                    {visible.map((e) => (
                       <EventCard key={e.id} event={e} look={lookOf(e)} compact={mode === "month"} onClick={() => onOpenEvent(e)} />
                     ))}
-                    {(isExpanded ? dayAppointments : visibleAppointments).map((a) => (
+                    {visibleAppointments.map((a) => (
                       <AppointmentChip
                         key={a.id}
                         appointment={a}
@@ -435,19 +502,30 @@ export function CalendarCard({
                         onClick={() => onOpenAppointment(a)}
                       />
                     ))}
-                    {(isExpanded ? dayBusy : visibleBusy).map((b) => (
+                    {visibleBusy.map((b) => (
                       <BusyChip key={b.id} block={b} compact={mode === "month"} />
                     ))}
                     {overflow > 0 && (
-                      // Expands IN PLACE — the row grows and every cell in it stretches to match. A
-                      // floating panel here once hung off the grid's last column and was clipped by
-                      // the very wrapper that keeps the columns legible.
+                      // Opens the whole day in a popover over the month (./day-popover.tsx); the row
+                      // keeps its height. It used to expand IN PLACE, stretching all seven cells of
+                      // the row and pushing the month down under the cursor. The popover is
+                      // portalled, so the scroller below cannot clip it at the last column.
                       <button
                         type="button"
-                        onClick={() => setExpandedDate(isExpanded ? null : iso)}
-                        className="rounded-sm px-1.5 py-0.5 text-start text-[11px] font-medium text-muted hover:text-accent-hover"
+                        aria-haspopup="dialog"
+                        aria-expanded={isOpen}
+                        onClick={(ev) => {
+                          const pill = ev.currentTarget;
+                          setOpenDay((o) => (o?.iso === iso ? null : { iso, anchor: pill }));
+                        }}
+                        className={
+                          "self-start rounded-pill px-2 py-[3px] text-[11px] font-bold transition-colors " +
+                          (isOpen
+                            ? "bg-accent-wash text-accent-deep outline-[1.5px] outline-accent"
+                            : "bg-accent-tint text-accent-hover hover:bg-accent-wash")
+                        }
                       >
-                        {isExpanded ? "הצג פחות" : `+${overflow} נוספים`}
+                        {`+${overflow} נוספים`}
                       </button>
                     )}
                   </div>
@@ -457,171 +535,24 @@ export function CalendarCard({
           </div>
         </div>
       </div>
-    </div>
-  );
-}
 
-// A diary entry in a day cell. THE SAME CARD AN EVENT GETS — same radius, same padding, same type
-// sizes, the same lift on hover — because a designer scanning a day wants to read what is happening
-// on it, not to decode two widget vocabularies. What differs is what each card can honestly say: an
-// event's second line ends in a status word over a progress bar, and a diary entry has neither (an
-// hour in a diary has no stages to be at), so it spends its lines on the note and the kind.
-//
-// COLOUR IS THE KIND HERE, not the status — see KIND_CARD_THEME. The fill is the kind's tint, the
-// leading 3px rail is the kind's full hue, and the icon is its glyph. The glyph is the tell between
-// the species: an event always wears ✦, which no kind uses, so a wedding and a walkthrough sitting
-// in one cell in two greens are still not the same object.
-//
-// A held meeting (`done`) goes grey with a tick rather than disappearing: the record of having met
-// is most of what makes a diary worth keeping, and a past date is not the same claim (see the column
-// note in lib/db/schema.ts).
-// The cards are the ones the designer's calendar always had (the user, 2026-10-30, after a pass that
-// cut them to one line: "I liked how the event/meeting tiles were before — revert it").
-const CHIP_SIZE = {
-  compact: { card: "gap-1.5 rounded-md p-2", icon: "h-3 w-3", name: "text-xs", time: "text-[11px]", meta: "text-[10px]" },
-  full: { card: "gap-2 rounded-md p-2.5", icon: "h-3.5 w-3.5", name: "text-sm", time: "text-xs", meta: "text-xs" },
-} as const;
-
-function AppointmentChip({
-  appointment: a,
-  compact,
-  onClick,
-}: {
-  appointment: Appointment;
-  compact: boolean;
-  onClick: () => void;
-}) {
-  const time = appointmentTimeLabel(a);
-  const name = appointmentLabel(a);
-  const kind = APPOINTMENT_KIND_LABEL[a.kind];
-  const theme = kindTheme(a.kind, a.done);
-  const Icon = a.done ? CheckCircle2 : KIND_ICON[a.kind];
-  const size = compact ? CHIP_SIZE.compact : CHIP_SIZE.full;
-  // The kind only earns a line (or a place in the tooltip) when it isn't already the name: a חופשה
-  // has no client, so `appointmentLabel` falls back to the kind, and "חופשה · חופשה" is not a
-  // tooltip. The icon and the colour are still saying which kind it is either way.
-  const namesItself = name === kind;
-  const parts = [name, namesItself ? "" : kind, time, a.note].filter(Boolean);
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={parts.join(" · ")}
-      className={
-        "flex flex-col border-s-[3px] text-start transition-transform hover:-translate-y-px hover:shadow-floating " +
-        size.card + " " + theme.bg + " " + theme.rail
-      }
-    >
-      <div className={"flex items-center " + (compact ? "gap-1.5" : "gap-2")}>
-        <Icon className={size.icon + " shrink-0 " + theme.text} strokeWidth={2} />
-        <span
-          className={
-            "min-w-0 flex-1 truncate font-semibold " + size.name + " " +
-            (a.done ? "text-muted line-through" : "text-ink")
-          }
-        >
-          {name}
-        </span>
-        {time && (
-          <span className={"nums shrink-0 font-semibold " + size.time + " " + theme.text} dir="ltr">
-            {time}
-          </span>
-        )}
-      </div>
-      {/* The note is a WEEK-VIEW line. A month cell already carries up to two of these cards plus
-          two event cards, and every line one of them grows is a line all 42 cells grow with it —
-          the note is the first thing that can go, because the tooltip still has it and the month is
-          a scanning view. Week has the room and is where the day is actually being worked. */}
-      {!compact && a.note && <span className={"truncate text-ink-soft " + size.meta}>{a.note}</span>}
-      {!namesItself && <span className={"truncate font-semibold " + size.meta + " " + theme.text}>{kind}</span>}
-    </button>
-  );
-}
-
-// An entry from the designer's OWN Google calendar (lib/google/). The quietest thing that can
-// appear in a day cell, and deliberately so.
-//
-// ⚠ NOT A BUTTON. Every other card in this grid is clickable because it belongs to the studio and
-// can be opened, edited or advanced. This one is somebody's dentist appointment: there is nothing
-// in this app to open, and making it look pressable would promise a screen that does not exist. It
-// is a `div` with a tooltip, and that is the whole interaction.
-//
-// It is also the only card here with NO hue. Events carry their status colour and diary entries
-// carry their kind's; both of those are the studio's own vocabulary, and lending a piece of it to
-// an external event would say this is one of ours. Grey, dashed, with a lock glyph — present
-// enough that a day which looks free is not quietly double-booked, recessive enough that it never
-// competes with the work.
-function BusyChip({ block, compact }: { block: BusyBlock; compact: boolean }) {
-  const size = compact ? CHIP_SIZE.compact : CHIP_SIZE.full;
-  // LRM before the range, same as appointmentTimeLabel: an en dash between two Latin-digit clock
-  // times flips to the wrong side in an RTL paragraph and reads as 18:30-17:00.
-  const time = block.time ? (block.endTime ? `‎${block.time}–${block.endTime}` : `‎${block.time}`) : "";
-
-  return (
-    <div
-      title={[block.title, time, block.calendarName, "מיומן Google"].filter(Boolean).join(" · ")}
-      className={
-        "flex items-center border border-dashed border-border bg-inset/60 " +
-        size.card + " " + (compact ? "gap-1.5" : "gap-2")
-      }
-    >
-      <Lock className={size.icon + " shrink-0 text-faint"} strokeWidth={1.8} aria-hidden />
-      <span className={"min-w-0 flex-1 truncate font-medium text-muted " + size.name}>{block.title}</span>
-      {time && (
-        <span className={"nums shrink-0 font-medium text-faint " + size.time} dir="ltr">
-          {time}
-        </span>
+      {openDay && (
+        <DayPopover
+          key={openDay.iso}
+          iso={openDay.iso}
+          anchor={openDay.anchor}
+          events={layers.events ? (eventsByDate.get(openDay.iso) ?? []) : []}
+          appointments={layers.diary ? (appointmentsByDate.get(openDay.iso) ?? []) : []}
+          busy={layers.google ? (busy.byDate.get(openDay.iso) ?? []) : []}
+          lookOf={lookOf}
+          addItems={addItems}
+          past={openDay.iso < todayIso}
+          onOpenEvent={onOpenEvent}
+          onOpenAppointment={onOpenAppointment}
+          onWeek={() => openWeek(openDay.iso)}
+          onClose={closeDay}
+        />
       )}
     </div>
-  );
-}
-
-// THE DIARY CARD'S SHAPE (2026-10-30, the user: "improve it to look a bit more compact and more like
-// the meeting bubble"). Same rail, same leading glyph, same first line — name, then the hour — and
-// the same second line, here the zones with the status word at its end. The progress (a designer's
-// event only) is a slim bar under them: in a month cell without its number, which the tooltip still
-// carries; in a week cell, where the day is worked, with it. Four lines became two and a hairline.
-function EventCard({ event: e, look, compact, onClick }: { event: EventSummary; look: EventLook; compact: boolean; onClick: () => void }) {
-  const theme = STATUS_CARD_THEME[look.tone];
-  const size = compact ? CHIP_SIZE.compact : CHIP_SIZE.full;
-  const where = zonesLabelOf(e);
-  const title = [e.clientName, where, e.time, look.progress !== undefined ? `${look.progress}%` : "", look.label].filter(Boolean).join(" · ");
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      className={
-        "flex flex-col border-s-[3px] text-start transition-transform hover:-translate-y-px hover:shadow-floating " +
-        size.card + " " + theme.bg + " " + theme.rail
-      }
-    >
-      <div className={"flex items-center " + (compact ? "gap-1.5" : "gap-2")}>
-        <Sparkles className={size.icon + " shrink-0 " + theme.text} strokeWidth={2} />
-        <span
-          className={
-            "min-w-0 flex-1 truncate font-semibold " + size.name + " " +
-            (look.struck ? "text-muted line-through" : "text-ink")
-          }
-        >
-          {e.clientName}
-        </span>
-        {e.time && <span className={"nums shrink-0 font-semibold " + size.time + " " + theme.text}>{e.time}</span>}
-      </div>
-      <div className={"flex items-center " + (compact ? "gap-1.5" : "gap-2")}>
-        <span className={"min-w-0 flex-1 truncate text-ink-soft " + size.meta}>{where}</span>
-        <span className={"shrink-0 font-semibold " + size.meta + " " + theme.text}>{look.label}</span>
-      </div>
-      {look.progress !== undefined && (
-        <div className="flex items-center gap-2">
-          <div className={"min-w-0 flex-1 overflow-hidden rounded-full bg-canvas/70 " + (compact ? "h-[3px]" : "h-1")}>
-            <div className={"h-full rounded-full " + theme.bar} style={{ width: `${look.progress}%` }} />
-          </div>
-          {!compact && <span className={"nums shrink-0 font-bold " + size.meta + " " + theme.text}>{look.progress}%</span>}
-        </div>
-      )}
-    </button>
   );
 }

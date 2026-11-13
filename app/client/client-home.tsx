@@ -46,7 +46,7 @@ export function ClientHome({
             {email}
           </span>
         </span>
-        <NotificationBell />
+        <NotificationBell side="client" />
         <button
           type="button"
           onClick={leave}

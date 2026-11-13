@@ -11,14 +11,27 @@ export function DrawerSection({
   title,
   action,
   flush,
+  bare,
   children,
 }: {
   title: string;
   action?: ReactNode;
   /** A list whose rows run edge to edge (the diary) brings its own padding. */
   flush?: boolean;
+  /** The content alone, for a section that sits inside a FoldRow (the drawer's folds, the board's
+   *  3b): the fold's row is its heading and the fold's card its card, so neither is drawn twice. The
+   *  action has no heading to sit on and goes under the content, where a fold's verbs go. */
+  bare?: boolean;
   children: ReactNode;
 }) {
+  if (bare) {
+    return (
+      <div className="text-sm">
+        {children}
+        {action && <div className="mt-3 flex">{action}</div>}
+      </div>
+    );
+  }
   return (
     <section>
       <div className="mb-2 flex min-h-6 items-center justify-between gap-2">

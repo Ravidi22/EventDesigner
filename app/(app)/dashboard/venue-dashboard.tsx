@@ -1,11 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CalendarClock, CalendarHeart } from "lucide-react";
 import { fetchBookings, type Booking } from "@/lib/hosting/actions";
 import { BOOKING_STATUS_LABEL, BOOKING_STATUS_TONE, bookingStatus, type BookingStatus } from "@/lib/hosting/types";
 import type { Dish, MenuPackage } from "@/lib/menus/types";
-import type { Appointment } from "@/lib/appointments/types";
+import type { Appointment, AppointmentKind } from "@/lib/appointments/types";
 import { useAppointments } from "@/lib/appointments/use-appointments";
 import type { BusyBlock } from "@/lib/google/types";
 import { useBusy } from "@/lib/google/use-busy";
@@ -21,11 +20,12 @@ import { AppointmentDialog } from "./appointment-dialog";
 import { CalendarCard, type EventLook } from "./calendar-card";
 import { TodayFocus } from "./today-focus";
 import { toISODate } from "./dashboard-view-utils";
+import { quickAddItems } from "./quick-add";
 
 
 /**
  * A venue's home — THE SAME SCREEN AS THE DESIGNER'S (./dashboard-screen.tsx; the user, 2026-10-30:
- * "why are the calendars different? should be the same", "owner also has meetings"). Today's evening and sittings beside the month's figures, and the one calendar (./calendar-card.tsx)
+ * "why are the calendars different? should be the same", "owner also has meetings"). Today's evenings, today's sittings and the week ahead (./today-focus.tsx, board 1b), and the one calendar (./calendar-card.tsx)
  * — its cards in the booking's status (lib/hosting bookingStatus), a free day offering an evening or a
  * meeting. A booking opens the hall's drawer; a sitting (a tasting, a tour, a first meeting) the
  * diary's own dialog, exactly as a designer's does.
@@ -59,7 +59,9 @@ export function VenueDashboard({
   const [editing, setEditing] = useState<{ booking: Booking | null; seed?: BookingSeed } | null>(null);
   const [deleting, setDeleting] = useState<Booking | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [sitting, setSitting] = useState<{ editing: Appointment | null; date: string; eventId?: string } | null>(null);
+  const [sitting, setSitting] = useState<{ editing: Appointment | null; date: string; eventId?: string; kind?: AppointmentKind } | null>(null);
+  // The week tile's strip → the calendar shows that day's week (CalendarCard `jump`).
+  const [jump, setJump] = useState<{ iso: string; n: number } | null>(null);
   const today = toISODate(new Date());
 
   // The header's "+ יצירת אירוע חדש" (components/app-shell.tsx) opens the booking dialog here.
@@ -114,31 +116,39 @@ export function VenueDashboard({
         </p>
       )}
 
-      <div className="mb-6 grid gap-6 lg:grid-cols-2">
+      {/* The designer's row exactly (./dashboard-screen.tsx says why it is two-up at lg). */}
+      <div className="mb-6 grid gap-5 lg:grid-cols-2 xl:grid-cols-3">
         <TodayFocus
           events={events}
           appointments={visibleAppointments}
           busy={busy.byDate.get(today) ?? []}
+          look={look}
           onOpenEvent={(e) => setOpenId(e.id)}
           onOpenAppointment={editSitting}
           onCreateAppointment={() => bookOn(today)}
+          onJump={(iso) => setJump((j) => ({ iso, n: (j?.n ?? 0) + 1 }))}
         />
       </div>
 
       <CalendarCard
         suggestGoogle={suggestGoogle}
+        googleConnected={googleConnected}
+        eventsLabel="ערבים"
+        jump={jump}
         events={events}
         appointments={visibleAppointments}
         busy={busy}
         onOpenEvent={(e) => setOpenId(e.id)}
         onOpenAppointment={editSitting}
-        onCreateAppointment={(iso) => bookOn(iso)}
         look={look}
         summary={summary}
-        addItems={(iso) => [
-          { label: "אירוע באולם", icon: CalendarHeart, onSelect: () => setEditing({ booking: null, seed: { date: iso } }) },
-          { label: "פגישה או טעימה", icon: CalendarClock, onSelect: () => bookOn(iso) },
-        ]}
+        addItems={(iso) =>
+          quickAddItems("venue", {
+            kind: (k) => setSitting({ editing: null, date: iso, kind: k }),
+            other: () => bookOn(iso),
+            event: () => setEditing({ booking: null, seed: { date: iso } }),
+          })
+        }
       />
 
       <BookingDrawer
@@ -192,8 +202,14 @@ export function VenueDashboard({
         appointment={sitting?.editing ?? null}
         defaultDate={sitting?.date ?? ""}
         defaultEventId={sitting?.eventId}
+        defaultKind={sitting?.kind}
         defaultVenueId={activeVenueId ?? undefined}
         events={events}
+        appointments={appointments}
+        busyOn={(d) => busy.byDate.get(d) ?? []}
+        venueName={venues.find((v) => v.id === activeVenueId)?.name}
+        googleSync={googleConnected}
+        lookOf={look}
         onSave={save}
         onDelete={remove}
         onClose={() => setSitting(null)}

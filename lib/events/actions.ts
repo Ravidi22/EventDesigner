@@ -15,9 +15,22 @@ import { afterResponse } from "@/lib/after";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
 import { revalidateEventStage, revalidateEvents } from "@/lib/db/revalidate";
-import { appointments, billingDocuments, events, eventZones, venues, zones } from "@/lib/db/schema";
+import {
+  appointments,
+  billingDocuments,
+  designDocuments,
+  eventClients,
+  eventLikedImages,
+  events,
+  eventZones,
+  expenses,
+  issuedQuotes,
+  users,
+  venues,
+  zones,
+} from "@/lib/db/schema";
 import { linksForAppointments, removeFromGoogle } from "@/lib/google/sync";
-import type { EventSummary } from "./types";
+import type { EventFootprint, EventSummary } from "./types";
 import { toEvent, toEvents, toEventRow, toEventZoneRows } from "./db-mapping";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -347,6 +360,46 @@ export async function deleteEvent(id: string): Promise<EventSummary[] | { error:
   afterResponse(() => removeFromGoogle(links, organizationId));
 
   return fetchEvents();
+}
+
+/** What `deleteEvent` would take with it, counted, for the question asked before it (4c). Read
+ *  through the event's own id once the event is proved to be this studio's — every table below is
+ *  keyed on it, and the ones without an organisation column (liked images, client access) are
+ *  reachable only through an event we have just shown is ours. */
+export async function fetchEventFootprint(id: string): Promise<EventFootprint> {
+  assertId(id, "id");
+  const organizationId = await currentOrg();
+  const database = db();
+  const [own] = await database
+    .select({ id: events.id })
+    .from(events)
+    .where(and(eq(events.id, id), eq(events.organizationId, organizationId)))
+    .limit(1);
+  if (!own) throw new Error("event not found");
+
+  const count = sql<number>`count(*)::int`;
+  const [[drawing], [quotes], [booked], [liked], clientRows, [spent], [books]] = await Promise.all([
+    database.select({ n: count }).from(designDocuments).where(eq(designDocuments.eventId, id)),
+    database.select({ n: count }).from(issuedQuotes).where(eq(issuedQuotes.eventId, id)),
+    database.select({ n: count }).from(appointments).where(and(eq(appointments.eventId, id), eq(appointments.organizationId, organizationId))),
+    database.select({ n: count }).from(eventLikedImages).where(eq(eventLikedImages.eventId, id)),
+    database
+      .select({ name: users.name, email: users.email })
+      .from(eventClients)
+      .innerJoin(users, eq(users.id, eventClients.userId))
+      .where(eq(eventClients.eventId, id)),
+    database.select({ n: count }).from(expenses).where(and(eq(expenses.eventId, id), eq(expenses.organizationId, organizationId))),
+    database.select({ n: count }).from(billingDocuments).where(and(eq(billingDocuments.eventId, id), eq(billingDocuments.organizationId, organizationId))),
+  ]);
+  return {
+    drawing: (drawing?.n ?? 0) > 0,
+    quotes: quotes?.n ?? 0,
+    appointments: booked?.n ?? 0,
+    likedImages: liked?.n ?? 0,
+    clients: clientRows.map((c) => c.name?.trim() || c.email),
+    expenses: spent?.n ?? 0,
+    billingDocuments: books?.n ?? 0,
+  };
 }
 
 /** F-1.2: the meeting flow only ever moves the furthest-reached stage FORWARD; revisiting an earlier

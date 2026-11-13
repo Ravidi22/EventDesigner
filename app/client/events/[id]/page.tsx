@@ -53,7 +53,7 @@ export default async function ClientEventPage({ params }: { params: Promise<{ id
             <Box className="h-4 w-4" strokeWidth={1.75} />
             לראות בתלת-ממד
           </Link>
-          <NotificationBell />
+          <NotificationBell side="client" />
         </div>
       </header>
 

@@ -526,6 +526,7 @@ export function ProductionScreen({
         defaultEventId={booking?.eventId}
         defaultVenueId={selectedEvent?.venueId}
         events={liveEvents}
+        appointments={appointments}
         onSave={saveAppointment}
         onDelete={removeAppointment}
         onClose={() => setBooking(null)}

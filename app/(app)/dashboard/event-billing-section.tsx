@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { BadgeCheck, ExternalLink, FileSignature, HandCoins, ReceiptText, TriangleAlert } from "lucide-react";
+import { BadgeCheck, ExternalLink, FilePlus2, FileSignature, HandCoins, ReceiptText, TriangleAlert } from "lucide-react";
 import { confirmEvent } from "@/lib/events/actions";
 import type { EventSummary } from "@/lib/events/types";
 import { formatEventDate } from "@/lib/events/types";
@@ -35,9 +35,13 @@ export function EventBillingSection({
   event,
   onChanged,
   orderLines,
+  bare,
 }: {
   event: EventSummary;
   onChanged: () => void;
+  /** The content alone, inside the event drawer's "הצעת מחיר ותשלומים" fold (DrawerSection). The
+   *  documents menu then has no heading to sit on: it becomes a named link under the content. */
+  bare?: boolean;
   /** A VENUE's booking: the package figure's lines (lib/hosting packageLines). A venue's order is
    *  written from these, with no drawing quote before it (lib/billing issueOrder). */
   orderLines?: { label: string; amount: number }[];
@@ -101,7 +105,16 @@ export function EventBillingSection({
     <>
       <DrawerSection
         title="הצעת מחיר, הזמנה ותשלומים"
-        action={data && more.length > 0 ? <Menu label="פעולות חיוב" items={more} /> : undefined}
+        bare={bare}
+        action={
+          data && more.length > 0 ? (
+            bare ? (
+              <Menu label="פעולות חיוב" items={more} trigger="link" triggerText="הפקת מסמך" icon={FilePlus2} align="start" />
+            ) : (
+              <Menu label="פעולות חיוב" items={more} />
+            )
+          ) : undefined
+        }
       >
         {error ? (
           <p className="text-ink-soft">{error}</p>

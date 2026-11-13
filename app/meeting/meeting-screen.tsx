@@ -9,6 +9,7 @@ import { activeEvent } from "@/lib/events/storage";
 import { reachStep } from "@/lib/events/actions";
 import { DEFAULT_FLOW, STEP_BY_ID, resumeIndex, type MeetingStepId } from "@/lib/meeting/steps";
 import { fetchMeetingFlow } from "@/lib/settings/actions";
+import { MeetingFlowProvider } from "@/lib/meeting/use-flow";
 import { Button } from "@/components/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EventForm } from "@/components/event-form";
@@ -204,7 +205,7 @@ export function MeetingScreen() {
       </header>
 
       <main className={"min-h-0 flex-1 print:block print:overflow-visible " + (isCanvas ? "overflow-hidden" : "overflow-auto")}>
-        {step.id === "details" && <DetailsStep event={event} onSaved={(ev) => { setEvent(ev); advanceFor(ev); }} />}
+        {step.id === "details" && <DetailsStep event={event} flow={flow} onSaved={(ev) => { setEvent(ev); advanceFor(ev); }} />}
         {/* A saved sketch to start from, picked with the couple — or a blank page. It writes the
             drawing and then moves on itself, so the footer below offers only the way back. */}
         {step.id === "start" && event && <SketchPickStage onDone={() => advance(at + 1)} />}
@@ -385,10 +386,13 @@ function FlowFooter({
 //
 // Reached by stepping back to it mid-meeting, which is how the couple's phone number gets fixed.
 // A blank one still creates, for /meeting?new and for a browser with no active event.
-function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: (ev: EventSummary) => void }) {
+function DetailsStep({ event, flow, onSaved }: { event: EventSummary | null; flow: MeetingStepId[]; onSaved: (ev: EventSummary) => void }) {
   return (
-    // max-w-3xl: the form is six two-up rows, and at the dialog's old 512px it sat as a narrow
-    // column in the middle of a wide screen.
+    // max-w-3xl: the form is four labelled groups with a label column, and at the dialog's old
+    // 512px it sat as a narrow column in the middle of a wide screen. The provider: /meeting sits
+    // outside the (app) layout's, and the form's header reads the studio's own flow (its status and
+    // the stage that comes next), not the default one.
+    <MeetingFlowProvider flow={flow}>
     <div className="mx-auto w-full max-w-3xl py-6">
       {/* No `overflow-hidden` on this card, deliberately: it clips the date popover flat. The body
           does not scroll here either — `main` is the scroller on this screen, so the form keeps its
@@ -398,5 +402,6 @@ function DetailsStep({ event, onSaved }: { event: EventSummary | null; onSaved: 
         <EventForm event={event} onSaved={onSaved} offerSketch={false} />
       </div>
     </div>
+    </MeetingFlowProvider>
   );
 }
