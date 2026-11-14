@@ -24,8 +24,12 @@ files. Read them before starting a new category.
 | chandelier | The silhouette: every tier's radius | `lib/catalog/chandelier.ts` `chandelierTiers` |
 | pendants (a chandelier style) | The glass's own shape | `PENDANT_GLASS`, `lib/scene/overhead.ts` |
 | flowers, centerpiece | The envelope: heads on its top, rings down its steep side and underside, the mass inside, a neck as stems | `FlowerDrawSpec.profile`, `lib/scene/flowers.ts` |
+| flowers on any shape (2026-11-13) | Nothing — a footprint that is not a plain box is COVERED: cap, walls, underside per outline; a front shape on its face | `lib/catalog/flower-cover.ts`, `lib/scene/flower-cover.ts` |
 | chuppah (round) | The roof's section above the eave: posts rise to it, then the cloth, cloud or ribs follow it | `lib/catalog/chuppah.ts` |
-| vase, column, fountain, lamp | The object itself (body replaces the picture) | `lib/scene/element-body.ts` |
+| lamp | The whole lamp from the side: base below its neck (metal), shade above (cloth, lit) | `lib/catalog/body-profiles.ts` `lampParts`, `lib/scene/items.ts` `lampBody` |
+| tree | The crown's envelope: leaves where wide, trunk where thin | `lib/scene/plants.ts` `treeEnvelopeParts` |
+| vase, column, fountain | The object itself, turned — in ITS OWN material, keeping what makes it that thing (hollow glass; water, jet and glow) | `lib/scene/items.ts` `vaseBody`, `floor-kinds.ts` |
+| candlestick; round chair / sofa | The turned body under its candles; the pouf | `turnedCandlestick`, `turnedPart` |
 
 Likely next: arches, trees (a crown envelope, like flowers), candlesticks, bars.
 
@@ -35,13 +39,18 @@ Likely next: arches, trees (a crown envelope, like flowers), candlesticks, bars.
 
 | Bucket | Set in items.ts | What the base's `revolve` means | Kinds today |
 |---|---|---|---|
-| Body replaces the picture | `BODY_REPLACES_PICTURE` | The profile **is** the object: one solid of revolution. | vase, column, fountain, lamp |
-| Profile is the picture | `PROFILE_IS_PICTURE` | The **silhouette** the recipe lays its many small pieces inside. Nothing solid is built for it. | chandelier, flowers, centerpiece, chuppah |
+| Profile is the picture | `PROFILE_IS_PICTURE` | The recipe READS it (`ctx.profile` or its own draw object): the **silhouette** its many small pieces are laid inside, or the turned object itself built in the kind's own material. Nothing is built for it beside the picture. | chandelier, flowers, centerpiece, chuppah, lamp, tree, vase, column, fountain, candlestick, chair, sofa |
 | Combine (default) | — | The recipe draws on the rest of the footprint, and the element model adds the shapes' own bodies: raised parts, a lathe. | everything else |
 
 How to choose:
 
-- **One turned solid** (a vessel, a shaft): the body replaces the picture.
+- **One turned solid** (a vessel, a shaft): the recipe builds the profile ITSELF, in its own material,
+  and keeps what makes the thing what it is (a fountain's water, a lamp's light). The old "body
+  replaces the picture" bucket is gone (2026-11-13): it handed the row to the flat fallback, and a
+  lamp came out a matte cone with no bulb.
+- **A stored profile always runs from the floor to the top** (`cleanRevolve`). A part that starts
+  higher (a lamp's shade) cannot be stored as its own profile: read the WHOLE piece's profile and
+  split it (`lampParts` at the neck, a tree at `CROWN_THIN`).
 - **Many small things inside an envelope** (crystal and arms, flower heads, a tree's crown, a
   chuppah's canopy of cloth and flowers): the profile is the picture.
 - **Parts at their own heights** (a shelf, a tier on a stand): combine.
@@ -172,6 +181,12 @@ Four traps:
     any outline needs its own exception there (a hexagonal chuppah).
 16. **Tall floor pieces are framed whole.** Above `TALL_MM`, the pane looks at the middle and
     backs off (`lib/scene/focus.ts`).
+17. **A picture made of many small pieces can follow ANY outline.** Lay the pieces by a rim row plus
+    a honeycomb (`coverSpots`), give each spot its depth and its way out, and lift by a section law —
+    the round recipe's own law falls out for a circle. Back each piece with a small dark clump;
+    never extrude the outline as a "mass" (it shows as a kerb past the pieces).
+18. **Full is the default, the spec is the mix.** A drawing that stops at the listed count reads as
+    empty on anything large; repeat the mix to cover the surface and keep "exactly the spec" as a switch.
 
 ## Common mistakes
 

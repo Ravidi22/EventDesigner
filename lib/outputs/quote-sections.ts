@@ -22,7 +22,7 @@
 //   • a stage's decks, stairs and skirt — a stage is ONE line, "תוספת במה", priced as the sum of
 //     everything it is built from (lib/design-document/stage.ts), with what it includes in words.
 import type { DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
-import { measureTotals, rodLengthMm, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
+import { broughtRodMm, measureTotals, type MeasureContext, type MeasureUnit } from "@/lib/design-document/measure";
 import { layStage } from "@/lib/design-document/stage";
 import type { NumberedUnit } from "@/lib/design-document/groups";
 import { tableKits } from "./table-kits";
@@ -221,7 +221,7 @@ function stagesLine(sectionKey: string, doc: DesignDocumentContent, stages: Plac
 function placeLines(sectionKey: string, doc: DesignDocumentContent, placements: Placement[], opts: SectionOptions): SectionLine[] {
   const stages = placements.filter((p) => p.stage);
   const rest = placements.filter((p) => !p.stage);
-  const lines = withRods(linesOf(sectionKey, measureTotals({ ...doc, tables: [], placements: rest }, ctxOf(opts)), opts), rest, opts);
+  const lines = withAisles(withRods(linesOf(sectionKey, measureTotals({ ...doc, tables: [], placements: rest }, ctxOf(opts)), opts), rest, opts), rest, opts);
   const stage = stagesLine(sectionKey, doc, stages, opts);
   return stage ? [stage, ...lines] : lines;
 }
@@ -231,13 +231,14 @@ function placeLines(sectionKey: string, doc: DesignDocumentContent, placements: 
  *  the CURTAIN's line — its total, and "כולל מוט 6 מ׳" in words — and the rod row's own line goes.
  *  With no rod row (or one with no price) the curtain's line says it is partial. */
 function withRods(lines: SectionLine[], placements: Placement[], opts: SectionOptions): SectionLine[] {
+  const ctx = ctxOf(opts);
+  // What each curtain BRINGS — a bare rod (a placement of the rod's own row) is its own line.
   const rodMm = new Map<string, number>();
   for (const p of placements) {
-    const mm = rodLengthMm(p) * p.quantity;
+    const mm = broughtRodMm(p, ctx) * p.quantity;
     if (mm > 0) rodMm.set(p.variantId, (rodMm.get(p.variantId) ?? 0) + mm);
   }
   if (rodMm.size === 0) return lines;
-  const ctx = ctxOf(opts);
   const rod = ctx.rodOf?.();
   const rodInfo = rod ? opts.lookup(rod) : undefined;
   const rodUnit = rod ? ctx.unitOf(rod) : "m";
@@ -246,7 +247,7 @@ function withRods(lines: SectionLine[], placements: Placement[], opts: SectionOp
   const out = lines.map((l) => {
     const mm = rodMm.get(l.variantId);
     if (!mm || l.variantId === rod) return l;
-    const count = placements.filter((p) => p.variantId === l.variantId && rodLengthMm(p) > 0).reduce((n, p) => n + p.quantity, 0);
+    const count = placements.filter((p) => p.variantId === l.variantId && broughtRodMm(p, ctx) > 0).reduce((n, p) => n + p.quantity, 0);
     const amount = rodUnit === "unit" ? count : round2(mm / 1000);
     if (rod) folded += amount;
     const metres = (mm / 1000).toFixed(mm % 1000 === 0 ? 0 : 1);
@@ -261,6 +262,59 @@ function withRods(lines: SectionLine[], placements: Placement[], opts: SectionOp
   return out.flatMap((l) => {
     if (!rod || l.variantId !== rod || folded <= 0) return [l];
     const quantity = round2(l.quantity - folded);
+    return quantity > 0 ? [{ ...l, quantity, lineTotal: round2((l.unitPrice ?? 0) * quantity) }] : [];
+  });
+}
+
+/** AN AISLE is one line (lib/catalog/aisle.ts — the stage's pattern, and the rod's): measureTotals
+ *  counted N of the piece that lines it (and of that piece's vase) under those rows; here they are
+ *  folded into the AISLE's line — its total, and "14 × קופסת ורדים" in words — and the piece's own line
+ *  keeps only what stands on the plan by itself. An aisle whose row has no price of its own is priced
+ *  by what lines it; a piece with no price leaves the line partial. */
+function withAisles(lines: SectionLine[], placements: Placement[], opts: SectionOptions): SectionLine[] {
+  const ctx = ctxOf(opts);
+  if (!ctx.aisleOf) return lines;
+  // Per aisle row: what its placements bring, by the row brought.
+  const brought = new Map<string, Map<string, number>>();
+  for (const p of placements) {
+    for (const part of ctx.aisleOf(p) ?? []) {
+      const mine = brought.get(p.variantId) ?? new Map<string, number>();
+      mine.set(part.variantId, (mine.get(part.variantId) ?? 0) + part.count * p.quantity);
+      brought.set(p.variantId, mine);
+    }
+  }
+  if (brought.size === 0) return lines;
+  const folded = new Map<string, number>();
+  const out = lines.map((l) => {
+    const parts = brought.get(l.variantId);
+    if (!parts) return l;
+    let extra = 0;
+    let unpriced = 0;
+    const words: string[] = [];
+    for (const [variantId, count] of parts) {
+      const info = opts.lookup(variantId);
+      folded.set(variantId, (folded.get(variantId) ?? 0) + count);
+      if (typeof info?.unitPrice === "number") extra += info.unitPrice * count;
+      else unpriced++;
+      if (info) words.push(`${count} × ${info.label}`);
+    }
+    const lineTotal = round2(l.lineTotal + extra);
+    const priced = l.priced || unpriced < parts.size;
+    return {
+      ...l,
+      lineTotal,
+      priced,
+      // The price of one (or of a metre) is the whole of it over its amount — what an itemised quote prints.
+      unitPrice: priced && l.quantity > 0 ? round2(lineTotal / l.quantity) : l.unitPrice,
+      partial: l.partial || (priced && unpriced > 0) || undefined,
+      detail: [l.detail, ...words].filter(Boolean).join(" · "),
+    };
+  });
+  // A piece's own line keeps only what was NOT folded into an aisle.
+  return out.flatMap((l) => {
+    const taken = brought.has(l.variantId) ? 0 : (folded.get(l.variantId) ?? 0);
+    if (taken <= 0) return [l];
+    const quantity = round2(l.quantity - taken);
     return quantity > 0 ? [{ ...l, quantity, lineTotal: round2((l.unitPrice ?? 0) * quantity) }] : [];
   });
 }
@@ -471,6 +525,16 @@ if (isMain(import.meta.url)) {
   assert(withRod.length === 1 && withRod[0].variantId === "curtain" && withRod[0].lineTotal === 6 * 50 + 6 * 30 && withRod[0].detail === "כולל מוט 6 מ׳" && !withRod[0].partial, `the rod is in the curtain's line, in words: ${JSON.stringify(withRod)}`);
   const noRod = quoteSections(rodDoc, { lookup, ctx: rodCtx(() => undefined) }).find((s) => s.key === "floor")!.lines;
   assert(noRod.length === 1 && noRod[0].lineTotal === 300 && noRod[0].partial === true && noRod[0].detail === "כולל מוט 6 מ׳", "no rod row: the curtain alone, partial");
+
+  // 2026-11-13: an AISLE is ONE line — fourteen rose tumblers at 80 folded into it, in words; the one
+  // standing loose beside it keeps a line of its own. The aisle's row has no price: what lines it prices it.
+  info.walk = { cat: "aisles" };
+  const aisleDoc: DesignDocumentContent = { calibration: doc.calibration, tables: [], placements: [free("aw", "floor", "walk"), free("lb", "floor", "roses")] };
+  const aisleCtx: MeasureContext = { unitOf: () => "unit", aisleOf: (p) => (p.variantId === "walk" ? [{ variantId: "roses", count: 14 }] : undefined) };
+  const aisled = quoteSections(aisleDoc, { lookup, ctx: aisleCtx }).find((s) => s.key === "floor")!.lines;
+  const walkLine = aisled.find((x) => x.variantId === "walk");
+  assert(!!walkLine && walkLine.lineTotal === 14 * 80 && walkLine.priced && !walkLine.partial && walkLine.unitPrice === 14 * 80 && /^14 × /.test(walkLine.detail ?? ""), `the aisle's line carries its pieces: ${JSON.stringify(walkLine)}`);
+  assert(aisled.find((x) => x.variantId === "roses")?.quantity === 1 && aisled.find((x) => x.variantId === "roses")?.lineTotal === 80, "…and the loose one keeps its own line");
 
   console.log("quote-sections self-check passed");
 }

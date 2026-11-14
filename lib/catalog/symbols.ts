@@ -12,15 +12,18 @@
 // stored but the designer's one opt-out (MapAppearance.symbol === false), which brings back the
 // outline + name/icon they chose — for the item the category's picture gets wrong.
 //
-// Only a PRIMITIVE footprint (circle, ellipse, rectangle) is drawn this way — a symbol laid into
-// the bounding box of a hand-drawn outline would draw a sofa across the hole in the middle of it.
-// The one exception is a BAR: a ח, an oval ring, a horseshoe or an arc is what a bar in a hall
-// mostly is, so its picture is laid along its band rather than into its box (lib/catalog/bar-draw.ts).
+// THE PICTURE BELONGS TO THE ITEM'S FIRST SHAPE (./picture-frame.ts, 2026-11-13): it is laid into
+// that shape's box — a hexagon, a half-round, a hand-drawn outline as well as a circle or a rectangle
+// — with the shape's outline round it and every added shape drawn beside it as itself. Only a first
+// shape that is mostly air (a ring, an arc, lines) has no box: a symbol laid into it would draw a
+// sofa across the hole in the middle. A BAR is laid along its band instead (lib/catalog/bar-draw.ts),
+// and a banquette, a pergola, a chuppah and a dance floor follow their outlines by their own rules.
 import type { Product } from "./types";
 import { isRunner } from "./categories";
 import type { Footprint } from "@/lib/studio/footprint";
 import { PERGOLA_ROOF_HINT, PERGOLA_ROOF_LABEL, PERGOLA_ROOFS, type PergolaRoof } from "@/lib/venues/pergola";
 import { hasFront } from "@/lib/element/front";
+import { pictureFrame } from "./picture-frame";
 
 export type SymbolKind =
   | "candlestick"
@@ -148,7 +151,12 @@ export function symbolOf(product: Product | undefined, footprint: Footprint): Sy
   // A chuppah stands its posts on its outline's corners (lib/catalog/chuppah.ts) — a hexagon of timber
   // as well as a square; several shapes at once are not one chuppah.
   if (kind === "chuppah") return footprint.kind === "multi" ? null : kind;
-  return footprint.kind === "circle" || footprint.kind === "ellipse" || footprint.kind === "rect" ? kind : null;
+  // Flowers FOLLOW whatever they are drawn as — a ring, an arc, a spiral, lines, several shapes
+  // (lib/catalog/flower-cover.ts), the way a bar is laid along its band.
+  if (kind === "flowers" || kind === "centerpiece") return kind;
+  // Every other picture is laid into the box of the item's FIRST shape (./picture-frame.ts) — any
+  // shape that fills its box enough to carry one.
+  return pictureFrame(footprint) ? kind : null;
 }
 
 /** How many candles / arms / bulbs the picture draws — the category's own count-multiplier when the

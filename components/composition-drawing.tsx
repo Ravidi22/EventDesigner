@@ -1,27 +1,19 @@
 "use client";
 
 import type { Composition } from "@/lib/catalog/types";
-import { chandelierDrawOf } from "@/lib/catalog/chandelier";
-import { chuppahDrawOf } from "@/lib/catalog/chuppah";
-import type { DesignDocumentContent, Placement, Point } from "@/lib/design-document/types";
+import type { DesignDocumentContent, Point } from "@/lib/design-document/types";
 import type { Footprint } from "@/lib/studio/footprint";
 import { footprintBounds } from "@/lib/studio/footprint";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
-import { chairBlockOf, resolve } from "@/lib/studio/catalog-resolver";
-import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
-import { pergolaPostOf } from "@/lib/venues/pergola";
-import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
-import { climbRise } from "@/lib/studio/climb-item";
+import { resolve } from "@/lib/studio/catalog-resolver";
 import { resolveStyle } from "@/lib/element-style";
 import { MIRROR_TRANSFORM } from "@/lib/design-document/mirror";
 import { blockSeats } from "@/lib/design-document/block";
 import { groupSeats } from "@/lib/design-document/groups";
 import { CHAIR_D_MM, CHAIR_W_MM, seatsAround, seatTransform, type Seat } from "@/lib/studio/seating";
 import { FootprintShape, dressBlockOf, dressingSpots, placementFootprint, productStyle, tableBlock, tableBlockedSides, tableFootprint } from "./footprint-shape";
-import { ClothDrape, ItemSymbol, SeatChair } from "./item-symbol";
-import { ChairBlock } from "./chair-block";
-import { vesselOf } from "@/lib/catalog/vessel";
-import { VesselMark } from "./vessel-mark";
+import { ClothDrape, SeatChair } from "./item-symbol";
+import { PlacedPiece as Piece } from "./placed-piece";
 import { borderOf } from "@/lib/catalog/border";
 import { useMounted } from "@/lib/use-mounted";
 
@@ -171,57 +163,6 @@ export function CompositionPieces({
 
 const tableTransform = (at: Point, rotation: number, mirrored?: boolean) =>
   `translate(${at.x} ${at.y})${rotation ? ` rotate(${rotation})` : ""}${mirrored ? ` ${MIRROR_TRANSFORM}` : ""}`;
-
-/** One placed item as the plan draws it at rest: its category's picture when it has one, else its
- *  outline in its shade. */
-function Piece({ placement: p, at, rotation, footprint, overhead }: { placement: Placement; at: Point; rotation: number; footprint?: Footprint; overhead?: boolean }) {
-  const r = resolve(p.variantId);
-  const product = r?.product;
-  const f = footprint ?? placementFootprint(p);
-  const block = chairBlockOf(p);
-  const symbol = block || p.stage ? null : symbolOf(product, f);
-  const style = resolveStyle(productStyle(product), "screen", { fill: "var(--color-surface)", stroke: "var(--color-border)", strokeWidth: 1.5 });
-  const tone = r?.swatch ?? product?.appearance?.style?.fill;
-  const scale = p.scale || 1;
-  // The vase an arrangement stands in, drawn with it (lib/catalog/vessel.ts) as the plan will.
-  const vessel = symbol === "flowers" || symbol === "centerpiece" ? vesselOf(p, (id) => resolve(id)?.product) : undefined;
-  return (
-    <g transform={`translate(${at.x} ${at.y})${rotation ? ` rotate(${rotation})` : ""}${p.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}${scale !== 1 ? ` scale(${scale})` : ""}`}>
-      {vessel && <VesselMark variantId={vessel} pass="under" holder={f} />}
-      {block ? (
-        <ChairBlock product={block.product} spec={block.spec} tone={tone} />
-      ) : symbol && product ? (
-        <ItemSymbol
-          kind={symbol}
-          footprint={f}
-          count={symbolCount(product, symbol)}
-          flowers={symbol === "flowers" || symbol === "centerpiece" ? flowerDrawSpecOf(product, f, tone) : undefined}
-          tone={tone}
-          overhead={overhead}
-          chairStyle={chairStyleOf(product)}
-          drawStyle={drawStyleOf(product)}
-          chandelier={chandelierDrawOf(product.appearance, product.variants)} chuppah={chuppahDrawOf(product.appearance)}
-          postMm={pergolaPostOf(product)}
-          rise={symbol === "stairs" || symbol === "ramp" ? climbRise(product, p.climb) : undefined}
-          detail={false}
-          border={symbol === "runner" ? borderOf(p, product) : undefined}
-        />
-      ) : (
-        <FootprintShape
-          footprint={f}
-          overhead={overhead}
-          fill={tone ?? style.fill}
-          fillOpacity={tone ? 1 : style.fillOpacity}
-          stroke={style.stroke}
-          strokeOpacity={style.strokeOpacity}
-          strokeWidth={style.strokeWidth}
-          vectorEffect="non-scaling-stroke"
-        />
-      )}
-      {vessel && <VesselMark variantId={vessel} pass="over" holder={f} />}
-    </g>
-  );
-}
 
 /** The table a whole-table set (Composition.frame) was dressed on, as a footprint at the origin. */
 function setTable(c: Composition): Footprint | null {

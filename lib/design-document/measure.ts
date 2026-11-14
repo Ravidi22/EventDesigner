@@ -60,10 +60,19 @@ export interface MeasureContext {
    *  spec 2026-11-07 §6.2, as a stage's skirt is billed off the stage). Absent / undefined = the studio
    *  has no rod row, and the drape's quote line says it is partial. */
   rodOf?: () => string | undefined;
+  /** Is this variant a ROD's own row (category `curtain-rods`)? A placement of one is a BARE ROD
+   *  (lib/studio/rail.ts isRodRow): it is billed by its own metres and brings no second rod. Absent =
+   *  only the row `rodOf` names is known to be one. */
+  isRod?: (variantId: string) => boolean;
   /** The CLOTH a sail or a ceiling drape is, mm² (lib/studio/ceiling-cloth.ts clothAreaMm2), read
    *  against the room — a sail tied to a wall or a thing where it now stands. Absent / undefined = off
    *  its own points as placed. What a row priced per m² bills (spec 2026-11-07 §6.3). */
   railAreaMm2?: (p: Placement) => number | undefined;
+  /** What an AISLE brings beside its own row (lib/catalog/aisle.ts, catalog-resolver aisleBrings): N of
+   *  the piece that lines it — and of that piece's vessel — counted as those rows, so the packing
+   *  list, the stock peak, the florist's order and the quote all see fourteen boxes of roses. Absent =
+   *  no catalog to say, and the aisle is one of its own row. */
+  aisleOf?: (p: Placement) => { variantId: string; count: number }[] | undefined;
 }
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -97,6 +106,15 @@ export function rodLengthMm(p: Placement): number {
   if (!rail || rail.type !== "rod") return 0;
   const path = rodPath(rail);
   return path.slice(1).reduce((n, q, i) => n + Math.hypot(q.x - path[i].x, q.y - path[i].y), 0);
+}
+
+/** The metres of rod a placement BRINGS beside itself — a curtain on a free-standing rod; never a bare
+ *  rod, which is its own line (it would be billed twice). */
+export function broughtRodMm(p: Placement, ctx: Pick<MeasureContext, "rodOf" | "isRod">): number {
+  const mm = rodLengthMm(p);
+  if (mm <= 0) return 0;
+  const bare = ctx.isRod ? ctx.isRod(p.variantId) : ctx.rodOf?.() === p.variantId;
+  return bare ? 0 : mm;
 }
 
 /** The billable amount of one placement: metres for a drape, square metres for a laid carpet,
@@ -214,7 +232,9 @@ export function measureTotals(doc: DesignDocumentContent, ctx: MeasureContext): 
     // A drape on a free-standing ROD brings its rod: the studio's rod row, by the metre of the rod
     // (or one rod, for a row priced per unit) — the stage's skirt pattern. No row = nothing billed,
     // and the quote says the drape's line is partial.
-    const rodMm = rodLengthMm(p);
+    // An aisle's lining: N of its piece (and of the piece's vessel), beside the aisle's own row.
+    for (const part of ctx.aisleOf?.(p) ?? []) add(part.variantId, part.count * p.quantity);
+    const rodMm = broughtRodMm(p, ctx);
     const rod = rodMm > 0 ? ctx.rodOf?.() : undefined;
     if (rod) add(rod, (ctx.unitOf(rod) === "unit" ? 1 : round2(rodMm / 1000)) * p.quantity);
     add(p.variantId, measure(p, ctx));
@@ -277,6 +297,14 @@ if (isMain(import.meta.url)) {
   const rodTotals = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [onRod] }, railCtx);
   assert(rodTotals.get("drape") === 6 && rodTotals.get("rod-row") === 6, "…and 6 m of the studio's rod");
   assert(!measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [onRod] }, { ...railCtx, rodOf: () => undefined }).has("rod-row"), "no rod row, no rod billed");
+  // A BARE ROD (2026-11-13) — a placement of the rod's own row — is its own metres, once.
+  const bareRod = { ...onRod, id: "bare", variantId: "rod-row" };
+  const bareTotals = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [bareRod] }, railCtx);
+  assert(bareTotals.get("rod-row") === 6 && bareTotals.size === 1, `a bare rod is billed its own 6 m, never twice (${bareTotals.get("rod-row")})`);
+  const otherShade = { ...bareRod, variantId: "rod-gold" };
+  const shadeCtx: MeasureContext = { ...railCtx, unitOf: (v) => (v.startsWith("rod-") ? "m" : ctx.unitOf(v)), isRod: (v) => v.startsWith("rod-") };
+  const shadeTotals = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [otherShade, onRod] }, shadeCtx);
+  assert(shadeTotals.get("rod-gold") === 6 && shadeTotals.get("rod-row") === 6, "a bare rod in another shade is its own line, and the curtain beside it still brings its rod");
   assert(measure(onRod, { ...railCtx, railLengthMm: undefined }) === 6, "a rod is its own points — measured with no plan at all");
   const onSide = { ...base, id: "side", variantId: "drape", quantity: 1, rail: { type: "side" as const, featureId: "bar", side: 0, from: 0, to: 1, out: 1 as const } };
   assert(measure(onSide, { ...railCtx, railLengthMm: () => 2500 }) === 2.5 && measure(onSide, { ...railCtx, railLengthMm: undefined }) === 3, "a side rail reads its side through the plan, or falls back to its catalog width");
@@ -428,6 +456,11 @@ if (isMain(import.meta.url)) {
 
   // An arrangement in a vase: the vase is counted beside it, one per arrangement.
   const inVase = { ...base, id: "fl", variantId: "peony", quantity: 3, layer: "table" as const, tableId: "t" };
+  const lined = measureTotals(
+    { calibration: { mmPerUnit: 1 }, tables: [], placements: [{ ...base, id: "aisle", variantId: "walk", quantity: 1, sizeMm: { widthMm: 12000, depthMm: 3000 } }] },
+    { ...ctx, unitOf: (v) => (v === "walk" ? "m" : "unit"), aisleOf: (p) => (p.variantId === "walk" ? [{ variantId: "rose-box", count: 14 }, { variantId: "urn", count: 14 }] : undefined) },
+  );
+  assert(lined.get("rose-box") === 14 && lined.get("urn") === 14 && lined.get("walk") === 12, "an aisle counts N of its piece and the piece's vessel, and bills its own row by its length");
   const vased = measureTotals({ calibration: { mmPerUnit: 1 }, tables: [], placements: [inVase] }, { ...ctx, vesselOf: (p) => (p.variantId === "peony" ? "jug" : undefined) });
   assert(vased.get("peony") === 3 && vased.get("jug") === 3, "three arrangements in a jug each pack three jugs");
   console.log("measure self-check passed");

@@ -3,7 +3,7 @@
 // import it without importing each other.
 import type { Footprint } from "@/lib/studio/footprint";
 import { buildHollow, footprintOutlines } from "@/lib/studio/footprint";
-import type { Product } from "@/lib/catalog/types";
+import type { Product, RevolvePoint } from "@/lib/catalog/types";
 import type { ChandelierDraw } from "@/lib/catalog/chandelier";
 import type { ChuppahDraw } from "@/lib/catalog/chuppah";
 import type { Resolved } from "@/lib/studio/catalog-resolver";
@@ -37,6 +37,9 @@ export interface ItemContext {
   chairStyle?: ChairStyle;
   drawStyle?: DrawStyle;
   flowers?: FlowerDrawSpec;
+  /** How high above the floor the item's own foot stands — a table's top under what is on it: how
+   *  far a flower runner's fall hangs (lib/scene/flowers.ts). Absent = unknown (a table's height). */
+  standMm?: number;
   climb?: PlacementClimb & { heightMm: number };
   bench?: BenchLayout;
   author: boolean;
@@ -67,6 +70,10 @@ export interface ItemContext {
   /** A chuppah's posts, roof and flowers (MapAppearance.chuppah, lib/catalog/chuppah.ts) and its roof's
    *  section (the base's body). Absent = the chuppah it always was. */
   chuppah?: ChuppahDraw;
+  /** The first shape's side profile (lib/element/adapter.ts baseProfileOf — fractions of the radius
+   *  and the height): what the kind's recipe reads as its own outline (lib/catalog/body-profiles.ts).
+   *  Absent = none, and the recipe builds what it always did. */
+  profile?: RevolvePoint[];
 }
 
 /** The ADR-5 fallback: the item's PARTS, each stood up at its own z and height in its own surface

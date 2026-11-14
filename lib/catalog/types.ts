@@ -5,6 +5,7 @@ import type { EdgeCurve } from "../studio/hall";
 import type { Texture, TextureImage } from "./textures";
 import type { ElementStyle } from "../element-style";
 import type { Border } from "./border";
+import type { AisleSpec } from "./aisle";
 
 export type { Layer };
 
@@ -311,6 +312,23 @@ export interface ChuppahSpec {
   drapes?: boolean;
 }
 
+/** How an arrangement is drawn beyond its form and its flowers (2026-11-13, the user: "the סידורי
+ *  פרחים looks empty — I want it more filled… flowers falling off a table, on a canopy"). Every field
+ *  absent = a FULL arrangement with no fall and no strands (lib/catalog/flower-spec.ts carries them
+ *  into the FlowerDrawSpec the plan and the room both read). Drawing only: the stems ordered and
+ *  quoted are the spec's rows, whatever the picture is filled with. */
+export interface ArrangementSpec {
+  /** `spec` = draw exactly the stems the rows list, however bare. Absent = full: the rows say the
+   *  mix, the size how many. */
+  fullness?: "spec";
+  /** A runner going over its table's end and down to the floor: which end(s), `end` = +x as drawn. */
+  fall?: "start" | "end" | "both";
+  /** Strands hanging under a HUNG piece (wisteria under a flower ceiling): their longest, mm. */
+  trailMm?: number;
+  /** A tall covered shape wound as a spiral, this many turns, rather than covered all round. */
+  spiral?: number;
+}
+
 /** A shape added to an item beside its base shape — a bar that is a counter with a round end, a
  *  head table with a piece set against it. The item is still ONE catalog row, dragged, priced and
  *  counted once; the parts only change what the plan draws.
@@ -455,6 +473,13 @@ export interface MapAppearance {
   chandelier?: ChandelierSpec;
   /** A chuppah's posts, roof and flowers — see ChuppahSpec. Read for the `chuppahs` picture only. */
   chuppah?: ChuppahSpec;
+  /** An arrangement's fullness, fall and strands — see ArrangementSpec. Read for the flowers and
+   *  centrepiece pictures only. */
+  arrangement?: ArrangementSpec;
+  /** An AISLE's lining (lib/catalog/aisle.ts): how far apart its pieces stand, one side or both, the
+   *  runner down its walk. Read for an `aisles` row only; which piece lines it is
+   *  `categoryFields.piece`. Absent = the defaults. */
+  aisle?: AisleSpec;
   parts?: ShapePart[]; // shapes drawn beside the base one, as one item (see ShapePart)
   /** The sides nobody sits on — a head table facing the room, a table against a wall. Indices into
    *  seatSides() (lib/studio/seating.ts) of the item's resolved footprint. The chairs are not lost:

@@ -15,6 +15,7 @@ import { catalogBox, sizedFootprint } from "./footprint";
 import { deckTypeOf, type DeckLookup } from "@/lib/design-document/stage";
 import type { BenchLookup } from "@/lib/design-document/bench";
 import { isRailed } from "./rail";
+import { AISLE_CATEGORY, AISLE_PIECE_FIELD, aisleLayout, aisleRowBox, aisleSpecOf, canBeAislePiece, mergedAisle, type AisleLayout, type AislePlacement, type AisleSpec } from "@/lib/catalog/aisle";
 
 export interface Resolved {
   product: Product;
@@ -85,6 +86,64 @@ export function chairBlockOf(p: Placement): { spec: ChairRows; product: Product;
   const r = resolve(p.variantId);
   if (!r || r.product.category !== "chairs") return null;
   return { spec: p.rows, product: r.product, chair: catalogBox(r.product) };
+}
+
+/** AN AISLE as every surface reads it (lib/catalog/aisle.ts): its row, the spec in force (the row's
+ *  under the placement's own), the PIECE that lines it — resolved, or absent when none is chosen or the
+ *  one named is gone — the box it is laid in, and the layout. `pieces` are the lining as PLACEMENTS of
+ *  the piece's own row in the aisle's frame: what the plan draws and the room builds each spot with. */
+export interface AisleView {
+  product: Product;
+  spec: AisleSpec;
+  pieceId?: string;
+  piece?: Resolved;
+  box: { widthMm: number; depthMm: number };
+  layout: AisleLayout;
+  pieces: Placement[];
+}
+
+/** An `aisles` row as an aisle: at `size` (a placement's stretch) or its own, with `own` (a
+ *  placement's answers) over the row's. Null for any other row. */
+export function aisleViewOf(product: Product | undefined, size?: { widthMm: number; depthMm: number }, own?: AislePlacement, idPrefix = "aisle"): AisleView | null {
+  if (!product || product.category !== AISLE_CATEGORY) return null;
+  const spec = mergedAisle(aisleSpecOf(product), own);
+  const named = own?.piece ?? product.categoryFields[AISLE_PIECE_FIELD];
+  const found = typeof named === "string" && named ? resolve(named) : undefined;
+  const piece = found && canBeAislePiece(found.product) ? found : undefined;
+  const box = size ?? aisleRowBox(product);
+  const layout = aisleLayout(box, piece ? catalogBox(piece.product) : null, spec);
+  const pieceId = piece ? (named as string) : undefined;
+  const pieces: Placement[] = pieceId
+    ? layout.spots.map((s, i) => ({ id: `${idPrefix}~${i}`, variantId: pieceId, layer: "floor" as const, quantity: 1, position: { x: s.x, y: s.y }, rotation: s.rotation, scale: 1 }))
+    : [];
+  return { product, spec, pieceId, piece, box, layout, pieces };
+}
+
+// One view per placement object while the catalog stands still — a pan redraws no aisle.
+const aisleViews = new WeakMap<Placement, { version: number; view: AisleView | null }>();
+
+/** Which placements are AISLES (an `aisles` row standing on the floor), and each one's view. The one
+ *  definition the canvas, the print, the room, the bar and the counts all read. */
+export function aisleOf(p: Placement): AisleView | null {
+  if (p.stage || p.perch || p.tableId || p.rows || isRailed(p)) return null;
+  // A draft resolving over the catalog (withResolved) is never cached: it was never saved.
+  const hit = overlay ? undefined : aisleViews.get(p);
+  if (hit && hit.version === catalogVersion) return hit.view;
+  const product = resolve(p.variantId)?.product;
+  const view = product?.category === AISLE_CATEGORY ? aisleViewOf(product, p.sizeMm, p.aisle, p.id) : null;
+  if (!overlay) aisleViews.set(p, { version: catalogVersion, view });
+  return view;
+}
+
+/** What an aisle BRINGS beside itself, for the counts (MeasureContext.aisleOf): N of its piece — and,
+ *  when that piece stands in a vessel, N of the vessel. */
+export function aisleBrings(p: Placement, vesselOf?: (piece: Placement) => string | undefined): { variantId: string; count: number }[] | undefined {
+  const view = aisleOf(p);
+  if (!view?.pieceId || view.pieces.length === 0) return undefined;
+  const out = [{ variantId: view.pieceId, count: view.pieces.length }];
+  const vessel = vesselOf?.(view.pieces[0]);
+  if (vessel) out.push({ variantId: vessel, count: view.pieces.length });
+  return out;
 }
 
 // The open event's shades (EventSummary.shades), primed by the studio when its event resolves —

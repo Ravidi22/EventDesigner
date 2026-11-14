@@ -24,11 +24,11 @@ import type { Composition, Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import { CATEGORIES, CATEGORY_BY_ID, DESIGN_PASS_GROUPS, anchorOf, categoryInPass, isRunner, passGroups, placesOnce, type CategoryGroupId } from "@/lib/catalog/categories";
 import { builtInRug } from "@/lib/catalog/built-in";
-import { doorOpenings, nearestWall, WHOLE_WALL } from "@/lib/studio/anchor";
+import { doorOpenings, nearestWall } from "@/lib/studio/anchor";
 import { curtainRail } from "@/lib/venues/curtain";
 import { isLedStrip, ledDropRail, ledRunRail, ledSideCandidates } from "@/lib/venues/led";
-import { defaultRailHeight, isRailed, nearestSideRail, railOf, sideCandidates, type Rail } from "@/lib/studio/rail";
-import { defaultClothHeight, isCeilingClothCategory, newCanopy, newRun, newSail, redrawnCloth, SAIL_MAX_TIES, snapTie, tieCandidates } from "@/lib/studio/ceiling-cloth";
+import { curtainDrop, defaultRailHeight, isRailed, isRodRow, nearestBareRod, nearestSideRail, railOf, rodAt, rodDropLength, sideCandidates, type Rail } from "@/lib/studio/rail";
+import { defaultClothHeight, endHeightAt, isCeilingClothCategory, newCanopy, newRun, newSail, newSwag, redrawnCloth, SAIL_MAX_TIES, snapTie, tieCandidates } from "@/lib/studio/ceiling-cloth";
 import { roofHeightAt, sketchPergolas } from "@/lib/venues/roofs";
 import { STAGE_SETTLE_MS, useSettled } from "./use-settled";
 import {
@@ -207,9 +207,6 @@ const RAIL: Record<StudioMode, { groups?: CategoryGroupId[]; hint?: string }> = 
   design: { groups: DESIGN_PASS_GROUPS, hint: "לחצו על פריט עיצוב ואז על התוכנית — או גררו. פריטי שולחן — על שולחן; רצפה ותקרה — לכל נקודה." },
 };
 
-/** A curtain dropped where there is no wall and no tall side to hang it on stands on a straight rod
- *  this long, centred on the drop (spec 2026-11-07 §6.2) — redrawn post by post from its bar. */
-const ROD_DROP_MM = 3000;
 /** The catalog categories a stage may be built from (see deckTypes in the screen below). */
 const STAGE_PIECE_CATEGORIES = ["stages", "stage-decks"];
 
@@ -422,8 +419,9 @@ export function StudioScreen({
   const [rodDraw, setRodDraw] = useState<string | null>(null);
   // A sail's ties, a ceiling drape's run or a canopy's area being drawn (lib/studio/ceiling-cloth.ts):
   // for a NEW placement of `productId`, dropped at `start`, or redrawing `placementId`. `id` re-mounts
-  // the pane for each drawing.
-  const [clothDraw, setClothDraw] = useState<{ id: number; kind: "sail" | "run" | "canopy"; productId?: string; placementId?: string; start?: Point } | null>(null);
+  // the pane for each drawing. `tool`: the SWAG tool — a ceiling drape armed from the rail (or dropped
+  // on the plan), dragged from point to point; its row wears the armed look while it is up.
+  const [clothDraw, setClothDraw] = useState<{ id: number; kind: "sail" | "run" | "canopy"; productId?: string; placementId?: string; start?: Point; tool?: boolean } | null>(null);
   const [saveState, setSaveState] = useState<"saving" | "saved" | "error">("saved");
   const [zoneFocus, setZoneFocus] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
@@ -689,24 +687,19 @@ export function StudioScreen({
   /** Begin drawing cloth in the air on the canvas (lib/studio/ceiling-cloth.ts): a new sail or drape
    *  dropped off the rail (its drop is the first point), or a placed one drawn again from its bar.
    *  Nothing is added until the drawing ends — one entry, and Escape leaves the plan untouched. */
-  const startClothDraw = (draw: { kind: "sail" | "run" | "canopy"; productId?: string; placementId?: string; start?: Point }) => {
+  const startClothDraw = (draw: { kind: "sail" | "run" | "canopy"; productId?: string; placementId?: string; start?: Point; tool?: boolean }) => {
     // The armed row lets go (the pane takes every click from here), and so does a rod being drawn.
+    // What to do next is said by the standing pill over the canvas (the HintRow's cloth pill).
     setArmedId(null);
     setRodDraw(null);
     setClothDraw({ ...draw, id: Date.now() });
-    showHint(
-      draw.kind === "sail"
-        ? "לחיצה לכל קשירה — ליד קיר או פינה של מבנה היא נקשרת אליהם, אחרת עמוד · לחיצה על הראשונה, Enter או הרביעית לסיום · Alt — עמוד · Esc לביטול"
-        : draw.kind === "run"
-          ? "לחיצה לקצה השני של הבד · Esc לביטול"
-          : "לחיצה לכל פינה של השטח · לחיצה על הראשונה או Enter לסגירה · Esc לביטול",
-    );
   };
   /** The drawing ended: the new sail or drape placed on its rail, or the redrawn one's rail replaced
    *  — keeping what was typed for it (heights, width, sag, scallops). */
-  const finishClothDraw = (points: Point[]) => {
+  const finishClothDraw = (points: Point[], keep?: boolean) => {
     const draw = clothDraw;
-    setClothDraw(null);
+    // The swag tool goes on to the next swag while Shift is held (the armed row's "Shift — עוד").
+    setClothDraw(draw?.tool && keep ? { ...draw, start: undefined, id: Date.now() } : null);
     if (!draw || points.length < 2) return;
     const roof = sketchRoofOf();
     const was = draw.placementId ? doc.placements.find((x) => x.id === draw.placementId) : undefined;
@@ -716,7 +709,15 @@ export function StudioScreen({
       // tie back off its point against the same walls and things.
       const tctx = { structure: plan.structure, candidates: tieCandidates(arrangedStructure(plan.structure, doc).features, doc, (v) => resolve(v)?.product) };
       rail = newSail(points.slice(0, SAIL_MAX_TIES).map((q) => snapTie(q, tctx, 3)), (q) => defaultClothHeight(q, roof));
-    } else if (draw.kind === "run") rail = newRun(points[0], points[1], defaultClothHeight(points[0], roof));
+    } else if (draw.kind === "run")
+      // A NEW drape is ONE swag from point to point, each end at the height of what is over it (a
+      // roof at one end, open sky at the other); one drawn again keeps its own curve (redrawnCloth).
+      // An end put on another swag's end hangs from the same hook, at that end's height.
+      if (was) rail = newRun(points[0], points[1], defaultClothHeight(points[0], roof));
+      else {
+        const others = doc.placements.map((x) => railOf(x));
+        rail = newSwag(points[0], points[1], endHeightAt(points[0], others) ?? defaultClothHeight(points[0], roof), endHeightAt(points[1], others) ?? defaultClothHeight(points[1], roof));
+      }
     else rail = newCanopy(points, defaultClothHeight(points[0], roof));
     const prior = was ? railOf(was) : null;
     if (prior) rail = redrawnCloth(prior, rail);
@@ -900,10 +901,12 @@ export function StudioScreen({
       return true;
     }
 
-    // A SAIL is drawn tie by tie and a CEILING DRAPE end to end, from the drop (spec 2026-11-07
-    // §6.3/§6.4) — it is placed when the drawing ends. An area of swags is the drape's bar's "ציור כשטח".
+    // A SAIL is drawn tie by tie from the drop (spec 2026-11-07 §6.3) and a CEILING DRAPE is DRAGGED
+    // from point to point (2026-11-13: the drop only takes the tool up — where it fell is not an end)
+    // — placed when the drawing ends. An area of swags is the drape's bar's "פריסה על שטח".
     if (isCeilingClothCategory(product.category)) {
-      startClothDraw({ kind: product.category === "sails" ? "sail" : "run", productId: product.id, start: { x, y } });
+      if (product.category === "sails") startClothDraw({ kind: "sail", productId: product.id, start: { x, y } });
+      else startClothDraw({ kind: "run", productId: product.id, tool: true });
       return true;
     }
 
@@ -937,23 +940,47 @@ export function StudioScreen({
         setSelected([{ kind: "placement", id }]);
         return true;
       }
-      const near = takes("wall") ? nearestWall(plan.structure, { x, y }) : null;
-      const side = takes("side") ? nearestSideRail(sideCandidates(arrangedStructure(plan.structure, doc).features, doc, (v) => resolve(v)?.product), { x, y }) : null;
-      let rail: Rail;
-      if (side && (!near || side.distanceMm < near.distanceMm)) rail = side.rail;
-      else if (near) rail = { type: "wall", wallId: near.wallId, ...WHOLE_WALL };
-      else if (!takes("rod")) {
+      // At what is overhead where it lands (lib/venues/roofs.ts): a zone's ceiling, a building's
+      // roof, the venue's pergola or a hired one in this sketch — the rod's 2.4 m under open sky.
+      const rodHeightMm = defaultRailHeight({ x, y }, sketchRoofOf());
+      // THE ROD ITSELF (the built-in מוט וילון — lib/studio/rail.ts isRodRow): a BARE ROD through the
+      // drop, as long as its row is wide and as thick as its row is deep (rodDropLength); its bar types both, its posts
+      // drag, and a curtain let go on it is hung there (below).
+      if (isRodRow(product)) {
+        const rail = rodAt({ x, y }, rodDropLength(product.dimensions.widthMm), rodHeightMm, product.dimensions.depthMm || undefined);
+        act({ type: "addPlacement", placement: { ...base, position: { x, y }, rail } });
+        landNew([{ kind: "placement", id }]);
+        setSelected([{ kind: "placement", id }]);
+        showHint("המוט הונח — גוררים עמוד כדי להאריך, וגוררים עליו וילון כדי לתלות");
+        return true;
+      }
+      // A CURTAIN goes to what is in reach of the drop (lib/studio/rail.ts curtainDrop): a bare rod it
+      // was let go on (it is hung there), else the nearer of the nearest wall and the nearest side
+      // within a few metres; in the open it stands on a rod of its own, where it was dropped.
+      const landing = curtainDrop({
+        p: { x, y },
+        wall: nearestWall(plan.structure, { x, y }),
+        side: nearestSideRail(sideCandidates(arrangedStructure(plan.structure, doc).features, doc, (v) => resolve(v)?.product), { x, y }),
+        rod: nearestBareRod(doc.placements, (v) => isRodRow(resolve(v)?.product), { x, y }),
+        takes,
+        rodHeightMm,
+      });
+      if (!landing) {
         showHint("אין קיר לתלות עליו — שרטטו את המתחם ב״אולמות״");
         return false;
-      } else {
-        const half = ROD_DROP_MM / 2;
-        // At what is overhead where it lands (lib/venues/roofs.ts): a zone's ceiling, a building's
-        // roof, the venue's pergola or a hired one in this sketch — the rod's 2.4 m under open sky.
-        rail = { type: "rod", points: [{ x: Math.round(x - half), y: Math.round(y) }, { x: Math.round(x + half), y: Math.round(y) }], heightMm: defaultRailHeight({ x, y }, sketchRoofOf()) };
+      }
+      if (landing.kind === "adopt") {
+        // ON A BARE ROD: the rod's placement becomes the curtain's — same id, same rail — so there is
+        // one thing on the plan, a curtain on its rod, billed with its rod as every rod curtain is
+        // (never a remove + add: nothing to re-link, one undo entry).
+        act({ type: "setPlacementVariant", id: landing.placementId, variantId });
+        setSelected([{ kind: "placement", id: landing.placementId }]);
+        showHint(`${product.name} — על המוט`);
+        return true;
       }
       act({
         type: "addPlacement",
-        placement: { ...base, position: { x, y }, rail },
+        placement: { ...base, position: { x, y }, rail: landing.rail },
       });
     } else if (product.layer === "table") {
       const t = tableUnder(doc.tables, { x, y });
@@ -1393,6 +1420,11 @@ export function StudioScreen({
    *  second one. A table wears one cloth, whatever product it is: spreading cream over a room where
    *  table 5 wears a different product's gold gave table 5 two cloths, both billed and packed. (A
    *  variantless row is placed under its own product id, so that is in the list too.) */
+  // The studio's rod row (its first מוט וילון): what a curtain taken down off its rod leaves standing.
+  const rodRowVariant = useMemo(() => {
+    const row = catalog.find((p) => isRodRow(p) && !p.archived);
+    return row ? firstVariantId(row) : undefined;
+  }, [catalog]);
   const coverIds = useMemo(() => catalog.filter((p) => anchorOf(p) === "table").flatMap((p) => [p.id, ...p.variants.map((v) => v.id)]), [catalog]);
   /** What a placement is replaced BY on a table it is applied to: any cloth, for a cloth; the
    *  product's other shades, for anything else. */
@@ -1888,7 +1920,7 @@ export function StudioScreen({
     // none of them is a curtain to swap the venue's for.
     const drapes =
       f.kind === "curtain"
-        ? catalog.filter((p) => !p.archived && CATEGORY_BY_ID[p.category]?.anchor === "wall" && !isLedStrip(p) && !isCeilingClothCategory(p.category))
+        ? catalog.filter((p) => !p.archived && CATEGORY_BY_ID[p.category]?.anchor === "wall" && !isLedStrip(p) && !isCeilingClothCategory(p.category) && !isRodRow(p))
         : [];
     const curtainSwap: SwapPanel | null = drapes.length ? { kind: "items", count: 1, current: null, similar: 0, options: drapes } : null;
     return { id: f.id, label: f.label, kind: f.kind, rotationDeg: here.rotationDeg ?? 0, moved: isFeatureMoved(doc, f.id), curtainSwap };
@@ -3634,6 +3666,16 @@ export function StudioScreen({
   const armedRows = !!armedTool?.rows && armed?.category === "chairs";
   const armedBlock = useMemo(() => (armedRows && armed ? carriedRowsOf(armed, NEW_BLOCK) : null), [armedRows, armed]);
   const arm = (productId: string | null) => {
+    // A CEILING DRAPE is not put down, it is DRAGGED from point to point: arming its row takes up the
+    // swag tool (a second click on the row, or arming anything else, puts it down).
+    const draped = productId ? catalog.find((p) => p.id === productId && !p.archived && p.category === "ceiling-drapes") : undefined;
+    if (draped) {
+      setPlacing(null);
+      setArmedCount(0);
+      startClothDraw({ kind: "run", productId: draped.id, tool: true });
+      return;
+    }
+    if (clothDraw?.tool) setClothDraw(null);
     setArmedId(productId);
     setArmedCount(0);
     // One armed thing at a time: a template half-placed and a catalog item armed would both claim
@@ -5440,11 +5482,15 @@ export function StudioScreen({
     onHangOverDressing: hangOverDressing,
     onVessel: (ids, vessel) => act({ type: "setPlacementVessel", ids, vessel }),
     onBorder: (ids, border) => act({ type: "setPlacementBorder", ids, border }),
+    onAisle: (ids, patch) => act({ type: "setPlacementAisle", ids, patch }),
     onClimb: (id, edit) => act({ type: "setPlacementClimb", id, ...edit }),
     onApplyToAllTables: spreadCloth,
     onVariant: (id, variantId) => act({ type: "setPlacementVariant", id, variantId }),
     onSpan: (id, span) => act({ type: "setPlacementSpan", id, span }),
     onRail: (id, rail, dropMm) => act({ type: "setPlacementRail", id, rail, dropMm }),
+    // A curtain taken down off its rod, the rod left standing: the placement goes back to being the
+    // studio's rod (its first מוט וילון row) on the same rail. Offered only while there is such a row.
+    onBareRod: rodRowVariant ? (id) => act({ type: "setPlacementVariant", id, variantId: rodRowVariant }) : undefined,
     onDrawRod: (id) => {
       setRodDraw(id);
       // An LED strip is drawn as a free run — its two ends (lib/venues/led.ts ledRunRail).
@@ -5601,7 +5647,7 @@ export function StudioScreen({
           onEditProduct={editProduct}
           onDuplicateProduct={duplicateProduct}
           addedIds={addedIds}
-          armedId={armed ? armedId : null}
+          armedId={armed ? armedId : clothDraw?.tool ? (clothDraw.productId ?? null) : null}
           onArm={arm}
           onStageFill={startStageFill}
           stageFillActive={stageFill !== null}
@@ -5728,7 +5774,8 @@ export function StudioScreen({
                       }
                       // The height a rod had stays; a new one starts where a rod does (defaultRailHeight).
                       const heightMm = was?.type === "rod" ? was.heightMm : defaultRailHeight(points[0], sketchRoofOf());
-                      act({ type: "setPlacementRail", id: p.id, rail: { type: "rod", points, heightMm, ...(was?.type === "rod" && was.cantilever ? { cantilever: was.cantilever } : {}) } });
+                      // …and so do its ר and its thickness: a rod drawn again is the same rod, elsewhere.
+                      act({ type: "setPlacementRail", id: p.id, rail: { type: "rod", points, heightMm, ...(was?.type === "rod" && was.cantilever ? { cantilever: was.cantilever } : {}), ...(was?.type === "rod" && was.thickMm ? { thickMm: was.thickMm } : {}) } });
                     },
                     onCancel: () => setRodDraw(null),
                     // An LED strip's free run is its two ends — the second click ends it.
@@ -6027,6 +6074,29 @@ export function StudioScreen({
               </HintPill>
             )}
             {placing && <HintPill>{`לחיצה על התוכנית מציבה את ״${placing.name}״ · Esc לביטול`}</HintPill>}
+            {/* Cloth being drawn in the air — what the next press does, standing while the tool is up. */}
+            {clothDraw && (
+              <HintPill interactive>
+                <span role="status" className="flex items-center gap-2">
+                  <span className="min-w-0">
+                    {clothDraw.kind === "sail"
+                      ? "לחיצה לכל קשירה — ליד קיר או פינה של מבנה היא נקשרת אליהם, אחרת עמוד · לחיצה על הראשונה, Enter או הרביעית לסיום · Alt — עמוד · Esc לביטול"
+                      : clothDraw.kind === "run"
+                        ? "גררו מנקודה לנקודה — הבד נמתח ביניהן · הקצה נתפס לקצה של בד אחר, לעמוד או לקיר (Alt — חופשי) · Shift — ממשיכים לבד הבא · Esc לביטול"
+                        : "לחיצה לכל פינה של השטח · לחיצה על הראשונה או Enter לסגירה · Esc לביטול"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setClothDraw(null)}
+                    aria-label="ביטול הציור"
+                    title="ביטול הציור"
+                    className="-my-1 -me-2 shrink-0 rounded-pill p-1 text-canvas/70 transition-colors hover:bg-canvas/15 hover:text-canvas"
+                  >
+                    <X className="h-3.5 w-3.5" strokeWidth={2} />
+                  </button>
+                </span>
+              </HintPill>
+            )}
             {/* What the next click will do, said where the eye is. The one pill with a button in it,
                 so it takes the pointer — the ✕ is the way out for a designer who has never heard of
                 Escape, and the one a tablet has. */}

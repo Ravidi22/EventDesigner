@@ -32,7 +32,8 @@ import { arrangedStructure } from "@/lib/design-document/features";
 import { climbKindOf } from "@/lib/studio/climb-item";
 import { vesselOf } from "@/lib/catalog/vessel";
 import { deckTypeOf } from "@/lib/design-document/stage";
-import { resolveFootprint, footprintBounds } from "@/lib/studio/footprint";
+import { catalogBox, resolveFootprint, footprintBounds } from "@/lib/studio/footprint";
+import { aisleBringsOf } from "@/lib/catalog/aisle";
 import type { VenueStructure } from "@/lib/venues/structure";
 import { grantedVenueIds } from "@/lib/venues/granted";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
@@ -169,6 +170,7 @@ function serverMeasureContext(byVariant: Map<string, Product>, structure?: Venue
       for (const [variantId, p] of byVariant) if (p.category === "curtain-rods" && !p.archived) return variantId;
       return undefined;
     },
+    isRod: (variantId) => byVariant.get(variantId)?.category === "curtain-rods",
     unitOf: (variantId) => (byVariant.get(variantId)?.priceUnit ?? "unit") as MeasureUnit,
     // Along the wall — a drape round a bowed wall covers the arc, not the chord.
     wallLengthMm: structure ? (wallId) => wallTrack(structure, wallId)?.lengthMm : undefined,
@@ -193,6 +195,14 @@ function serverMeasureContext(byVariant: Map<string, Product>, structure?: Venue
     climbOf: (variantId) => climbKindOf(byVariant.get(variantId)),
     // An arrangement's vase is stock on the day it stands in (lib/catalog/vessel.ts).
     vesselOf: (p) => vesselOf(p, (id) => byVariant.get(id)),
+    // An aisle orders N of the piece that lines it — its flowers fan out stem by stem like any
+    // arrangement's — and N of that piece's vase (lib/catalog/aisle.ts).
+    aisleOf: (p) => {
+      const lined = aisleBringsOf(p, (id) => byVariant.get(id), catalogBox);
+      if (!lined) return undefined;
+      const vessel = vesselOf({ variantId: lined.variantId }, (id) => byVariant.get(id));
+      return vessel ? [lined, { variantId: vessel, count: lined.count }] : [lined];
+    },
   };
 }
 

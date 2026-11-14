@@ -139,6 +139,15 @@ export function hasOwnBody(product: Product): boolean {
   return (a.parts ?? []).some((p) => p.zMm !== undefined || p.heightMm !== undefined || (p.revolve?.length ?? 0) >= 2 || p.body === "none" || p.plane === "front");
 }
 
+/** The FIRST shape's side profile, when the element model turns it (a round base with a `revolve` —
+ *  never a band or a slice): what a category's recipe reads as its own outline (lib/catalog/
+ *  body-profiles.ts — a lamp's shade, a tree's crown, a vessel's form). Undefined = none. */
+export function baseProfileOf(product: Product | undefined): RevolvePoint[] | undefined {
+  if (!product?.appearance?.revolve || product.appearance.revolve.length < 2) return undefined;
+  const op = definitionOf(product).parts[0]?.op;
+  return op?.kind === "revolve" ? op.profile : undefined;
+}
+
 /** The size the element is drawn at: a placement's stretched size when the row may be stretched
  *  (Product.resize / its category's default), else none — the catalog's own, exactly as
  *  sizedFootprint reads it. */

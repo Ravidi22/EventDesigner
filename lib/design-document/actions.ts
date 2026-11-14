@@ -10,6 +10,13 @@ import { carryHung } from "../studio/hang-over";
 import { cleanBows, cleanCorners } from "../studio/rug-shape";
 import { withRail, type Rail } from "../studio/rail";
 import { cleanBorder, sameBorder, type Border } from "../catalog/border";
+import { cleanAisle, type AislePlacement } from "../catalog/aisle";
+
+/** Two small plain objects, key order aside. */
+const sameJson = (x: object, y: object) => {
+  const norm = (o: object) => JSON.stringify(Object.entries(o).sort(([p], [q]) => (p < q ? -1 : 1)));
+  return norm(x) === norm(y);
+};
 import { cleanCover, detachCover, settleCovers } from "../studio/cover";
 
 /** A table number as stored: whole and not negative (0 is the head table). Null for nothing usable. */
@@ -83,6 +90,9 @@ export type Action =
    *  its own, null = none here whatever its row says, undefined = back to its row's ("כמו בקטלוג").
    *  Several ids: a block's cloths, every member at once. */
   | { type: "setPlacementBorder"; ids: string[]; border: Border | null | undefined }
+  /** An aisle's own answers on this plan (lib/catalog/aisle.ts): `patch` is laid over what it carries;
+   *  a field given as `null` goes back to its row's. */
+  | { type: "setPlacementAisle"; ids: string[]; patch: { [K in keyof AislePlacement]?: AislePlacement[K] | null } }
   // How high THIS ceiling item hangs above the floor, mm (Placement.hangHeightMm). null = back to its
   // catalog row's default. A rigging fact, like scale a drawing one: nothing priced or packed reads it.
   | { type: "setPlacementHang"; id: string; heightMm: number | null }
@@ -509,6 +519,29 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
         const { vessel: _old, ...rest } = p;
         void _old;
         return action.vessel === undefined ? rest : { ...rest, vessel: action.vessel };
+      });
+      return changed ? { ...doc, placements } : doc;
+    }
+    case "setPlacementAisle": {
+      const ids = new Set(action.ids);
+      let changed = false;
+      const placements = doc.placements.map((p) => {
+        if (!ids.has(p.id)) return p;
+        const next: Record<string, unknown> = { ...p.aisle };
+        for (const [k, v] of Object.entries(action.patch)) {
+          if (v === null) delete next[k];
+          else if (v !== undefined) next[k] = v;
+        }
+        // The piece is a variant id; everything else is cleaned as the layout will trust it (an
+        // explicit "both sides" / "no stagger" is kept — on a placement it answers over the row's).
+        const { piece, ...rest } = next as AislePlacement;
+        const cleaned: AislePlacement = { ...cleanAisle(rest) };
+        if (typeof piece === "string" && piece) cleaned.piece = piece;
+        if (sameJson(cleaned, p.aisle ?? {})) return p;
+        changed = true;
+        const { aisle: _old, ...bare } = p;
+        void _old;
+        return Object.keys(cleaned).length ? { ...bare, aisle: cleaned } : bare;
       });
       return changed ? { ...doc, placements } : doc;
     }
@@ -1417,6 +1450,11 @@ if (isMain(import.meta.url)) {
     assert(apply(hemmed, { type: "setPlacementBorder", ids: ["a"], border: null }).placements[0].border === null, "…none on this plan with null");
     assert(!("border" in apply(hemmed, { type: "setPlacementBorder", ids: ["a"], border: undefined }).placements[0]), "…and back to its row's own with undefined");
     assert(apply(base, { type: "setPlacementBorder", ids: ["a"], border: { widthMm: 50 } as unknown as typeof gold }) === base, "a contour with no colour is refused");
+    // An aisle's own answers: laid over what it carries, cleaned, null = back to the row's.
+    const walk = apply(base, { type: "setPlacementAisle", ids: ["a"], patch: { pitchMm: 1234.6, piece: "rose-box", sides: "both" } });
+    assert(JSON.stringify(walk.placements[0].aisle) === '{"pitchMm":1235,"sides":"both","piece":"rose-box"}', "an aisle's step, sides and piece are stored on the placement");
+    assert(apply(walk, { type: "setPlacementAisle", ids: ["a"], patch: { pitchMm: 1235 } }) === walk, "…the same again changes nothing");
+    assert(!("aisle" in apply(walk, { type: "setPlacementAisle", ids: ["a"], patch: { pitchMm: null, piece: null, sides: null } }).placements[0]), "…and null hands each back to the row");
     const big = apply(base, { type: "setPlacementScale", id: "a", scale: 1.256 });
     assert(big.placements[0].scale === 1.26 && apply(base, { type: "setPlacementScale", id: "a", scale: 9 }).placements[0].scale === 3, "a drawing size is rounded and held to 30%–300%");
     const hung = apply(base, { type: "setPlacementHang", id: "a", heightMm: 3204 });

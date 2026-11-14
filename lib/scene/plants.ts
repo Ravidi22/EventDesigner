@@ -30,6 +30,8 @@
 // clones. Deterministic. `npx tsx lib/scene/plants.ts` holds the shapes.
 import { TREE_CLUMPS } from "@/components/item-symbol";
 import { isMain } from "../self-check";
+import { profileAt } from "@/lib/element/revolve";
+import { CROWN_THIN } from "@/lib/catalog/body-profiles";
 import { turn } from "./frame";
 import { ENVELOPE, foliageMaterial } from "./materials";
 import { seedOf, seeded } from "./organic";
@@ -197,6 +199,62 @@ export function treeParts(rx: number, ry: number, h: number, colour: string = TR
     mass(c * R, 0.42, h, TREE.crownFrom * h, h, TREE.squash, 4, CLUMP),
   ] as Blob[];
   parts.push(...crownOf(core, R, colour, 71, 0.75 * h));
+  return parts;
+}
+
+/** A tree whose crown follows an ENVELOPE (lib/catalog/body-profiles.ts — fractions of the canopy's
+ *  radius and the tree's height): where the profile is thin (under CROWN_THIN of its widest) it is
+ *  TRUNK, a stem as thick as the profile says; where it is wide it is LEAVES — a stack of clumps as
+ *  wide as the envelope at each height, under the same leaf cards every crown wears. A ball on a
+ *  stem, a cypress, a topiary of two balls with the stem showing between them. */
+export function treeEnvelopeParts(rx: number, ry: number, h: number, colour: string, profile: readonly { r: number; z: number }[]): Part[] {
+  const R = Math.min(rx, ry);
+  const widest = Math.max(...profile.map((q) => q.r)) || 1;
+  const at = (z: number) => profileAt(profile, z) * widest;
+  const zLow = profile[0]?.z ?? 0;
+  const zTop = profile[profile.length - 1]?.z ?? 1;
+  const parts: Part[] = [];
+  const core: Blob[] = [];
+  // Walk up the envelope in steps a clump tall: leaves where it is wide, stem where it is thin.
+  const STEPS = 28;
+  let stemFrom: number | null = zLow;
+  // The stem is as thick as the profile is at its THINNEST along the stretch — never as it was where
+  // the leaves ended (a topiary's stem between its balls came out a brown cone).
+  let stemR = Infinity;
+  let lastBlobTop = -Infinity;
+  for (let i = 0; i <= STEPS; i++) {
+    const z = zLow + ((zTop - zLow) * i) / STEPS;
+    const r = at(z);
+    const thin = r < CROWN_THIN * widest;
+    if (!thin && stemFrom !== null) {
+      // The stem up to here (and a little into the leaves, so nothing floats).
+      const top = Math.min(zTop, z + 0.04);
+      const sr = Math.max(0.04, Number.isFinite(stemR) ? stemR : 0.06);
+      if (top > stemFrom) parts.push({ shape: "cylinder", rTop: sr * 0.85 * R, rBottom: sr * R, h: (top - stemFrom) * h, at: vec3(0, 0, stemFrom * h), segments: 10, material: TRUNK });
+      stemFrom = null;
+      stemR = Infinity;
+    }
+    if (thin) {
+      if (stemFrom === null) stemFrom = Math.max(zLow, z - 0.04);
+      stemR = Math.min(stemR, r);
+      continue;
+    }
+    const blobR = r * R * TREE.core;
+    const zc = z * h;
+    // One clump per stretch of about its own half-height: enough to overlap, not to pile up.
+    if (zc - lastBlobTop < blobR * TREE.squash * 0.55) continue;
+    core.push({ shape: "blob", r: blobR, at: vec3(0, 0, zc), seed: 31 + core.length * 7, squash: TREE.squash, ...CLUMP });
+    lastBlobTop = zc;
+  }
+  if (!core.length) return treeParts(rx, ry, h, colour);
+  // An oval canopy: the clumps keep their round section and are spread along the long axis.
+  if (Math.abs(rx - ry) > 1) {
+    const along = rx > ry ? { x: rx - ry, y: 0 } : { x: 0, y: ry - rx };
+    const side = core.map((b, i): Blob => ({ ...b, r: b.r * 0.9, at: vec3((i % 2 ? 1 : -1) * along.x * 0.8, (i % 2 ? 1 : -1) * along.y * 0.8, b.at.z), seed: b.seed + 100 }));
+    core.push(...side);
+  }
+  const zs = core.map((b) => b.at.z);
+  parts.push(...crownOf(core, R, colour, 71, (Math.min(...zs) + Math.max(...zs)) / 2));
   return parts;
 }
 

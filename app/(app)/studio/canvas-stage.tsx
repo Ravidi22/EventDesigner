@@ -8,19 +8,22 @@ import type { Plane } from "@/lib/studio/planes";
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
 import { seatsAround, seatTransform, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { blockSeats } from "@/lib/design-document/block";
-import { benchOf, chairBlockOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import { aisleOf, benchOf, chairBlockOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
 import { ChairBlock } from "@/components/chair-block";
+import { AisleDrawing } from "@/components/placed-piece";
+import { aisleWords } from "@/lib/catalog/aisle";
 import { CompositionPieces } from "@/components/composition-drawing";
 import { benchIsNumbered, standaloneBench } from "@/lib/design-document/bench";
 import { catalogVersion } from "@/lib/catalog/storage";
 import { wallSegment, wallTrack, nearestWall } from "@/lib/studio/anchor";
-import { isRailed, nearestSideRail, railClothLine, railLines, railOf, rodPath, rodPointMoved, sideCandidates, sketchRailContext, type Rail, type RailLine } from "@/lib/studio/rail";
+import { curtainDrop, isRailed, isRodRow, nearestBareRod, nearestSideRail, rodAt, rodDropLength, railClothLine, railLines, railMoved, railOf, rodPath, rodPointMoved, rodPostMm, rodThickMm, sideCandidates, sketchRailContext, type Rail, type RailLine } from "@/lib/studio/rail";
 import { RodMarks } from "@/components/curtain-cloth";
 import { RodDrawPane } from "@/components/rod-draw-pane";
 import { LedStripNode } from "./led-strip-node";
 import { isLedStrip, ledSideCandidates } from "@/lib/venues/led";
 import { CeilingClothNode, TIE_SNAP_PX, useClothTies } from "./ceiling-cloth-node";
-import { clothView, SAIL_MAX_TIES } from "@/lib/studio/ceiling-cloth";
+import { clothView, isCeilingClothCategory, SAIL_MAX_TIES } from "@/lib/studio/ceiling-cloth";
+import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { curtainStyleOf } from "@/lib/catalog/symbols";
 import { toLocalFrame, fromLocalFrame, outlinePathD, rotatedExtent } from "@/lib/studio/geometry";
 import { bowFromPoint, bowHandle, cornerFromPoint, cornerHandle, inwardOf, rugOutline, rugShapeOf, withBow, withCorner, type RugBows, type RugCorners } from "@/lib/studio/rug-shape";
@@ -371,7 +374,7 @@ export function CanvasStage({
   /** Drawing a SAIL's ties (snapped to walls and corners), a ceiling drape's RUN (two clicks) or a
    *  CANOPY's area (closed) — the rod tool's pane with its options (lib/studio/ceiling-cloth.ts).
    *  `id` re-mounts the pane for a new drawing; `start` is the drop that began it. */
-  clothDraw?: { id: number; kind: "sail" | "run" | "canopy"; start?: Point; onFinish: (points: Point[]) => void; onCancel: () => void };
+  clothDraw?: { id: number; kind: "sail" | "run" | "canopy"; start?: Point; onFinish: (points: Point[], keep?: boolean) => void; onCancel: () => void };
   /** …or, for a round stage, a centre and a size (a disc), a box (an oval), or a chord and a side (a
    *  half-round). Absent = corners. */
   areaShape?: AreaShape;
@@ -2636,13 +2639,18 @@ export function CanvasStage({
               onCancel={clothDraw.onCancel}
               closed={clothDraw.kind !== "run"}
               maxPoints={clothDraw.kind === "run" ? 2 : clothDraw.kind === "sail" ? SAIL_MAX_TIES : undefined}
+              // A swag is DRAGGED from point to point (two clicks draw it too), each end catching what
+              // it may hang from — another swag's end, a column, a wall — and free in the open.
+              drag={clothDraw.kind === "run"}
               snap={
                 clothDraw.kind === "sail"
                   ? (raw, free) => {
                       const tie = clothTies.snap(raw, ctx.mm(TIE_SNAP_PX), free);
                       return { p: tie.p, tied: tie.to.kind !== "post" };
                     }
-                  : undefined
+                  : clothDraw.kind === "run"
+                    ? (raw, free) => clothTies.swagEnd(raw, ctx.mm(TIE_SNAP_PX), free)
+                    : undefined
               }
             />
           )}
@@ -3201,10 +3209,33 @@ const DrapeNode = memo(function DrapeNode({
   if (!line) return null;
 
   const r = resolve(placement.variantId);
-  const colour = swatchOf(r, "var(--color-accent-tint)");
+  // A BARE ROD (the built-in מוט וילון placed by itself — lib/studio/rail.ts isRodRow): the rod and
+  // its posts, with no cloth on it. It takes the pointer along a band as wide as a curtain's, so it is
+  // as easy to pick up as one.
+  const bare = isRodRow(r?.product);
+  const colour = swatchOf(r, bare ? "var(--color-ink-soft)" : "var(--color-accent-tint)");
   const style = curtainStyleOf(r?.product);
   // The cloth's middle line: the rail's own line when it straddles it, a half band out on its side.
   const cloth = railClothLine(line, DRAPE_MM);
+  // A ROD is carried by its body — the curtain on it, or the bare rod itself: every post moves
+  // together (railMoved). A drape on a wall or a side has no body to carry; its ends slide.
+  const carries = rail.type === "rod" && !locked;
+  const pressBody = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    if (!carries || e.button !== 0) return;
+    const from = rail;
+    const start = ctx.clientToMm(e.clientX, e.clientY);
+    startPointerGesture(e, {
+      onStart: () => onSelect(placement.id, false),
+      onMove: (ev) => {
+        const at = ctx.clientToMm(ev.clientX, ev.clientY);
+        onRail(placement.id, railMoved(from, Math.round(at.x - start.x), Math.round(at.y - start.y)));
+      },
+      onEnd: (_ev, moved) => {
+        if (moved) onEndSpan();
+      },
+    });
+  };
   // The grips: the two ends of the stretch on a wall or a side; every post (and a cantilevered tip)
   // on a rod.
   const grips: Point[] = rail.type === "rod" ? rodPath(rail) : [line.path[0], line.path[line.path.length - 1]];
@@ -3229,22 +3260,27 @@ const DrapeNode = memo(function DrapeNode({
   });
 
   const run = cloth.map((q) => `${q.x},${q.y}`).join(" ");
-  const where = rail.type === "wall" ? "על הקיר" : rail.type === "side" ? "על הצד" : "על מוט";
+  const where = bare ? "בלי וילון" : rail.type === "wall" ? "על הקיר" : rail.type === "side" ? "על הצד" : "על מוט";
+  // The rod as it is: its thickness to scale (never thinner than a few pixels, or a 3 cm bar is a
+  // hair at hall scale), its posts likewise.
+  const rodMm = rail.type === "rod" ? Math.max(rodThickMm(rail), bare ? ctx.mm(3.5) : 0) : 0;
+  const postMm = rail.type === "rod" ? Math.max(rodPostMm(rail), ctx.mm(6)) : ctx.mm(6);
   return (
     <g>
       <polyline
         points={run}
         fill="none"
-        stroke={colour}
+        stroke={bare ? "transparent" : colour}
         strokeWidth={DRAPE_MM}
         strokeLinecap="butt"
         strokeLinejoin="round"
         opacity={0.9}
+        pointerEvents="stroke"
         tabIndex={0}
         role="button"
-        aria-label={`${r?.label ?? "וילון"} — ${(line.lengthMm / 1000).toFixed(1)} מטר ${where}`}
-        className="cursor-pointer touch-none focus:outline-none"
-        onPointerDown={(e) => e.stopPropagation()}
+        aria-label={`${r?.label ?? (bare ? "מוט וילון" : "וילון")} — ${(line.lengthMm / 1000).toFixed(1)} מטר ${where}`}
+        className={(carries ? "cursor-move" : "cursor-pointer") + " touch-none focus:outline-none"}
+        onPointerDown={pressBody}
         onClick={(e) => {
           e.stopPropagation();
           onSelect(placement.id, isAdditiveClick(e));
@@ -3252,9 +3288,10 @@ const DrapeNode = memo(function DrapeNode({
       />
       {/* Its pleats — the fabric gathered on the rail, in the row's style — so a drape reads as
           cloth, not as paint. */}
-      <DrapePleatsAlong line={cloth} depthMm={DRAPE_MM} ink={isDark(colour) ? "#ffffff" : "var(--color-ink)"} opacity={isDark(colour) ? 0.45 : 0.35} style={style} />
-      {/* A rod's own marks: the rod and a post at every end and bend but a cantilevered tip. */}
-      {line.posts && <RodMarks path={line.path} posts={line.posts} postMm={ctx.mm(6)} ink="var(--color-ink-soft)" />}
+      {!bare && <DrapePleatsAlong line={cloth} depthMm={DRAPE_MM} ink={isDark(colour) ? "#ffffff" : "var(--color-ink)"} opacity={isDark(colour) ? 0.45 : 0.35} style={style} />}
+      {/* A rod's own marks: the rod and a post at every end and bend but a cantilevered tip — a bare
+          rod in its own shade, at its thickness. */}
+      {line.posts && <RodMarks path={line.path} posts={line.posts} postMm={postMm} ink={bare ? "var(--color-ink)" : "var(--color-ink-soft)"} rodMm={bare ? rodMm : undefined} fill={bare ? colour : undefined} />}
       {/* The selection outline is a second stroke rather than a colour change: a drape's whole
           point is the colour it is, and highlighting must not repaint it. */}
       <polyline
@@ -4498,14 +4535,17 @@ function PlacementNodeView({
   // A BLOCK OF CHAIRS IN ROWS is its chairs, each drawn at its own size where its row puts it — not
   // one chair stretched over the block (lib/design-document/chair-rows.ts).
   const block = chairBlockOf(placement);
-  const symbol = placement.stage || block ? null : symbolOf(product, footprint);
+  // AN AISLE is its lining — the piece its row names, at every spot down both sides, and its runner
+  // (lib/catalog/aisle.ts) — never a box with a name in it.
+  const aisle = block ? null : aisleOf(placement);
+  const symbol = placement.stage || block || aisle ? null : symbolOf(product, footprint);
   // A flight or a ramp on its own draws its steps from the step it covers on THIS plan, and writes
   // its slope at a screen size — passed to it alone, since a zoom-sized prop re-draws every frame.
   const rise = symbol === "stairs" || symbol === "ramp" ? climbRise(product, placement.climb) : undefined;
   // What it is made of (MapAppearance.texture) — timber, marble, a lawn — as its fill. A picture is
   // its own fill, and an overhead item is never filled at all.
-  const surfaced = !symbol && !block && !overhead && anySurface(product?.appearance);
-  const content = placement.stage || symbol || block
+  const surfaced = !symbol && !block && !aisle && !overhead && anySurface(product?.appearance);
+  const content = placement.stage || symbol || block || aisle
     ? { mode: "none" as const }
     : product
       ? resolveContent(product)
@@ -4551,7 +4591,7 @@ function PlacementNodeView({
       transform={`translate(${x} ${y})${placement.rotation ? ` rotate(${placement.rotation})` : ""}${placement.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}${scale !== 1 ? ` scale(${scale})` : ""}`}
       tabIndex={0}
       role="button"
-      aria-label={`${r?.label ?? "פריט"}${block ? ` — ${block.spec.rows} שורות × ${block.spec.perRow}, ${placement.quantity} כיסאות` : ""}${bench ? `${benchNumber ? ` ${benchNumber}` : ""}${benchSeats > 0 ? ` — ${placement.bench?.seated ?? 0} מתוך ${benchSeats} מקומות` : ""}` : ""}${drag.onMove ? " — גרירה להזזה" : ""}`}
+      aria-label={`${r?.label ?? "פריט"}${block ? ` — ${block.spec.rows} שורות × ${block.spec.perRow}, ${placement.quantity} כיסאות` : ""}${aisle ? ` — ${aisleWords(aisle.layout)}` : ""}${bench ? `${benchNumber ? ` ${benchNumber}` : ""}${benchSeats > 0 ? ` — ${placement.bench?.seated ?? 0} מתוך ${benchSeats} מקומות` : ""}` : ""}${drag.onMove ? " — גרירה להזזה" : ""}`}
       className={(drag.onMove ? "cursor-move" : "cursor-pointer") + " touch-none focus:outline-none"}
       onDoubleClick={
         onOpen
@@ -4654,7 +4694,8 @@ function PlacementNodeView({
         </g>
       )}
       {block && <ChairBlock product={block.product} spec={block.spec} tone={own} />}
-      {symbol || block ? (
+      {aisle && <AisleDrawing view={aisle} />}
+      {symbol || block || aisle ? (
         // The picture is the item; its footprint stays as the thing that takes the pointer (an
         // invisible fill) and, once selected, as the accent outline that says how much room it takes.
         <FootprintShape
@@ -5667,15 +5708,28 @@ function ArmedPane({
 
   const footprint: Footprint = size ? { kind: "rect", ...size } : resolveFootprint(product);
   const table = onTable && at ? tableUnder(doc.tables, at) : undefined;
-  const near = onWall && at ? nearestWall(structure, at) : null;
+  // THE ROD ITSELF (the built-in מוט וילון) lands as a rod through the pointer; a CURTAIN goes where
+  // the studio's dropProduct will put it (lib/studio/rail.ts curtainDrop — the one rule both read): a
+  // bare rod it is over, the nearer of the wall and the side in reach, else a rod of its own.
+  const rodRow = onWall && isRodRow(product);
+  const curtainLike = onWall && !rodRow && !isLedStrip(product) && !isCeilingClothCategory(product.category);
+  const near = onWall && at && !rodRow ? nearestWall(structure, at) : null;
   // …or the side of a tall thing, when that is nearer — where the drop will hang it (lib/studio/rail.ts,
   // the studio's dropProduct reads the same two).
-  const arrangedNow = onWall && at ? arrangedStructure(structure, doc) : null;
+  const arrangedNow = onWall && at && !rodRow ? arrangedStructure(structure, doc) : null;
   // A strip runs along any side with height (a 40cm deck's edge); a curtain needs a tall one.
   const sidesOf = isLedStrip(product) ? ledSideCandidates : sideCandidates;
   const side = arrangedNow && at ? nearestSideRail(sidesOf(arrangedNow.features, doc, (v) => resolve(v)?.product), at) : null;
-  const sideLine = side && (!near || side.distanceMm < near.distanceMm) && arrangedNow ? railLines(side.rail, sketchRailContext(doc, structure, arrangedNow, (v) => resolve(v)?.product))[0] : undefined;
-  const wall = near && !sideLine ? wallTrack(structure, near.wallId) : null;
+  const rails = CATEGORY_BY_ID[product.category]?.rails;
+  const drop = curtainLike && at ? curtainDrop({ p: at, wall: near, side, rod: nearestBareRod(doc.placements, (v) => isRodRow(resolve(v)?.product), at), takes: (t) => !rails || rails.includes(t), rodHeightMm: 0 }) : null;
+  const dropRail = drop?.kind === "rail" ? drop.rail : null;
+  const sideRail = curtainLike ? (dropRail?.type === "side" ? dropRail : null) : side && (!near || side.distanceMm < near.distanceMm) ? side.rail : null;
+  const sideLine = sideRail && arrangedNow ? railLines(sideRail, sketchRailContext(doc, structure, arrangedNow, (v) => resolve(v)?.product))[0] : undefined;
+  const wall = curtainLike ? (dropRail?.type === "wall" ? wallTrack(structure, dropRail.wallId) : null) : near && !sideLine ? wallTrack(structure, near.wallId) : null;
+  // The rod that will be laid (dashed) — or the bare rod the curtain will be hung on (lit).
+  const adopted = drop?.kind === "adopt" ? doc.placements.find((q) => q.id === drop.placementId)?.rail : undefined;
+  const newRod = rodRow && at ? rodAt(at, rodDropLength(product.dimensions.widthMm), 0).points : dropRail?.type === "rod" ? dropRail.points : null;
+  const litRod = adopted?.type === "rod" ? rodPath(adopted) : null;
   const ghost = (p: Point, faint = false) => (
     <g className="pointer-events-none" transform={`translate(${p.x} ${p.y})`} opacity={faint ? 0.45 : 1}>
       {/* A composite lands as its parts, about this point: they are what follows the pointer. */}
@@ -5767,6 +5821,19 @@ function ArmedPane({
           stroke="var(--color-accent)"
           strokeOpacity={0.55}
           strokeWidth={10}
+          strokeLinecap="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
+      {at && onWall && (newRod || litRod) && (
+        <polyline
+          className="pointer-events-none"
+          points={(litRod ?? newRod ?? []).map((q) => `${q.x},${q.y}`).join(" ")}
+          fill="none"
+          stroke="var(--color-accent)"
+          strokeOpacity={litRod ? 0.55 : 0.9}
+          strokeWidth={litRod ? 10 : 3}
+          strokeDasharray={litRod ? undefined : "6 4"}
           strokeLinecap="round"
           vectorEffect="non-scaling-stroke"
         />

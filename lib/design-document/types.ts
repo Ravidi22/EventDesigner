@@ -7,6 +7,7 @@
 import type { ElementStyle } from "../element-style";
 import type { Rail } from "../studio/rail";
 import type { Border } from "../catalog/border";
+import type { AislePlacement } from "../catalog/aisle";
 import type { EdgeCurve } from "../studio/hall";
 
 export type Layer = "table" | "floor" | "ceiling";
@@ -220,6 +221,10 @@ export interface Placement {
    *  row by the action that writes it (setChairRows), so it is counted as the chairs it is. Absent =
    *  one chair. */
   rows?: ChairRows;
+  /** AN AISLE's own answers on this plan (lib/catalog/aisle.ts): the step between its pieces, one side
+   *  or both, its runner, another piece — each absent = its row's. Read only for an `aisles` row; its
+   *  length and width are its `sizeMm`, and its pieces are derived, never stored. */
+  aisle?: AislePlacement;
   /** Pinned where it stands on THIS plan — see DesignTable.locked, which this means exactly. */
   locked?: boolean;
 }

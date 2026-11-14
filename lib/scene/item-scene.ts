@@ -76,6 +76,24 @@ export function itemSceneKey(p: Product): string {
   return JSON.stringify([p.name, p.category, p.layer, p.dimensions, p.appearance, p.categoryFields, p.imageUrl, p.variants.map((v) => [v.id, v.swatch, v.archived])]);
 }
 
+/** How many of its own sizes back a SMALL piece is looked at from in its own pane, and the nearest
+ *  the eye comes. The sketch's portrait stands 1.7 m back at eye height — right for a table in a
+ *  room, and a 30 cm lamp or a candlestick was a dozen pixels in the middle of the pane (seen
+ *  headless, 2026-11-13). */
+export const CLOSE_UP = { sizes: 2.6, nearestMm: 650 } as const;
+
+/** `focus` brought in toward what it looks at, for a piece `sizeMm` across (its footprint's diagonal
+ *  or its height, whichever is more): the same bearing and pitch, the eye `CLOSE_UP.sizes` of the
+ *  piece away. A piece big enough to fill the portrait is left as it was. */
+export function closeUp(focus: Viewpoint, sizeMm: number): Viewpoint {
+  const d = { x: focus.eye.x - focus.look.x, y: focus.eye.y - focus.look.y, z: focus.eye.z - focus.look.z };
+  const len = Math.hypot(d.x, d.y, d.z);
+  const want = Math.max(CLOSE_UP.nearestMm, sizeMm * CLOSE_UP.sizes);
+  if (!(len > want)) return focus;
+  const k = want / len;
+  return { ...focus, eye: { x: focus.look.x + d.x * k, y: focus.look.y + d.y * k, z: focus.look.z + d.z * k } };
+}
+
 /** The room and the place to look at it from, for `product` as it stands. */
 export function itemScene(product: Product): { scene: Scene; focus: Viewpoint | null } {
   const doc = itemDocument(product);
@@ -89,7 +107,10 @@ export function itemScene(product: Product): { scene: Scene; focus: Viewpoint | 
       bounds: scene.bounds,
       selection: [{ kind: product.category === "tables" ? "table" : "placement", id: ITEM_ID }],
     });
-    return { scene, focus };
+    // A small piece standing by itself (a lamp, a vase, a candlestick) is looked at from close by.
+    if (!focus || product.category === "tables" || product.layer === "ceiling") return { scene, focus };
+    const b = footprintBounds(resolveFootprint(product));
+    return { scene, focus: closeUp(focus, Math.max(Math.hypot(b.w, b.h), product.dimensions.heightMm ?? 0)) };
   });
 }
 
@@ -153,6 +174,12 @@ if (isMain(import.meta.url)) {
     if (!ok) throw new Error("FAIL: " + what);
     console.log(`  ok   ${what}`);
   };
+  // A small piece is looked at from close by; a big one from where the portrait stands.
+  const far: Viewpoint = { id: "f", name: "f", eye: { x: 0, y: 2000, z: 1750 }, look: { x: 0, y: 0, z: 250 }, fovDeg: 50 };
+  const near = closeUp(far, 500);
+  const dist = (v: Viewpoint) => Math.hypot(v.eye.x - v.look.x, v.eye.y - v.look.y, v.eye.z - v.look.z);
+  assert(Math.abs(dist(near) - 1300) < 1 && near.look === far.look && Math.abs(near.eye.y / (near.eye.z - 250) - 2000 / 1500) < 1e-9, "a 50 cm piece is looked at from 1.3 m, on the same bearing and pitch");
+  assert(closeUp(far, 3000) === far && Math.abs(dist(closeUp(far, 100)) - CLOSE_UP.nearestMm) < 1, "a big piece keeps the portrait; the eye never comes nearer than 65 cm");
   const row = (over: Partial<Product>): Product => ({ id: "draft", name: "בר עם גב", category: "other", layer: "floor", dimensions: { widthMm: 3000, depthMm: 600, heightMm: 1100 }, categoryFields: {}, styleTags: [], variants: [], ...over });
 
   // The bar of the spec's first proving item, unsaved: a counter, a back-bar 2 m high, a shelf a
@@ -257,5 +284,19 @@ if (isMain(import.meta.url)) {
 
   // Nothing of the draft is left in the resolver afterwards.
   assert(resolve("draft") === undefined && resolve("tbl") === undefined, "the draft resolves only for the span of the build");
+  // AN AISLE (2026-11-13, lib/catalog/aisle.ts): its runner, and the piece that lines it built at every
+  // spot as its own row — six columns a side on an 8 m walk, the far side turned to look back.
+  const post = row({ id: "aisle-post", name: "עמוד", category: "columns", dimensions: { diameterMm: 400, heightMm: 1800 }, appearance: { shape: "circle", content: "none" } });
+  const walk = row({ id: "aisle-walk", name: "שדרה", category: "aisles", dimensions: { widthMm: 8000, depthMm: 3000, heightMm: 0 }, categoryFields: { piece: "aisle-post" }, appearance: { shape: "rect", content: "none" } });
+  const walked = withResolved([post], () => itemScene(walk)).scene.nodes.filter((n): n is BodyNode => n.kind === "body");
+  const idOf = (n: BodyNode) => ("id" in n.tag && typeof n.tag.id === "string" ? n.tag.id : "");
+  const lined = new Set(walked.map(idOf).filter((id) => id.startsWith(`${ITEM_ID}~`)));
+  assert(lined.size === 12, `an aisle builds its piece at every spot (${lined.size})`);
+  const ys = walked.filter((n) => lined.has(idOf(n))).flatMap((n) => n.instances.map((t) => Math.round(t.at.y)));
+  assert(Math.min(...ys) === -1300 && Math.max(...ys) === 1300, `…down both sides, inside its long edges (${Math.min(...ys)}…${Math.max(...ys)})`);
+  assert(walked.some((n) => n.parts.some((q) => q.shape === "box" && q.w === 8000 && q.material?.kind === "fabric")), "…with its runner down the walk");
+  const bare = itemScene(row({ ...walk, id: "aisle-bare", categoryFields: {} })).scene.nodes.filter((n): n is BodyNode => n.kind === "body");
+  assert(bare.some((n) => idOf(n) === ITEM_ID) && !bare.some((n) => idOf(n).startsWith(`${ITEM_ID}~`)), "an aisle with no piece chosen is its runner alone");
+
   console.log("item scene self-check passed");
 }

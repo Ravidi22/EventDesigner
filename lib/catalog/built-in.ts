@@ -16,7 +16,8 @@ import { isMain } from "../self-check";
 
 /** The built-ins PLACED DIRECTLY (the spec's "Placed directly?" = yes), in the order the sketch's rail
  *  pins them. The others are counted off what they finish — a skirt, a barrier, a backdrop and a
- *  surface off a stage, a rod off a rod curtain — and a pinned card for them would place nothing.
+ *  surface off a stage — and a pinned card for them would place nothing. (The rod is placed: a bare
+ *  rod a curtain is then hung on — lib/studio/rail.ts.)
  *  The dance floor is listed by key so its row is pinned the day it is installed. */
 export const RAIL_BUILT_INS: readonly string[] = [
   "builtin-rug",
@@ -25,6 +26,7 @@ export const RAIL_BUILT_INS: readonly string[] = [
   "stage-ramp",
   "stage-bench",
   "builtin-curtain",
+  "builtin-curtain-rod",
   "builtin-led-strip",
   "builtin-led-screen",
   "builtin-ceiling-drape",
@@ -74,7 +76,7 @@ export function shownCategories<C extends Pick<CategoryDef, "id" | "supplierOnly
 }
 
 /** The departments a catalog's filter offers, by the same rule: a department made only of a
- *  supplier's categories (פרחים וירק) is not a studio's, unless one of its rows is. */
+ *  supplier's categories (פרחי קטיף וירק) is not a studio's, unless one of its rows is. */
 export function shownGroups<G extends Pick<CategoryGroup, "id">>(
   groups: readonly G[],
   isSupplier: boolean,
@@ -145,6 +147,10 @@ if (isMain(import.meta.url)) {
   assert(!isSupplierCategory("flower-arrangements") && !isSupplierCategory("centerpieces"), "…an arrangement and a centrepiece are the studio's");
   assert(!studio.includes("flowers") && !studio.includes("greenery") && !studio.includes("dried-flowers"), "a studio makes no stem row");
   assert(studio.includes("flower-arrangements"), "…but files its arrangements as ever");
+  // Flowers are a department of their own, shown to a studio, apart from the supplier's stems.
+  const floral = CATEGORIES.find((c) => c.id === "flower-arrangements")!;
+  assert(floral.group === "grp-florals" && floral.places === true && floral.label !== CATEGORIES.find((c) => c.id === "flowers")!.label, "פרחים: its own department, a place per row, a name the stems do not share");
+  assert(shownGroups([{ id: "grp-florals" }, { id: "grp-flowers" }] as const, false, []).map((g) => g.id).join() === "grp-florals", "…and the studio sees it, not the stems'");
   const groups = [{ id: "grp-flowers" }, { id: "grp-table-design" }] as const;
   assert(JSON.stringify(shownGroups(groups, false, []).map((g) => g.id)) === '["grp-table-design"]', "a studio with no stem rows is not shown the stems department");
   assert(shownGroups(groups, false, [{ category: "dried-flowers" }]).length === 2, "…a studio holding a copy from before still finds it");

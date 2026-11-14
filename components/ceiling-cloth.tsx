@@ -16,7 +16,7 @@
 import { memo } from "react";
 import type { Point } from "@/lib/studio/hall";
 import type { RailSheet } from "@/lib/studio/rail";
-import { runGatherTicks, runLights, runOutline, type ClothRun } from "@/lib/studio/ceiling-cloth";
+import { runGatherTicks, runHalfWidth, runLights, runOutline, swagHandle, type ClothRun } from "@/lib/studio/ceiling-cloth";
 import { DrapePleatsAlong, polygonD } from "./curtain-cloth";
 
 /** The plan's dash for anything overhead, in screen px (non-scaling strokes). */
@@ -103,6 +103,19 @@ function SailClothView({
 }
 export const SailCloth = memo(SailClothView);
 
+/** Where one swag's lengthwise folds are drawn across its width (−1…1), and one of them as a polyline. */
+const SWAG_FOLD_LINES = [-0.5, 0, 0.5];
+function swagFoldLine(run: ClothRun, t: number, steps = 24): string {
+  const u = { x: (run.b.x - run.a.x) / (run.lengthMm || 1), y: (run.b.y - run.a.y) / (run.lengthMm || 1) };
+  const out: string[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const s = i / steps;
+    const off = t * runHalfWidth(run, s);
+    out.push(`${run.a.x + (run.b.x - run.a.x) * s - u.y * off},${run.a.y + (run.b.y - run.a.y) * s + u.x * off}`);
+  }
+  return out.join(" ");
+}
+
 function DrapeRunsView({
   runs,
   area,
@@ -112,6 +125,11 @@ function DrapeRunsView({
   inkOpacity = 0.6,
   pleats = true,
   dash = OVERHEAD_DASH,
+  textMm,
+  textFill,
+  halo,
+  ends,
+  sagText,
 }: {
   runs: readonly ClothRun[];
   /** A canopy's area, drawn dashed round its runs. */
@@ -123,7 +141,18 @@ function DrapeRunsView({
   /** The curtain's pleats along each run's middle — off where the band is too small to hold them. */
   pleats?: boolean;
   dash?: string;
+  /** Write a LONE run's end heights beside its ends at this size (a swag hung point to point, each
+   *  end at its own height). Absent = no figures; a canopy's runs never wear them. */
+  textMm?: number;
+  textFill?: string;
+  halo?: string;
+  /** …each named א / ב, as the bar's two height fields name them. */
+  ends?: boolean;
+  /** …and how deep it hangs, "↓0.72", across from its middle (the printed sheet — on the canvas the
+   *  depth's handle says it). */
+  sagText?: boolean;
 }) {
+  const figured = textMm !== undefined && runs.length === 1 && !(area && area.length >= 3) ? runs[0] : null;
   return (
     <g className="pointer-events-none">
       {area && area.length >= 3 && <path d={polygonD([...area])} fill="none" stroke={ink} strokeOpacity={inkOpacity} strokeWidth={1} strokeDasharray={dash} vectorEffect="non-scaling-stroke" />}
@@ -133,7 +162,16 @@ function DrapeRunsView({
           {runGatherTicks(run).map(([u, v], k) => (
             <line key={k} x1={u.x} y1={u.y} x2={v.x} y2={v.y} stroke={ink} strokeOpacity={inkOpacity} strokeWidth={1} vectorEffect="non-scaling-stroke" />
           ))}
-          {pleats && <DrapePleatsAlong line={[run.a, run.b]} depthMm={run.widthMm * 0.35} ink={ink} opacity={inkOpacity * 0.55} />}
+          {pleats &&
+            (run.waves === 1 ? (
+              // ONE swag from point to point: its folds run its whole length, fanning out of the two
+              // points it is tied to — never a curtain's zigzag down its middle.
+              SWAG_FOLD_LINES.map((t) => (
+                <polyline key={t} points={swagFoldLine(run, t)} fill="none" stroke={ink} strokeOpacity={inkOpacity * 0.45} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+              ))
+            ) : (
+              <DrapePleatsAlong line={[run.a, run.b]} depthMm={run.widthMm * 0.35} ink={ink} opacity={inkOpacity * 0.55} />
+            ))}
           {/* Fairy lights woven in (ClothRun.lights): a warm point at each, where the room hangs it;
               hidden at hall zoom like every other detail. */}
           {run.lights && (
@@ -145,6 +183,31 @@ function DrapeRunsView({
           )}
         </g>
       ))}
+      {figured &&
+        textMm !== undefined &&
+        (() => {
+          const run = figured;
+          const u = { x: (run.b.x - run.a.x) / (run.lengthMm || 1), y: (run.b.y - run.a.y) / (run.lengthMm || 1) };
+          // Off the ends and to the side the depth is NOT folded to, so a figure never sits on the
+          // cloth, its grips or the depth's own curve.
+          const { n, base } = swagHandle(run);
+          const style = halo ? { paintOrder: "stroke" as const, stroke: halo, strokeWidth: textMm * 0.25 } : undefined;
+          const at = (p: Point, dir: 1 | -1) => ({ x: p.x + u.x * dir * textMm * 1.5 - n.x * textMm * 1.4, y: p.y + u.y * dir * textMm * 1.5 - n.y * textMm * 1.4 });
+          const figure = (p: Point, text: string, key: string) => (
+            <text key={key} x={p.x} y={p.y} fontSize={textMm} textAnchor="middle" dominantBaseline="central" direction="ltr" fill={textFill ?? ink} style={style}>
+              {text}
+            </text>
+          );
+          const hB = run.heightBMm ?? run.heightMm;
+          const across = run.widthMm / 2 + textMm * 1.1;
+          return (
+            <>
+              {figure(at(run.a, -1), `${ends ? "א " : ""}${tieHeightText(run.heightMm)}`, "ha")}
+              {figure(at(run.b, 1), `${ends ? "ב " : ""}${tieHeightText(hB)}`, "hb")}
+              {sagText && run.sagMm > 0 && figure({ x: base.x - n.x * across, y: base.y - n.y * across }, `↓${tieHeightText(run.sagMm)}`, "sag")}
+            </>
+          );
+        })()}
     </g>
   );
 }

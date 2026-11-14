@@ -129,13 +129,16 @@ import { fieldLabelClassName } from "@/components/control";
 import { VesselPicker, vesselChoices } from "../catalog/vessel-picker";
 import { loadProducts } from "@/lib/catalog/storage";
 import { Amphora } from "lucide-react";
-import { benchOf, chairBlockOf, coverOn, resolve, shadesOf, tableUtilization } from "@/lib/studio/catalog-resolver";
+import { aisleOf, benchOf, chairBlockOf, coverOn, resolve, shadesOf, tableUtilization, type AisleView } from "@/lib/studio/catalog-resolver";
+import { AISLE_PITCH_MAX_MM, AISLE_PITCH_MIN_MM, AISLE_PITCH_MM, aisleWords, type AislePlacement } from "@/lib/catalog/aisle";
+import { AisleFields, AislePiecePicker, aislePieceChoices } from "../catalog/aisle-fields";
+import { Route } from "lucide-react";
 import { catalogBox } from "@/lib/studio/footprint";
 import { chairOptions, defaultChair } from "@/lib/catalog/chairs";
 import { duplicateNumbers, tableLabel } from "@/lib/design-document/groups";
 import { SwitchRow } from "@/components/toggle";
-import { CANTILEVER_MAX_MM, railLengthMm, railOf, sketchRailContext, type Rail } from "@/lib/studio/rail";
-import { clothKindOf, clothRuns, sailSheet } from "@/lib/studio/ceiling-cloth";
+import { CANTILEVER_MAX_MM, isRodRow, railLengthMm, railOf, ROD_MIN_MM, ROD_THICK_MAX_MM, ROD_THICK_MIN_MM, rodRunMm, rodThickMm, rodWithLength, rodWithThick, sketchRailContext, type Rail } from "@/lib/studio/rail";
+import { clothKindOf, clothRuns, maxSagMm, RUN_SAG_MM, runEndHeight, runEndHeights, runLowestMm, sailSheet, withSag } from "@/lib/studio/ceiling-cloth";
 import { CeilingClothPopover } from "./ceiling-cloth-bar";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { ArrowDownToLine } from "lucide-react";
@@ -441,6 +444,9 @@ export type InspectorProps = {
   /** A rug's or a cloth's contour on this plan (Placement.border, lib/catalog/border.ts): a contour,
    *  null = none here, undefined = its catalog row's again. Several ids: a block's cloths at once. */
   onBorder?: (placementIds: string[], border: Border | null | undefined) => void;
+  /** An AISLE's own answers on this plan (lib/catalog/aisle.ts): a patch over what it carries; a
+   *  field given as null goes back to its row's. */
+  onAisle?: (placementIds: string[], patch: AislePatch) => void;
   /** A rented flight or ramp standing on its own: its rise, steps or direction, with the run that
    *  follows and where it now stands (lib/studio/climb-item.ts builds the edit). */
   onClimb?: (placementId: string, edit: ClimbEdit) => void;
@@ -452,6 +458,10 @@ export type InspectorProps = {
   onRail?: (id: string, rail: Rail, dropMm?: number | null) => void;
   /** Draw this drape a new free-standing rod on the canvas ("וילון על מוט" — components/rod-draw-pane.tsx). */
   onDrawRod?: (id: string) => void;
+  /** Take a curtain down off its rod and leave the rod standing — the placement becomes the studio's
+   *  bare rod on the same rail (lib/studio/rail.ts isRodRow). Absent = the studio has no rod row. In
+   *  the ״מסילה״ group of a curtain on a rod. */
+  onBareRod?: (id: string) => void;
   /** Draw a sail or a ceiling drape again on the canvas — a sail tie by tie, a drape as a run or as an
    *  area (lib/studio/ceiling-cloth.ts). */
   onDrawCloth?: (id: string, kind: "sail" | "run" | "canopy") => void;
@@ -670,12 +680,14 @@ export function Inspector({
   onHangOverDressing,
   onVessel,
   onBorder,
+  onAisle,
   onClimb,
   onApplyToAllTables,
   onVariant,
   onSpan,
   onRail,
   onDrawRod,
+  onBareRod,
   onDrawCloth,
   onResize,
   onBows,
@@ -1847,6 +1859,9 @@ export function Inspector({
     // An LED strip rides the same rail but is light, not cloth (./led-popover.tsx): its height, its
     // stretch, a run of its own — no drop, no rod.
     const led = !!drape && isLedStrip(r?.product);
+    // A BARE ROD (the built-in מוט וילון placed by itself — lib/studio/rail.ts): a rod with no cloth
+    // on it yet. Its length, its thickness and its height; no drop.
+    const bareRod = !!drape && isRodRow(r?.product);
     // A SAIL or a CEILING DRAPE (lib/studio/ceiling-cloth.ts): its own fields and facts, not a curtain's.
     const clothKind = drape && r ? clothKindOf(r.product.category, drape) : null;
     const clothSheet = clothKind && drape?.type === "sail" && railCtx ? sailSheet(drape, railCtx) : null;
@@ -1871,6 +1886,9 @@ export function Inspector({
     // A chair on the floor may be set out in ROWS (lib/design-document/chair-rows.ts); one that is,
     // is a block — its count is its rows, and the quantity stepper would only argue with them.
     const block = chairBlockOf(p);
+    // AN AISLE (lib/catalog/aisle.ts): the piece that lines it and how it is laid — its row's
+    // answers, or this plan's own.
+    const aisle = !table && !drape ? aisleOf(p) : null;
     const rowsAllowed = !!onChairRows && r?.product.category === "chairs" && !table && !drape && !p.perch && !p.stage;
     // A carpet laid OVER a surface or a stage (lib/studio/cover.ts) is that thing's shape: in place of a
     // size it says what it lies on, takes a margin, and lets go — the shape kept. It faces as that does.
@@ -1912,10 +1930,10 @@ export function Inspector({
 
     // Which kind it is — its bar's lead, its own groups, and which of them it opens on (remembered per
     // kind, lib/studio/panel-groups.ts).
-    const kind = drape ? "rail" : bench ? "bench" : rowsAllowed ? "rows" : climb ? "climb" : covered ? "cover" : stretch ? "rug" : p.layer === "ceiling" ? "ceiling" : "item";
+    const kind = drape ? "rail" : aisle ? "aisle" : bench ? "bench" : rowsAllowed ? "rows" : climb ? "climb" : covered ? "cover" : stretch ? "rug" : p.layer === "ceiling" ? "ceiling" : "item";
     const name = r?.product.name ?? "פריט";
     const title = bench ? (benchPanel?.numbered && benchNumber ? `בנקט ${benchNumber}` : "בנקט") : block ? "שורות כיסאות" : name;
-    const icon = bench ? RectangleHorizontal : block ? Rows3 : climb ? (climb.kind === "ramp" ? Accessibility : Footprints) : led ? Zap : clothKind ? (drape?.type === "sail" ? Sailboat : Waves) : Sparkles;
+    const icon = aisle ? Route : bench ? RectangleHorizontal : block ? Rows3 : climb ? (climb.kind === "ramp" ? Accessibility : Footprints) : led ? Zap : bareRod ? Minus : clothKind ? (drape?.type === "sail" ? Sailboat : Waves) : Sparkles;
     // Where a rail runs, in words — or, when what it ran along is gone, that.
     const railWhere = !drape
       ? null
@@ -1934,7 +1952,9 @@ export function Inspector({
               : drape.type === "side"
                 ? "על הצד"
                 : "באוויר"
-            : onWhat
+            : bareRod
+              ? "בלי וילון — גוררים עליו וילון כדי לתלות"
+              : onWhat
           : drape.type === "side"
             ? led
               ? "האלמנט שהפס רץ עליו הוסר"
@@ -1944,12 +1964,15 @@ export function Inspector({
     const railLost = !!drape && (clothKind ? drape.type === "sail" && !clothSheet : !run);
     const facts = [
       block ? `${p.quantity} כיסאות · ${block.spec.rows} שורות × ${block.spec.perRow}` : null,
+      aisle ? (aisle.piece ? `${aisle.piece.label} · ${aisleWords(aisle.layout)}` : "לא נבחר פריט") : null,
       bench || block ? r?.product.name : LAYER_LABEL[p.layer],
       bench ? `${(bench.widthMm / 1000).toFixed(2)} מ׳` : null,
       bench && bench.seats > 0 ? `${bench.seats} מקומות ישיבה` : null,
       table ? tableLabel(doc, table) : null,
       overTable ? `מעל ${tableLabel(doc, overTable)}` : null,
       railWhere,
+      // A swag's headroom: its lowest point from the floor.
+      clothKind && drape?.type === "run" && cloth?.[0] ? `נקודה נמוכה ${(runLowestMm(cloth[0]) / 1000).toFixed(2)} מ׳` : null,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -1958,7 +1981,7 @@ export function Inspector({
     // Drawn bigger or smaller on THIS plan — unless its row has a size of its own to type (מידות), it
     // stretches, it hangs on a rail, it is a climb (its run follows the step it covers) or a block of
     // chairs (its size is its rows; its chairs are drawn at their real size).
-    const scaled = !sizePanel && !stretch && !drape && !p.stage && !climb && !block;
+    const scaled = !sizePanel && !stretch && !drape && !p.stage && !climb && !block && !aisle;
     const pct = Math.round((p.scale || 1) * 100);
     // The table it stands on, or hangs over: its focus mode is where it is moved and arranged.
     const dressOn = table ?? overTable;
@@ -1984,6 +2007,27 @@ export function Inspector({
       if (drape) {
         const sail = drape.type === "sail";
         const lengthMm = clothMm ?? runMm;
+        // A ROD's own two numbers are typed, not only dragged (2026-11-13, the user: "the rod width
+        // and length should be editable"): its length — the first post stays, the last stretch grows —
+        // and its thickness. A bare rod's third number is its height; a curtain's is its drop.
+        if (drape.type === "rod" && onRail && !led && !clothKind) {
+          seg(
+            "length",
+            <>
+              <QuickLead icon={MoveHorizontal} label="אורך המוט (ס״מ)" />
+              <QuickNumber label="אורך המוט (ס״מ)" min={ROD_MIN_MM / 10} max={6000} value={cm(rodRunMm(drape))} onChange={(v) => onRail(p.id, rodWithLength(drape, v * 10))} />
+              <QuickUnit>ס״מ</QuickUnit>
+            </>,
+          );
+          seg(
+            "thick",
+            <>
+              <QuickLead icon={Minus} label="עובי המוט (מ״מ)" />
+              <QuickNumber label="עובי המוט (מ״מ)" narrow min={ROD_THICK_MIN_MM} max={ROD_THICK_MAX_MM} value={rodThickMm(drape)} onChange={(v) => onRail(p.id, rodWithThick(drape, v))} />
+              <QuickUnit>מ״מ</QuickUnit>
+            </>,
+          );
+        } else
         seg(
           "length",
           <>
@@ -1995,7 +2039,16 @@ export function Inspector({
           </>,
         );
         // How far a curtain comes down (blank = to the floor); how high a strip or a ceiling cloth runs.
-        if (onRail && !led && !clothKind)
+        if (onRail && bareRod && drape.type === "rod")
+          seg(
+            "height",
+            <>
+              <QuickLead icon={MoveVertical} label="גובה המוט (ס״מ)" />
+              <QuickNumber label="גובה המוט (ס״מ)" min={50} max={800} value={cm(drape.heightMm)} onChange={(v) => onRail(p.id, { ...drape, heightMm: Math.round(v * 10) })} />
+              <QuickUnit>ס״מ</QuickUnit>
+            </>,
+          );
+        else if (onRail && !led && !clothKind)
           seg(
             "drop",
             <>
@@ -2019,7 +2072,29 @@ export function Inspector({
               <QuickUnit>ס״מ</QuickUnit>
             </>,
           );
-        else if (onRail && clothKind && (drape.type === "run" || drape.type === "canopy"))
+        else if (onRail && clothKind && drape.type === "run") {
+          // ONE SWAG (2026-11-13): each end's height from the floor — א the end it was drawn from, ב
+          // the other, named so on the plan too — and how deep it hangs, which is also its handle.
+          const [hA, hB] = runEndHeights(drape);
+          seg(
+            "height",
+            <>
+              <QuickLead icon={MoveVertical} label="גובה כל קצה מהרצפה (ס״מ)" />
+              <QuickUnit>א׳</QuickUnit>
+              <QuickNumber label="גובה קצה א׳ (ס״מ)" min={50} max={1500} value={cm(hA)} onChange={(v) => onRail(p.id, runEndHeight(drape, 0, v * 10))} />
+              <QuickUnit>ב׳</QuickUnit>
+              <QuickNumber label="גובה קצה ב׳ (ס״מ)" min={50} max={1500} value={cm(hB)} onChange={(v) => onRail(p.id, runEndHeight(drape, 1, v * 10))} />
+            </>,
+          );
+          seg(
+            "sag",
+            <>
+              <QuickLead icon={ArrowDownToLine} label="עומק הקימור (ס״מ)" />
+              <QuickNumber label="עומק הקימור (ס״מ)" min={0} max={cm(cloth?.[0] ? maxSagMm(cloth[0]) : 3000)} value={cm(cloth?.[0]?.sagMm ?? drape.sagMm ?? RUN_SAG_MM)} onChange={(v) => onRail(p.id, withSag(drape, v * 10))} />
+              <QuickUnit>ס״מ</QuickUnit>
+            </>,
+          );
+        } else if (onRail && clothKind && drape.type === "canopy")
           seg(
             "height",
             <>
@@ -2076,6 +2151,26 @@ export function Inspector({
             <>
               <QuickLead icon={Link2} label="שוליים (ס״מ)" />
               <QuickNumber label="שוליים (ס״מ)" narrow min={0} value={coverInset} onChange={(v) => onCoverInset(p.id, Math.max(0, v) * 10)} />
+              <QuickUnit>ס״מ</QuickUnit>
+            </>,
+          );
+      } else if (aisle && sizePanel) {
+        // AN AISLE is laid by three numbers: how long, how wide across, and a piece every so far.
+        seg(
+          "size",
+          <>
+            <QuickLead icon={Ruler} label="אורך × רוחב (ס״מ)" />
+            <QuickNumber label="אורך השדרה (ס״מ)" min={cm(sizePanel.spec.width?.minMm ?? 1000)} max={cm(sizePanel.spec.width?.maxMm ?? 60000)} value={cm(sizePanel.size.widthMm)} onChange={(v) => onSize({ widthMm: v * 10, depthMm: sizePanel.size.depthMm })} />
+            <QuickUnit>×</QuickUnit>
+            <QuickNumber label="רוחב השדרה (ס״מ)" min={cm(sizePanel.spec.depth?.minMm ?? 800)} max={cm(sizePanel.spec.depth?.maxMm ?? 15000)} value={cm(sizePanel.size.depthMm)} onChange={(v) => onSize({ widthMm: sizePanel.size.widthMm, depthMm: v * 10 })} />
+          </>,
+        );
+        if (onAisle)
+          seg(
+            "pitch",
+            <>
+              <QuickLead icon={Route} label="פריט כל (ס״מ)" />
+              <QuickNumber label="פריט כל (ס״מ)" min={AISLE_PITCH_MIN_MM / 10} max={AISLE_PITCH_MAX_MM / 10} value={cm(aisle.spec.pitchMm ?? AISLE_PITCH_MM)} onChange={(v) => onAisle([p.id], { pitchMm: v * 10 })} />
               <QuickUnit>ס״מ</QuickUnit>
             </>,
           );
@@ -2158,6 +2253,7 @@ export function Inspector({
 
     const opens: Record<typeof kind, string[]> = {
       rail: ["rail", "item"],
+      aisle: ["aisle", "size"],
       bench: ["seating", "number"],
       rows: ["rows", "item"],
       climb: ["climb", "item"],
@@ -2192,6 +2288,8 @@ export function Inspector({
             rail={drape}
             run={run}
             dropMm={p.dropMm}
+            bare={bareRod}
+            onBareRod={onBareRod && !bareRod && drape.type === "rod" && !p.locked ? () => onBareRod(p.id) : undefined}
             onWhat={onWhat}
             onRail={(rail, dropMm) => (onRail ? onRail(p.id, rail, dropMm) : rail.type === "wall" && dropMm === undefined && onSpan(p.id, { wallId: rail.wallId, from: rail.from, to: rail.to }))}
             editable={!!onRail}
@@ -2207,6 +2305,11 @@ export function Inspector({
       [
         breaches.length > 0 && G("clearance", ShieldAlert, "מרחק ביטחון", breaches.length === 1 ? "חריגה אחת" : `${breaches.length} חריגות`, <BreachList breaches={breaches} />, true),
         railGroup,
+        // AN AISLE: which piece lines it, a piece every so far, one side or both, its runner — warn
+        // while no piece is chosen (it stands bare and counts nothing).
+        !!aisle &&
+          !!onAisle &&
+          G("aisle", Route, "שדרה", aisle.piece ? aisleWords(aisle.layout) : "לא נבחר פריט", <AislePanel id={p.id} view={aisle} own={p.aisle} onAisle={(patch) => onAisle([p.id], patch)} />, !aisle.piece),
         // A STANDALONE BANQUETTE: its number, its height and its two sides — as a table's ״שולחן״ and
         // ״ישיבה״.
         !!bench &&
@@ -2383,7 +2486,7 @@ export function Inspector({
             Ruler,
             "מידות",
             ltr(sizePanel.axes.uniform ? `⌀${cm(sizePanel.size.widthMm)}` : `${cm(sizePanel.size.widthMm)}×${cm(sizePanel.size.depthMm)}`),
-            <SizeFields panel={sizePanel} onSize={onSize} />,
+            <SizeFields panel={sizePanel} onSize={onSize} labels={aisle ? { width: "אורך", depth: "רוחב" } : undefined} />,
           ),
         // On a table: the same item onto other tables, in a pattern.
         !!table && G("pattern", LayoutGrid, "דפוס", "החלה על שולחנות", renderPattern(table.id, p.id)),
@@ -3533,14 +3636,14 @@ function SurfaceFields({
 }
 
 /** The size fields — a table's and an item's ״מידות״ group. */
-function SizeFields({ panel, onSize }: { panel: SizePanel; onSize: (size: { widthMm: number; depthMm: number } | null) => void }) {
+function SizeFields({ panel, onSize, labels }: { panel: SizePanel; onSize: (size: { widthMm: number; depthMm: number } | null) => void; /** An aisle's two numbers are its length and its width across. */ labels?: { width: string; depth: string } }) {
   const { size, catalog, axes, spec, custom } = panel;
   const step = spec.stepMm || 100;
   const range = (r?: { minMm: number; maxMm: number }) => (r ? `${cm(r.minMm)}–${cm(r.maxMm)}` : null);
   return (
     <>
       {axes.width && spec.width && (
-        <PanelRow label={axes.uniform ? "קוטר" : "רוחב"} htmlFor="resize-w">
+        <PanelRow label={axes.uniform ? "קוטר" : (labels?.width ?? "רוחב")} htmlFor="resize-w">
           <NumberField
             id="resize-w"
             decimals={0}
@@ -3555,7 +3658,7 @@ function SizeFields({ panel, onSize }: { panel: SizePanel; onSize: (size: { widt
         </PanelRow>
       )}
       {axes.depth && spec.depth && (
-        <PanelRow label="עומק" htmlFor="resize-d">
+        <PanelRow label={labels?.depth ?? "עומק"} htmlFor="resize-d">
           <NumberField
             id="resize-d"
             decimals={0}
@@ -3936,6 +4039,8 @@ function DrapeRailFields({
   rail,
   run,
   dropMm,
+  bare,
+  onBareRod,
   onWhat,
   onRail,
   editable,
@@ -3943,6 +4048,10 @@ function DrapeRailFields({
   rail: Rail;
   run: { lengthMm: number } | null;
   dropMm?: number;
+  /** A bare rod (no cloth on it): no drop to type, and its own words. */
+  bare?: boolean;
+  /** Take the curtain down and leave its rod (a curtain on a rod, while the studio has a rod row). */
+  onBareRod?: () => void;
   onWhat: string;
   onRail: (rail: Rail, dropMm?: number | null) => void;
   /** The host writes any rail (onRail) — otherwise only a wall's stretch is offered. */
@@ -3967,6 +4076,12 @@ function DrapeRailFields({
       )}
       {rail.type === "rod" && editable && (
         <>
+          <PanelRow label="אורך המוט (ס״מ)" htmlFor="rod-length">
+            <NumberField id="rod-length" decimals={0} min={ROD_MIN_MM / 10} max={6000} commitOnBlur value={Math.round(rodRunMm(rail) / 10)} onChange={(v) => onRail(rodWithLength(rail, v * 10))} className="w-24" />
+          </PanelRow>
+          <PanelRow label="עובי המוט (מ״מ)" htmlFor="rod-thick">
+            <NumberField id="rod-thick" decimals={0} min={ROD_THICK_MIN_MM} max={ROD_THICK_MAX_MM} commitOnBlur value={rodThickMm(rail)} onChange={(v) => onRail(rodWithThick(rail, v))} className="w-24" />
+          </PanelRow>
           <PanelRow label="גובה המוט (מ׳)" htmlFor="rod-height">
             <NumberField id="rod-height" decimals={2} min={0.5} max={8} step={0.1} commitOnBlur value={rail.heightMm / 1000} onChange={(m) => onRail({ ...rail, heightMm: Math.round(m * 1000) })} className="w-24" />
           </PanelRow>
@@ -3978,15 +4093,22 @@ function DrapeRailFields({
           />
         </>
       )}
-      {editable && (
+      {editable && !bare && (
         <PanelRow label="אורך הבד (ס״מ)" htmlFor="drape-drop">
           <NumberField id="drape-drop" decimals={0} min={0} max={1200} hideZero placeholder="עד הרצפה" value={dropMm ? Math.round(dropMm / 10) : 0} onChange={(v) => onRail(rail, v > 0 ? v * 10 : null)} className="w-24" />
         </PanelRow>
       )}
+      {onBareRod && (
+        <Button size="sm" variant="outline" className="w-full" onClick={onBareRod}>
+          הורדת הווילון — המוט נשאר
+        </Button>
+      )}
       <Note>
-        {rail.type === "rod"
-          ? "״ציור המוט מחדש״ בסרגל: לחיצה לכל עמוד, Enter או לחיצה כפולה לסיום. גוררים עמוד כדי להזיז אותו. המוט מתומחר מהשורה הראשונה בקטגוריית ״מוטות וילון״."
-          : `לקיצור — הידיות ש${onWhat} עצמו. מוט משלו — ״ציור על מוט״ בסרגל.`}
+        {bare
+          ? "גוררים וילון מהקטלוג אל המוט כדי לתלות אותו. גוררים עמוד כדי להזיז אותו, ואת המוט עצמו כדי להעביר אותו; ״ציור המוט מחדש״ בסרגל — לחיצה לכל עמוד. מתומחר לפי אורכו."
+          : rail.type === "rod"
+            ? "״ציור המוט מחדש״ בסרגל: לחיצה לכל עמוד, Enter או לחיצה כפולה לסיום. גוררים עמוד כדי להזיז אותו, ואת הווילון כדי להעביר אותו עם המוט. המוט מתומחר מהשורה הראשונה בקטגוריית ״מוטות וילון״."
+            : `לקיצור — הידיות ש${onWhat} עצמו. מוט משלו — ״ציור על מוט״ בסרגל.`}
       </Note>
     </>
   );
@@ -4126,6 +4248,55 @@ function vesselView(own: string | null | undefined, rowVessel?: string) {
  *  its own option, plus "as its catalog row" and "none on this plan" — as a group's pick row: the
  *  vessel in use, and "החלפה" opens the typed list as a picker beside the panel — a pick applies and
  *  the picker goes. */
+/** A patch to an aisle's own answers: any of them, or null to hand one back to its row. */
+export type AislePatch = { [K in keyof AislePlacement]?: AislePlacement[K] | null };
+
+/** The ״שדרה״ group: the piece as a pick row (its picker beside the panel), then the lining's fields.
+ *  Everything shown is what is IN FORCE — the row's answers under this plan's own — and every edit is
+ *  this plan's; "כמו בקטלוג" hands them all back. */
+function AislePanel({ id, view, own, onAisle }: { id: string; view: AisleView; own: AislePlacement | undefined; onAisle: (patch: AislePatch) => void }) {
+  const choices = aislePieceChoices(loadProducts());
+  const mine = !!own && Object.keys(own).length > 0;
+  return (
+    <div className="space-y-3">
+      <PickRow
+        glyph={
+          view.piece ? (
+            <span className="block h-full w-full overflow-hidden rounded-sm">
+              <ProductImage product={view.piece.product} />
+            </span>
+          ) : (
+            <Route className="h-4 w-4 text-muted" strokeWidth={1.75} />
+          )
+        }
+        name={view.piece?.label ?? "בחירת פריט"}
+        meta={!view.piece ? "השדרה ריקה עד שנבחר פריט" : own?.piece ? "בתוכנית הזו" : "כמו בקטלוג"}
+        pickerLabel="הפריט שלאורך השדרה"
+        pickerIcon={Route}
+      >
+        {(close) => (
+          <AislePiecePicker
+            autoFocus
+            value={view.pieceId ?? ""}
+            choices={choices}
+            lead={own?.piece ? [{ value: "", label: "כמו בקטלוג" }] : []}
+            onChange={(v) => {
+              onAisle({ piece: v || null });
+              close();
+            }}
+          />
+        )}
+      </PickRow>
+      <AisleFields spec={view.spec} layout={view.layout} onChange={onAisle} idPrefix={`aisle-${id}`} />
+      {mine && (
+        <Button variant="outline" size="sm" className="w-full" onClick={() => onAisle({ piece: null, pitchMm: null, sides: null, stagger: null, runner: null })}>
+          כמו בקטלוג
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function VesselPickRow({ own, rowVessel, onVessel }: { own: string | null | undefined; rowVessel?: string; onVessel: (v: string | null | undefined) => void }) {
   const view = vesselView(own, rowVessel);
   const chosen = view.current ? view.choices.find((c) => c.value === view.current) : undefined;

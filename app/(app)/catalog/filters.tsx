@@ -44,7 +44,8 @@ export function matchesFilters(p: Product, f: FilterState): boolean {
   if (f.sourcing && !matchesSourcing(p, f.sourcing)) return false;
   if (f.search.trim()) {
     const q = f.search.trim().toLowerCase();
-    const hay = `${p.name} ${CATEGORY_BY_ID[p.category]?.label ?? ""}`.toLowerCase();
+    const cat = CATEGORY_BY_ID[p.category];
+    const hay = `${p.name} ${cat?.label ?? ""} ${cat?.aliases?.join(" ") ?? ""}`.toLowerCase();
     if (!hay.includes(q)) return false;
   }
   return true;

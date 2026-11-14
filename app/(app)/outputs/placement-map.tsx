@@ -20,7 +20,7 @@ import { featureFootprint, isDoor, isWindow, nodeMap, plantSpecies, surfaceMater
 import { WindowGlazing } from "@/components/window-glazing";
 import { CURTAIN_DEPTH_MM, CURTAIN_FILL, curtainPieces, type CurtainPiece } from "@/lib/venues/curtain";
 import { CurtainCloth, DrapePleatsAlong, RodMarks, polygonD } from "@/components/curtain-cloth";
-import { railBand, railClothLine, railLines, railOf, sketchRailContext } from "@/lib/studio/rail";
+import { isRodRow, railBand, railClothLine, railLines, railOf, rodThickMm, sketchRailContext } from "@/lib/studio/rail";
 import { LED_COLOUR, LED_DEPTH_MM, isLedStrip, ledColour, ledPieces } from "@/lib/venues/led";
 import { LedLine, ScreenGlyph } from "@/components/led-glyph";
 import type { Point } from "@/lib/studio/hall";
@@ -50,7 +50,8 @@ import { rugOutline, rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
 import { carpetFootprint, carpetPathD, carpetPolygon, carpetShape, type CarpetShape } from "@/lib/studio/cover";
 import { arrangedStructure } from "@/lib/design-document/features";
 import { autoStack, floorStack, type StackBox } from "@/lib/design-document/stacking";
-import { benchOf, chairBlockOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import { aisleOf, benchOf, chairBlockOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import { AisleDrawing } from "@/components/placed-piece";
 import { ChairBlock, SeatingGlyph } from "@/components/chair-block";
 import { ColumnGlyph } from "@/components/column-glyph";
 import { seatingOf } from "@/lib/venues/seating";
@@ -977,7 +978,7 @@ export function PlacementMap({
                   <SailCloth key={p.id} sheet={cloth.sheet} fill={fill} fillOpacity={colour ? 0.35 : 0.6} ink={INK} inkOpacity={1} tieMm={1.8 * den} textMm={2.2 * den} textFill={INK} halo="#ffffff" postFill={INK} strokeWidth={LINE_WEIGHTS.overhead} dash={OVERHEAD_DASH} />
                 ) : null
               ) : (
-                <DrapeRuns key={p.id} runs={cloth.runs} area={cloth.area} fill={fill} fillOpacity={colour ? 0.5 : 0.7} ink={INK} inkOpacity={1} dash={OVERHEAD_DASH} />
+                <DrapeRuns key={p.id} runs={cloth.runs} area={cloth.area} fill={fill} fillOpacity={colour ? 0.5 : 0.7} ink={INK} inkOpacity={1} dash={OVERHEAD_DASH} textMm={2.2 * den} textFill={INK} halo="#ffffff" sagText />
               );
             }
             // The property's own walls, not the arranged copy — nothing on this surface moves a
@@ -986,6 +987,14 @@ export function PlacementMap({
             const lines = rail ? railLines(rail, sketchRailContext(doc, plan.structure, structure, (v) => resolve(v)?.product)) : [];
             if (!lines.length) return null;
             const style = curtainStyleOf(resolve(p.variantId)?.product);
+            // A BARE ROD (the built-in מוט וילון placed by itself): the rod at its thickness and its
+            // posts — no cloth to draw.
+            if (isRodRow(resolve(p.variantId)?.product))
+              return (
+                <g key={p.id}>
+                  {lines.map((line, i) => (line.posts ? <RodMarks key={i} path={line.path} posts={line.posts} postMm={1.6 * den} ink={INK} rodMm={rail?.type === "rod" ? Math.max(rodThickMm(rail), 0.5 * den) : undefined} /> : null))}
+                </g>
+              );
             // On the wall's own line — round the bow on a curved wall — out on its side for a side
             // rail, under its rod with the rod's posts for a rod.
             return (
@@ -1811,7 +1820,9 @@ export function PlacementGlyph({
   // A dance floor laid on the plan is drawn as a rug is — its fill through the stretch path below —
   // with its panels over it (DanceFloorPattern), never as a picture in a box.
   const dance = !!stretched && r?.product.category === "dance-floors" && r.product.appearance?.symbol !== false;
-  const symbol = placement.stage || block || dance ? null : symbolOf(r?.product, footprint);
+  // An aisle is its lining — its piece at every spot, its runner (lib/catalog/aisle.ts) — as the studio draws it.
+  const aisle = block ? null : aisleOf(placement);
+  const symbol = placement.stage || block || dance || aisle ? null : symbolOf(r?.product, footprint);
   // A flight or a ramp on its own: the step it covers on this plan, its slope kept upright.
   const rise = symbol === "stairs" || symbol === "ramp" ? climbRise(r?.product, placement.climb) : undefined;
   const climbProps = rise ? { rise, turnDeg: placement.rotation, mirrored: placement.mirrored, textMm } : {};
@@ -1833,15 +1844,16 @@ export function PlacementGlyph({
     // row's own fill, the category's picture in that shade, a material where the row has one.
     const screen = resolveStyle(placement.stage ? undefined : productStyle(r?.product), "screen", { fill: "#ffffff", stroke: MUTED, strokeWidth: LINE_WEIGHTS.furniture });
     const own = placement.stage ? undefined : (r?.swatch ?? r?.product.appearance?.style?.fill);
-    const surfaced = !symbol && !block && !overhead && anySurface(r?.product.appearance);
+    const surfaced = !symbol && !block && !aisle && !overhead && anySurface(r?.product.appearance);
     const dark = !!own && isDark(own);
     return (
       <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
         {block && <ChairBlock product={block.product} spec={block.spec} tone={own} ink={MUTED} />}
+        {aisle && <AisleDrawing view={aisle} ink={MUTED} detail={textMm === undefined || textMm <= 2.6 * 50} />}
         {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} ink={MUTED} />}
         {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} chandelier={chandelierDrawOf(r.product.appearance, r.product.variants)} chuppah={chuppahDrawOf(r.product.appearance)} postMm={pergolaPostOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} {...(symbol === "screen" ? { label: r.product.name, textMm } : {})} />}
         {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={MUTED} />}
-        {!symbol && !block && cut && (
+        {!symbol && !block && !aisle && cut && (
           <CarpetCut
             carpet={cut}
             fill={own ?? screen.fill}
@@ -1852,7 +1864,7 @@ export function PlacementGlyph({
             vectorEffect="non-scaling-stroke"
           />
         )}
-        {!symbol && !block && !cut && (
+        {!symbol && !block && !aisle && !cut && (
           <g transform={lift}>
             <FootprintShape
               footprint={footprint}
@@ -1882,6 +1894,7 @@ export function PlacementGlyph({
   return (
     <g transform={`${placed({ x, y }, placement.rotation, placement.mirrored)}${scale !== 1 ? ` scale(${scale})` : ""}`}>
       {block && <ChairBlock product={block.product} spec={block.spec} tone={flat} ink={INK} print />}
+      {aisle && <AisleDrawing view={aisle} tone={flat} runnerTone={fl ? fl.rug : "#ffffff"} ink={INK} print detail={textMm === undefined || textMm <= 2.6 * 50} />}
       {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} ink={INK} print tone={flat} />}
       {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={flat} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} chandelier={chandelierDrawOf(r.product.appearance, r.product.variants)} chuppah={chuppahDrawOf(r.product.appearance)} postMm={pergolaPostOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} {...(symbol === "screen" ? { label: r.product.name, textMm } : {})} />}
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={INK} print />}
@@ -1894,10 +1907,10 @@ export function PlacementGlyph({
         <FootprintShape
           footprint={footprint}
           overhead={overhead}
-          fill={symbol || block ? "none" : (flat ?? style.fill)}
+          fill={symbol || block || aisle ? "none" : (flat ?? style.fill)}
           stroke={style.stroke}
-          strokeWidth={block ? LINE_WEIGHTS.annotation : style.strokeWidth}
-          strokeDasharray={block ? "4 3" : style.dashArray.length ? style.dashArray.join(" ") : undefined}
+          strokeWidth={block || aisle ? LINE_WEIGHTS.annotation : style.strokeWidth}
+          strokeDasharray={block || aisle ? "4 3" : style.dashArray.length ? style.dashArray.join(" ") : undefined}
           vectorEffect="non-scaling-stroke"
         />
       </g>

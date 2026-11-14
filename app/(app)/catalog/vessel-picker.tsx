@@ -51,6 +51,10 @@ export function VesselPicker({
   lead = [],
   autoFocus,
   listClassName = "max-h-56",
+  searchLabel = "חיפוש כלי",
+  placeholder,
+  emptyText = "אין כלי בשם הזה",
+  listLabel = "כלים",
 }: {
   /** The chosen value — one of `lead`'s or `choices`'. */
   value: string;
@@ -60,6 +64,11 @@ export function VesselPicker({
   lead?: VesselChoice[];
   autoFocus?: boolean;
   listClassName?: string;
+  /** The same list picks other things than vessels (an aisle's piece): its words, when not a vessel's. */
+  searchLabel?: string;
+  placeholder?: string;
+  emptyText?: string;
+  listLabel?: string;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -70,7 +79,7 @@ export function VesselPicker({
     const starts: VesselChoice[] = [];
     const within: VesselChoice[] = [];
     for (const c of choices) {
-      const t = fold(c.label);
+      const t = fold(c.hint ? `${c.label} ${c.hint}` : c.label);
       if (t.startsWith(q)) starts.push(c);
       else if (t.includes(q)) within.push(c);
     }
@@ -107,8 +116,8 @@ export function VesselPicker({
           aria-expanded
           aria-controls={listId}
           aria-activedescendant={shown[active] ? `${listId}-${active}` : undefined}
-          aria-label="חיפוש כלי"
-          placeholder={choices.length ? "חיפוש כד או אגרטל…" : "אין כלים בקטלוג"}
+          aria-label={searchLabel}
+          placeholder={placeholder ?? (choices.length ? "חיפוש כד או אגרטל…" : "אין כלים בקטלוג")}
           value={query}
           autoFocus={autoFocus}
           autoComplete="off"
@@ -120,8 +129,8 @@ export function VesselPicker({
           className={`${controlClassName} w-full ps-8 pe-2.5 placeholder:text-faint`}
         />
       </div>
-      <div id={listId} role="listbox" aria-label="כלים" className={`scroll-slim mt-1.5 overflow-y-auto ${listClassName}`}>
-        {shown.length === 0 && <p className="px-2.5 py-2 text-xs text-muted">אין כלי בשם הזה</p>}
+      <div id={listId} role="listbox" aria-label={listLabel} className={`scroll-slim mt-1.5 overflow-y-auto ${listClassName}`}>
+        {shown.length === 0 && <p className="px-2.5 py-2 text-xs text-muted">{emptyText}</p>}
         {shown.map((c, i) => {
           const chosen = c.value === value;
           return (
@@ -142,7 +151,10 @@ export function VesselPicker({
               ) : (
                 <span className="h-7 w-7 shrink-0" aria-hidden />
               )}
-              <span className={`min-w-0 flex-1 truncate ${chosen ? "font-semibold text-ink" : ""}`}>{c.label}</span>
+              <span className={`min-w-0 flex-1 truncate ${chosen ? "font-semibold text-ink" : ""}`}>
+                {c.label}
+                {c.hint && <span className="ms-1.5 text-xs font-normal text-muted">{c.hint}</span>}
+              </span>
               {c.swatch && <Swatch color={c.swatch} size={14} />}
               {chosen && <Check className="h-4 w-4 shrink-0 text-accent" strokeWidth={2} />}
             </div>

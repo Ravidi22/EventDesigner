@@ -5,9 +5,12 @@
 // and held back with the ceiling plane by the layer it sits in.
 //
 // Selected, it is edited on the plan: a grip on every tie of a sail (re-tied while it is dragged — to
-// a wall, a thing's corner, else a post of its own; Alt frees it), on each end of a run, on each
-// corner of a canopy's area; a press on its cloth carries the whole of it (a sail only when nothing
-// in the room holds a corner of it). Every drag goes through startPointerGesture; nothing here sets
+// a wall, a thing's corner, else a post of its own; Alt frees it), on each end of a run (it catches
+// another swag's end, a thing's middle or corner, a wall), on each corner of a canopy's area; a press
+// on its cloth carries the whole of it (a sail only when nothing in the room holds a corner of it).
+// A RUN's depth is a handle too (2026-11-13, the user: "drag it from point to point and put the curve
+// of it (depth)"): its profile folded onto the plan beside its line — the curve it makes from the side
+// — with a diamond at its lowest point; pulled away from the line the swag hangs deeper. Every drag goes through startPointerGesture; nothing here sets
 // state per pointermove — each frame is the host's one `setPlacementRail`, the thing being dragged
 // re-rendering and nothing else (CLAUDE.md "Every drag is startPointerGesture").
 import { memo, useLayoutEffect, useMemo, useRef } from "react";
@@ -15,15 +18,20 @@ import type { DesignDocumentContent, Placement } from "@/lib/design-document/typ
 import type { Point } from "@/lib/studio/hall";
 import type { CanvasLayerContext } from "@/components/plan-canvas";
 import type { VenueStructure } from "@/lib/venues/structure";
-import { railMoved, type Rail } from "@/lib/studio/rail";
+import { railMoved, railOf, type Rail } from "@/lib/studio/rail";
 import {
   canopyCornerMoved,
   clothPolygons,
   runEndMoved,
+  sagFromPoint,
   sailIsFree,
   sailTieMoved,
+  snapSwagEnd,
   snapTie,
+  swagHandle,
+  swagProfile,
   tieCandidates,
+  withSag,
   type ClothView,
   type SnappedTie,
   type TieContext,
@@ -32,7 +40,7 @@ import { resolve } from "@/lib/studio/catalog-resolver";
 import { startPointerGesture } from "@/lib/studio/gesture";
 import { isAdditiveClick } from "@/lib/keyboard";
 import { isDark } from "@/lib/element-style";
-import { DrapeRuns, SailCloth } from "@/components/ceiling-cloth";
+import { DrapeRuns, SailCloth, tieHeightText } from "@/components/ceiling-cloth";
 import { polygonD } from "@/components/curtain-cloth";
 
 /** How close (screen px) a dragged tie must come to a wall or a corner to be tied to it. */
@@ -41,6 +49,9 @@ export const TIE_SNAP_PX = 14;
 /** What a sail's ties are snapped against, read at the moment of the drag — never per render. */
 export interface ClothTies {
   snap: (raw: Point, tolMm: number, free: boolean) => SnappedTie;
+  /** Where a SWAG's end lands (ceiling-cloth.ts snapSwagEnd): another run's end, a thing's middle or
+   *  corner, a wall — `exceptId`'s own ends are no catch for itself. */
+  swagEnd: (raw: Point, tolMm: number, free: boolean, exceptId?: string) => { p: Point; tied: boolean };
 }
 
 /** The ties' lookup for this sketch: the PROPERTY's walls (no arrangement moves a wall) and the
@@ -68,7 +79,18 @@ export function useClothTies(
       }
       return cache.ctx;
     };
-    return { snap: (raw, tolMm, free) => snapTie(raw, ctxNow(), tolMm, free) };
+    return {
+      snap: (raw, tolMm, free) => snapTie(raw, ctxNow(), tolMm, free),
+      swagEnd: (raw, tolMm, free, exceptId) => {
+        const ends: Point[] = [];
+        for (const p of latest.current.doc.placements) {
+          if (p.id === exceptId) continue;
+          const r = railOf(p);
+          if (r?.type === "run") ends.push(r.a, r.b);
+        }
+        return snapSwagEnd(raw, ctxNow(), ends, tolMm, free);
+      },
+    };
   }, []);
 }
 
@@ -140,8 +162,12 @@ export const CeilingClothNode = memo(function CeilingClothNode({
   const grips: Point[] = rail.type === "sail" ? (cloth.sheet?.polygon ?? []) : rail.type === "run" ? [rail.a, rail.b] : rail.type === "canopy" ? rail.outline : [];
   const moveGrip = (i: number, raw: Point, free: boolean, from: Rail): Rail | null => {
     if (from.type === "sail") return sailTieMoved(from, i, ties.snap(raw, ctx.mm(TIE_SNAP_PX), free));
+    if (from.type === "run") {
+      // A swag's end catches what it may hang from; in the open it is the canvas's own snap.
+      const caught = ties.swagEnd(raw, ctx.mm(TIE_SNAP_PX), free, placement.id);
+      return runEndMoved(from, i === 0 ? 0 : 1, caught.tied || free ? caught.p : ctx.snap(raw));
+    }
     const p = free ? round(raw) : ctx.snap(raw);
-    if (from.type === "run") return runEndMoved(from, i === 0 ? 0 : 1, p);
     if (from.type === "canopy") return canopyCornerMoved(from, i, p);
     return null;
   };
@@ -156,6 +182,22 @@ export const CeilingClothNode = memo(function CeilingClothNode({
       },
       onEnd: (_ev, moved) => {
         ctx.endSnap();
+        if (moved) onEnd();
+      },
+    });
+  };
+
+  // A run's DEPTH, held on the plan: its profile folded beside its line, a diamond at its lowest point.
+  const run = rail.type === "run" ? cloth.runs[0] : undefined;
+  const sagGrip = selected && run ? swagHandle(run) : null;
+  const pressSag = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    if (e.button !== 0 || !run || rail.type !== "run") return;
+    const from = rail;
+    const fromRun = run;
+    startPointerGesture(e, {
+      onMove: (ev) => onRail(placement.id, withSag(from, sagFromPoint(fromRun, ctx.clientToMm(ev.clientX, ev.clientY), ev.altKey))),
+      onEnd: (_ev, moved) => {
         if (moved) onEnd();
       },
     });
@@ -177,7 +219,7 @@ export const CeilingClothNode = memo(function CeilingClothNode({
           postFill="var(--color-ink-soft)"
         />
       ) : (
-        <DrapeRuns runs={cloth.runs} area={cloth.area} fill={colour} ink={ink} />
+        <DrapeRuns runs={cloth.runs} area={cloth.area} fill={colour} ink={ink} textMm={showHeights && run ? ctx.mm(11) : undefined} halo="var(--color-canvas)" ends={selected} />
       )}
       {/* What takes the pointer: the whole cloth while it is being worked on, else its outline. */}
       {polys.map((poly, i) => (
@@ -228,6 +270,50 @@ export const CeilingClothNode = memo(function CeilingClothNode({
             onClick={(e) => e.stopPropagation()}
           />
         ))}
+      {/* The depth: the swag's side profile folded onto the plan, and the handle at its lowest point. */}
+      {sagGrip && run && (
+        <g>
+          <g className="pointer-events-none">
+            <polyline points={swagProfile(run).map((q) => `${q.x},${q.y}`).join(" ")} fill="none" stroke="var(--color-accent)" strokeWidth={1.5} strokeDasharray="5 4" vectorEffect="non-scaling-stroke" />
+            <line x1={sagGrip.base.x} y1={sagGrip.base.y} x2={sagGrip.at.x} y2={sagGrip.at.y} stroke="var(--color-accent)" strokeOpacity={0.5} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+            <text
+              x={sagGrip.at.x + sagGrip.n.x * ctx.mm(20)}
+              y={sagGrip.at.y + sagGrip.n.y * ctx.mm(20)}
+              fontSize={ctx.mm(11)}
+              textAnchor="middle"
+              dominantBaseline="central"
+              direction="ltr"
+              fill="var(--color-accent-deep)"
+              style={{ paintOrder: "stroke", stroke: "var(--color-canvas)", strokeWidth: ctx.mm(3) }}
+            >
+              {`↓${tieHeightText(run.sagMm)}`}
+            </text>
+          </g>
+          {!locked && (
+            <g
+              role="slider"
+              aria-label="עומק הקימור של הבד"
+              aria-valuenow={Math.round(run.sagMm / 10)}
+              className="cursor-grab touch-none focus:outline-none"
+              onPointerDown={pressSag}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <circle cx={sagGrip.at.x} cy={sagGrip.at.y} r={ctx.mm(12)} fill="transparent" />
+              <rect
+                x={sagGrip.at.x - ctx.mm(5.5)}
+                y={sagGrip.at.y - ctx.mm(5.5)}
+                width={ctx.mm(11)}
+                height={ctx.mm(11)}
+                transform={`rotate(45 ${sagGrip.at.x} ${sagGrip.at.y})`}
+                fill="var(--color-accent)"
+                stroke="var(--color-canvas)"
+                strokeWidth={2}
+                vectorEffect="non-scaling-stroke"
+              />
+            </g>
+          )}
+        </g>
+      )}
     </g>
   );
 });

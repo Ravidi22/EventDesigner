@@ -22,7 +22,7 @@
 // over further), spun by its seeded `rot` so no two are stamped. The mass under them is the shade
 // gone dark and green — the depth between flowers — not a pale ball, and two rings of the main
 // bloom dress its side, where the plan (seen from above) lays none.
-import { FLOWER_PROFILES, FORMS, type FlowerDrawSpec, type FlowerItem, composeFlowers } from "@/lib/catalog/flower-draw";
+import { FALL_FLOOR, FLOWER_PROFILES, FORMS, type FlowerDrawSpec, type FlowerItem, composeFlowers } from "@/lib/catalog/flower-draw";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import type { FlowerKindId } from "@/lib/catalog/flower-kinds";
 import { profileAt, profileTop } from "@/lib/element/revolve";
@@ -91,6 +91,26 @@ const MAX_RINGS = 14;
 const RING_MIN_SHARE = 0.1;
 /** A side this steep (degrees from upright) is dressed by rings even where the plan's heads reach. */
 const STEEP_DEG = 50;
+
+/** The colour of the mass under an arrangement's heads, from its green. */
+export const massColour = (green: string): string => mixHex(green, MASS_DEEP, MASS_GREEN, MASS_DARK);
+/** FULL (FlowerDrawSpec.sparse absent — the user, 2026-11-13: "looks empty, I want it more filled"):
+ *  the mass comes this near the heads' rim, and its WHOLE side is dressed — a ring of the
+ *  arrangement's own mix every LEVEL_STEP heads down it, from where the plan's heads stop (or the
+ *  dome turns steep) to the vase's mouth — in place of three rings of one bloom a hand apart with
+ *  the dark mass between them. Heads in a ring stand LEVEL_SPACING of their radius apart. */
+const MASS_FULL = 0.8;
+const LEVEL_STEP = 1.45;
+const LEVEL_SPACING = 1.75;
+/** Below this share of its height a dome's side tucks in to the vase's mouth, to this share of its
+ *  widest at the foot. */
+const TUCK_FROM = 0.34;
+const TUCK_TO = 0.66;
+/** A full runner is a mound: its heads this high at the edge and this much more along its spine. */
+const MOUND_EDGE = 0.3;
+const MOUND_RISE = 0.5;
+/** How far a runner's fall hangs when nobody says how high it stands: a table's height. */
+export const FALL_DROP_MM = 750;
 
 /** `a` a share `t` of the way to `b`, then scaled by `k` (0–1 darker). */
 function mixHex(a: string, b: string, t: number, k = 1): string {
@@ -339,12 +359,13 @@ export function bloomMesh(form: BloomForm, r: number, seed: number, opts: { peta
 /** The arrangement described by `spec` (composeFlowers' layout, in the footprint frame) as a
  *  build whose heads are instanced per (kind, colour) across the room. `heightMm` is the row's:
  *  the top of the highest head's centre. */
-export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag): ItemBuild {
+export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag, opts: { /** How high above the floor it stands — how far a runner's fall hangs. */ dropMm?: number } = {}): ItemBuild {
   const items = composeFlowers(spec);
+  const full = !spec.sparse;
   const H = Math.max(20, heightMm);
   const R = Math.min(spec.w, spec.h) / 2;
   const form = spec.form;
-  const F = form === "runner" || form === "bud" || form === "single" ? undefined : FORMS[form];
+  const F = form === "runner" || form === "bud" || form === "single" || form === "shape" ? undefined : FORMS[form];
   // The mass's centre and rim, as composeRound reads them (flower-draw.ts:289, :317).
   const cx = (F?.shift ?? 0) * R;
   const rim = F ? R * F.core * 1.1 : R;
@@ -366,9 +387,19 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
   const inFall = (it: Head) => it.x >= fallFrom - R * 0.06;
   const fallT = (it: Head) => clamp((it.x - fallFrom) / (R * 0.72), 0, 1);
   /** The height of a head's CENTRE. */
+  // A runner's own axes: along its strip and across it, and how far across the mound reaches.
+  const alongX = spec.w >= spec.h;
+  const runL = Math.max(spec.w, spec.h);
+  const runD = Math.min(spec.w, spec.h);
+  const acrossOf = (it: Head) => (alongX ? it.y : it.x);
   const headZ = (it: Head, onStem: boolean): number => {
     if (form === "single") return H - it.r;
-    if (form === "runner") return H * (it.t === "head" ? RUNNER_HEAD : RUNNER_FILL);
+    if (form === "runner") {
+      if (!full) return H * (it.t === "head" ? RUNNER_HEAD : RUNNER_FILL);
+      // FULL: a mound — highest down its spine, falling to its edges.
+      const q = Math.min(1, Math.abs(acrossOf(it)) / (runD * 0.42));
+      return H * (MOUND_EDGE + MOUND_RISE * Math.sqrt(1 - q * q)) * (it.t === "head" ? 1 : 0.9);
+    }
     if (form === "bud") return H * BUD_HEAD;
     if (onStem) return H * REACH_RISE;
     if (inFall(it)) {
@@ -382,7 +413,11 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
    *  normal of the surface it sits on — give or take a seeded few degrees. */
   const facing = (it: Head, z: number, onStem: boolean): { outRad: number; tiltDeg: number } => {
     if (form === "single") return { outRad: it.rot, tiltDeg: 6 };
-    if (form === "runner") return { outRad: it.y >= 0 ? Math.PI / 2 : -Math.PI / 2, tiltDeg: 40 * Math.min(1, Math.abs(it.y) / Math.max(1, spec.h / 2)) };
+    if (form === "runner") {
+      const c = acrossOf(it);
+      const out = alongX ? (c >= 0 ? Math.PI / 2 : -Math.PI / 2) : c >= 0 ? 0 : Math.PI;
+      return { outRad: out, tiltDeg: (full ? 62 : 40) * Math.min(1, Math.abs(c) / Math.max(1, runD / 2)) };
+    }
     if (form === "bud") return { outRad: Math.atan2(it.y, it.x), tiltDeg: 14 };
     if (onStem) return { outRad: Math.atan2(it.y, it.x - cx), tiltDeg: 10 };
     // A cascade's fall turns out over its +x end and down as it goes.
@@ -449,6 +484,9 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
     build.parts.push({ shape: "cylinder", rTop: STEM_R_MM, rBottom: STEM_R_MM, h: to - from, at: vec3(x, y, from), segments: 6 });
   };
 
+  /** FULL: the height under which the side's own levels carry the flowers — a head the plan laid
+   *  lower than this stands in them, and is left to them. */
+  let coverZ: number | undefined;
   // The mass the heads sit in: the small flowers, the filler and the greens packed between the
   // blooms, on the vase's mouth, its top a little under the heads' — leafy and deep green, a ball of
   // small clumps, its hollows darker still, mostly hidden by the heads round it. A PALE mass read as a
@@ -526,7 +564,9 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
         const phase = (rings % 2) * 0.5;
         for (let k = 0; k < n; k++) {
           const ang = (2 * Math.PI * (k + phase)) / n;
-          head({ ...main, x: cx + ring * Math.cos(ang), y: ring * Math.sin(ang), rot: ang * 3.7 + k + rings }, lo.z, { outRad: ang, tiltDeg: tilt });
+          // FULL: the side wears the arrangement's own mix, not one bloom.
+          const src = full ? heads[(k * 5 + rings * 3) % heads.length] : main;
+          head({ ...src, x: cx + ring * Math.cos(ang), y: ring * Math.sin(ang), rot: ang * 3.7 + k + rings }, lo.z, { outRad: ang, tiltDeg: tilt });
         }
         rings++;
       }
@@ -534,19 +574,25 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
   } else if (F) {
     const massTop = H * (form === "cushion" ? 0.78 : 0.8);
     const a = (massTop + MASS_SINK * H) / 2;
-    const r = rim * MASS_SHARE;
+    const r = rim * (full ? MASS_FULL : MASS_SHARE);
     // The mass is plain and dark (shaded by its own clumps); the LEAVES are cards of the trees' leaf
     // atlas all over it (./plants.ts leafCards), the greenery showing between the blooms, top and
     // side — a textured ball striped where it squashed and read as a watermelon, and its bare crown
     // showed as a smooth olive cap between the top heads (both 2026-10-27).
     const massPart: Extract<Part, { shape: "blob" }> = { shape: "blob", r, at: vec3(cx, 0, massTop - a), seed: spec.seed, squash: a / r, lumps: 15, rough: 0.1, detail: 3, material: petal(mixHex(greenCol, MASS_DEEP, MASS_GREEN, MASS_DARK)) };
     build.parts.push(massPart);
-    const cards = leafCards([massPart], clamp(r * CARD_SHARE, 70, 180), spec.seed);
+    // FULL: the heads stand close over the mass, so its leaves are small — sprigs between blooms,
+    // never a ruff of foliage standing out past them.
+    const cards = leafCards([massPart], full ? clamp(r * CARD_SHARE * 0.6, 45, 110) : clamp(r * CARD_SHARE, 70, 180), spec.seed);
     if (cards.length) build.parts.push({ shape: "leaves", at: vec3(0, 0, 0), centre: massPart.at, cards, material: { colour: greenCol, kind: "leaves" } });
     // …and its side dressed: staggered rings of the arrangement's main bloom round the mass, from
     // its shoulder to under its widest, looking out — where the plan (seen from above) lays none.
     // Instanced with the rest, so they cost no draw call.
-    const blooms = items.filter((it): it is Head => it.t === "head" && !ROUND_KINDS.has(it.kind));
+    const petalled = items.filter((it): it is Head => it.t === "head" && !ROUND_KINDS.has(it.kind));
+    // FULL: an arrangement of small flowers alone (300 phlox, a cloud of gypsophila) has a side too —
+    // dressed in whatever it is made of.
+    const any = items.filter((it): it is Head => it.t === "head" || it.t === "fill");
+    const blooms = petalled.length || !full ? petalled : any.some((it) => it.t === "head") ? any.filter((it) => it.t === "head") : any;
     if (blooms.length && form !== "cascade") {
       const tally = new Map<string, { it: Head; n: number }>();
       for (const it of blooms) {
@@ -554,8 +600,56 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
         tally.set(k, { it, n: (tally.get(k)?.n ?? 0) + 1 });
       }
       const main = [...tally.values()].sort((x, y) => y.n - x.n)[0].it;
+      if (full) {
+        // The heads' own surface, as a radius at each height: the dome the plan's heads are lifted
+        // onto (a cushion's flatter one), tucking in under its widest to the vase's mouth.
+        const flat = form === "cushion" ? CUSHION_FLATTEN : 1;
+        const rhoAt = (z: number) => {
+          const q = 1 - (1 - z / H) / flat;
+          return q <= 0 ? 1 : Math.sqrt(Math.max(0, 1 - q * q));
+        };
+        const zw = H * TUCK_FROM;
+        const tuck = (z: number) => (z >= zw ? 1 : Math.sqrt(1 - (1 - TUCK_TO * TUCK_TO) * ((zw - z) / zw) ** 2));
+        const sideR = (z: number) => rim * Math.min(0.96, rhoAt(z)) * tuck(z);
+        const rbar = blooms.reduce((s, it) => s + it.r, 0) / blooms.length;
+        const N = 72;
+        const side = Array.from({ length: N + 1 }, (_, i) => ({ r: sideR((i / N) * H), z: (i / N) * H }));
+        // Where the plan's heads stop, or higher where the side turns steep — the plan lays its heads
+        // by the area seen from above, which a steep side stretches thin.
+        let steep = 0;
+        for (let i = N; i > 0; i--) {
+          if (deg(Math.atan2(side[i].z - side[i - 1].z, -(side[i].r - side[i - 1].r))) >= STEEP_DEG) {
+            steep = side[i].z;
+            break;
+          }
+        }
+        const reach = (R * F.core) / rim;
+        const planLow = H - (H - H * Math.sqrt(Math.max(0, 1 - Math.min(1, reach) ** 2))) * flat;
+        coverZ = Math.max(planLow, steep) - rbar * 0.35;
+        const step = LEVEL_STEP * rbar;
+        let along = step * 0.55;
+        let level = 0;
+        for (let i = N; i > 0 && level < MAX_RINGS * 2; i--) {
+          const hi = side[i];
+          const lo = side[i - 1];
+          if (lo.z > coverZ) continue;
+          along += Math.hypot(hi.r - lo.r, hi.z - lo.z);
+          if (along < step) continue;
+          along = 0;
+          if (lo.z < rbar * 0.3) break;
+          const tilt = deg(Math.atan2(hi.z - lo.z, -(hi.r - lo.r)));
+          const n = clamp(Math.floor((2 * Math.PI * lo.r) / (LEVEL_SPACING * rbar)), 5, 64);
+          const phase = (level % 2) * 0.5 + 0.25 * (spec.seed % 2);
+          for (let k = 0; k < n; k++) {
+            const ang = (2 * Math.PI * (k + phase)) / n;
+            const src = blooms[(k * 5 + level * 3 + spec.seed) % blooms.length];
+            head({ ...src, x: cx + lo.r * Math.cos(ang), y: lo.r * Math.sin(ang), rot: ang * 3.7 + k + level }, lo.z, { outRad: ang, tiltDeg: tilt });
+          }
+          level++;
+        }
+      }
       // A cushion is low and flat on its table: its side is the shoulder alone.
-      const rings = form === "cushion" ? RINGS.slice(0, 1) : RINGS;
+      const rings = full ? [] : form === "cushion" ? RINGS.slice(0, 1) : RINGS;
       rings.forEach(([share, tilt, fill], i) => {
         const zc = massTop - a + a * share;
         // On the mass's surface, pushed out a little so the bloom sits on it, not in it.
@@ -570,12 +664,39 @@ export function flowerBuild(spec: FlowerDrawSpec, heightMm: number, tag: NodeTag
     }
   }
 
+  // A runner's FALL (FlowerDrawSpec.fall): the plan drew these heads past the runner's end; here they
+  // hang from the table's edge down to the floor, looking out, and the last of them lie on it.
+  const drop = Math.max(100, opts.dropMm ?? FALL_DROP_MM);
+  const fallen = (it: Head, t: number) => {
+    const s = alongX ? it.x : it.y;
+    const sgn = s >= 0 ? 1 : -1;
+    const lat = acrossOf(it);
+    const top = H * (MOUND_EDGE + MOUND_RISE * 0.6);
+    const onFloor = t > FALL_FLOOR;
+    // Hanging: a garland with a body — thickest down its middle, so it is round, not a ribbon.
+    const mid = Math.max(0, 1 - Math.abs(lat) / (runD * 0.32));
+    const out = onFloor ? runD * (0.1 + (t - FALL_FLOOR) * 1.9) : it.r * (0.4 + 1.1 * mid);
+    const a = sgn * (runL / 2 + out);
+    const z = onFloor ? -drop + it.r * 0.7 : top - (top + drop - it.r) * (t / FALL_FLOOR);
+    const outRad = alongX ? (sgn > 0 ? 0 : Math.PI) : sgn > 0 ? Math.PI / 2 : -Math.PI / 2;
+    // Its edges look out to the sides, its middle straight out from the table.
+    const turn = onFloor ? 0 : (1 - mid) * (lat >= 0 ? 1 : -1) * (alongX ? 1 : -1) * sgn * 1.1;
+    head({ ...it, x: alongX ? a : lat, y: alongX ? lat : a }, z, { outRad: outRad + turn, tiltDeg: onFloor ? 25 : t < 0.06 ? 55 : 88 });
+  };
   let afterStem = false;
   for (const it of items) {
     switch (it.t) {
       case "head":
       case "fill": {
+        if (it.fall !== undefined) {
+          fallen(it, it.fall);
+          continue;
+        }
         const z = headZ(it, afterStem);
+        if (coverZ !== undefined && !afterStem && z < coverZ) {
+          afterStem = false;
+          continue;
+        }
         head(it, z, facing(it, z, afterStem));
         // A stem reaches the bloom's foot, a little under its centre.
         if (afterStem) stem(it.x, it.y, H * 0.35, z - it.r * 0.4);
@@ -696,11 +817,25 @@ if (isMain(import.meta.url)) {
   assert(new Set(blooms.map((r) => r.at.spinDeg)).size > blooms.length * 0.8, "…and the heads are spun, so no two are stamped");
 
   const lines = spec.lines;
-  const cushion = flowerBuild({ form: "cushion", w: 400, h: 400, lines, shade: "#e8bcce", seed: 7 }, 250, tag);
+  const cushion = flowerBuild({ form: "cushion", w: 400, h: 400, lines, shade: "#e8bcce", seed: 7, sparse: true }, 250, tag);
   const cHeads = cushion.instanced.filter((r) => r.key.startsWith("flower:"));
   const cTop = Math.max(...cHeads.map(centreOf));
   const cLow = Math.min(...cHeads.map(centreOf));
-  assert(cTop <= 250 && cTop > 200 && cLow > 250 * 0.5, `a cushion tops at its height and stays flat (${Math.round(cLow)}–${Math.round(cTop)})`);
+  assert(cTop <= 250 && cTop > 200 && cLow > 250 * 0.5, `a cushion by its spec tops at its height and stays flat (${Math.round(cLow)}–${Math.round(cTop)})`);
+  const fullCushion = flowerBuild({ form: "cushion", w: 400, h: 400, lines, shade: "#e8bcce", seed: 7 }, 250, tag).instanced.filter((r) => r.key.startsWith("flower:"));
+  assert(Math.max(...fullCushion.map(centreOf)) <= 250 && Math.min(...fullCushion.map(centreOf)) < 250 * 0.3 && Math.min(...fullCushion.map(centreOf)) > 0, "a FULL cushion's side is flowered down to the table");
+
+  // FULL (the default): the dome's whole side is dressed in its own mix, level under level, and
+  // "by the spec" is the three rings it always was.
+  const mixed = [{ kind: "rose" as const, qty: 30 }, { kind: "peony" as const, qty: 12 }, { kind: "euca" as const, qty: 8 }];
+  const big = { form: "dome" as const, w: 900, h: 900, lines: mixed, shade: "#e8bcce", seed: 11 };
+  const fullHeads = flowerBuild(big, 1000, tag).instanced.filter((r) => r.key.startsWith("flower:"));
+  const specHeads = flowerBuild({ ...big, sparse: true }, 1000, tag).instanced.filter((r) => r.key.startsWith("flower:"));
+  assert(fullHeads.length > specHeads.length * 3, `a full ⌀90 × 100 dome wears many times the heads of its bare spec (${fullHeads.length} vs ${specHeads.length})`);
+  const sideHeads = fullHeads.filter((r) => centreOf(r) < 450 && (r.at.tiltDeg ?? 0) > 60);
+  const bands = new Set(sideHeads.map((r) => Math.round(centreOf(r) / 60)));
+  assert(bands.size >= 5 && new Set(sideHeads.map((r) => r.key.split(":")[1])).size >= 2, `…its side dressed level under level (${bands.size} bands), roses and peonies both`);
+  assert(fullHeads.every((r) => centreOf(r) > 0 && centreOf(r) <= 1000), "…between the vase's mouth and the row's height");
 
   const cascade = flowerBuild({ form: "cascade", w: 500, h: 500, lines, shade: "#e8bcce", seed: 3 }, 400, tag);
   const fall = cascade.instanced.filter((r) => r.key.startsWith("flower:") && r.at.at.x > 0.5 * 250).sort((a, b) => a.at.at.x - b.at.at.x);
@@ -711,10 +846,19 @@ if (isMain(import.meta.url)) {
   const proud = garden.instanced.filter((r) => r.key.startsWith("flower:") && centreOf(r) > 400);
   assert(proud.length === 3 && garden.parts.filter((p) => p.shape === "cylinder").length === 3, "a garden's three long-stem heads stand above the mass on stems");
 
-  const runner = flowerBuild({ form: "runner", w: 1800, h: 400, lines, shade: "#e8bcce", seed: 2 }, 250, tag);
+  const runner = flowerBuild({ form: "runner", w: 1800, h: 400, lines, shade: "#e8bcce", seed: 2, sparse: true }, 250, tag);
   const rHeads = runner.instanced.filter((r) => r.key.startsWith("flower:"));
-  assert(rHeads.length > 4 && rHeads.every((r) => Math.abs(centreOf(r) - 125) < 1e-6 || Math.abs(centreOf(r) - 105) < 1e-6), "a runner's heads ride level at half its height");
+  assert(rHeads.length > 4 && rHeads.every((r) => Math.abs(centreOf(r) - 125) < 1e-6 || Math.abs(centreOf(r) - 105) < 1e-6), "a runner by its spec: heads level at half its height");
   assert(rHeads.some((r) => r.at.at.x > 500) && rHeads.some((r) => r.at.at.x < -500), "…along the strip");
+  // FULL: a mound, highest down its spine; and a FALL hangs from its end to the floor.
+  const mound = flowerBuild({ form: "runner", w: 1800, h: 400, lines, shade: "#e8bcce", seed: 2 }, 250, tag).instanced.filter((r) => r.key.startsWith("flower:"));
+  const spine = mound.filter((r) => Math.abs(r.at.at.y) < 30);
+  const edge = mound.filter((r) => Math.abs(r.at.at.y) > 140);
+  assert(mound.length > rHeads.length * 1.5 && spine.length > 0 && edge.length > 0 && Math.min(...spine.map(centreOf)) > Math.max(...edge.map(centreOf)), "a full runner is a mound: higher along its spine than at its edges");
+  const fallB = flowerBuild({ form: "runner", w: 1800, h: 400, lines, shade: "#e8bcce", seed: 2, fall: "end" }, 250, tag, { dropMm: 750 }).instanced.filter((r) => r.key.startsWith("flower:") && r.at.at.x > 900);
+  const fallZ = fallB.map(centreOf);
+  assert(fallB.length > 20 && Math.max(...fallZ) > 0 && Math.min(...fallZ) < -700 && Math.min(...fallZ) >= -750, `a fall hangs from the table's edge to the floor 75 cm below (${Math.round(Math.min(...fallZ))}…${Math.round(Math.max(...fallZ))})`);
+  assert(fallB.filter((r) => centreOf(r) > -600).every((r) => r.at.at.x < 900 + 120) && fallB.length > 80, `…straight down off the end, shoulder to shoulder (${fallB.length}), spreading only where it lies on the floor`);
 
   const bud = flowerBuild({ form: "bud", w: 300, h: 300, lines, shade: "#e8bcce", seed: 4 }, 300, tag);
   const bottles = bud.parts.filter((p) => p.shape === "cylinder" && p.material?.kind === "glass");

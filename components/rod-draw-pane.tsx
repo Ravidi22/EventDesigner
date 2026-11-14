@@ -17,11 +17,16 @@
 // more, closes it), a SAIL three or four ties (`closed`, `maxPoints: 4`) each landing where `snap`
 // puts it — a wall, a thing's corner, a post — instead of on the 45° steps. With none of them it is
 // the rod tool it always was.
+//
+// `drag` (2026-11-13, the user: "drag it from point to point"): a PRESS-DRAG draws a swag in one
+// gesture — the press is its first end (or the one already put), the release its last. A press that
+// never travels is still the click it was, so two clicks draw it too.
 import { useEffect, useRef, useState } from "react";
 import type { Point } from "@/lib/studio/hall";
 import type { CanvasLayerContext } from "@/components/plan-canvas";
 import { constrainNext, firstSideAngles, laterSideAngles } from "@/lib/studio/stage-draw";
 import { isTypingTarget } from "@/lib/keyboard";
+import { startPointerGesture } from "@/lib/studio/gesture";
 
 /** A rod shorter than this is a slip of the mouse, not a rod. */
 const MIN_ROD_MM = 300;
@@ -46,12 +51,14 @@ export function RodDrawPane({
   maxPoints,
   minPoints,
   snap,
+  drag,
 }: {
   ctx: CanvasLayerContext;
   /** The first post, when the click that started the tool already put it (/halls' armed tool). */
   start?: Point;
-  /** The rod's points, in order (at least two). */
-  onFinish: (points: Point[]) => void;
+  /** The rod's points, in order (at least two). `keep`: Shift was held on the last of them — the host
+   *  may go on to draw another. */
+  onFinish: (points: Point[], keep?: boolean) => void;
   onCancel: () => void;
   /** An AREA (a canopy, a sail): closed by a click on its first point or by Enter. */
   closed?: boolean;
@@ -61,6 +68,8 @@ export function RodDrawPane({
   minPoints?: number;
   /** Where a click lands, in place of the 45° steps and typed lengths (`free` = Alt held). */
   snap?: (raw: Point, free: boolean) => DrawSnap;
+  /** A press-drag draws it: press = the first point, release = the last. */
+  drag?: boolean;
 }) {
   const [pts, setPts] = useState<Point[]>(() => (start ? [snap ? snap(start, false).p : { x: Math.round(start.x), y: Math.round(start.y) }] : []));
   const [typed, setTyped] = useState("");
@@ -71,16 +80,16 @@ export function RodDrawPane({
   const fewest = minPoints ?? (closed ? 3 : 2);
 
   /** Where the next post goes from the pointer (or a typed length along its direction). */
-  const nextPoint = (clientX: number, clientY: number, free: boolean, typedMm?: number): Point => {
+  const nextPoint = (clientX: number, clientY: number, free: boolean, typedMm?: number, base: Point[] = pts): Point => {
     const raw = ctx.clientToMm(clientX, clientY);
     if (snap) return snap(raw, free).p;
-    const last = pts[pts.length - 1];
+    const last = base[base.length - 1];
     if (!last) {
       const s = ctx.snap(raw);
       return { x: Math.round(s.x), y: Math.round(s.y) };
     }
-    const first = pts[0];
-    const ref = pts.length >= 2 ? laterSideAngles((Math.atan2(pts[1].y - first.y, pts[1].x - first.x) * 180) / Math.PI) : firstSideAngles(null);
+    const first = base[0];
+    const ref = base.length >= 2 ? laterSideAngles((Math.atan2(base[1].y - first.y, base[1].x - first.x) * 180) / Math.PI) : firstSideAngles(null);
     return constrainNext(last, raw, ref, { free, typedMm, snapLength: (mm) => Math.max(100, Math.round(mm / 100) * 100) });
   };
 
@@ -115,7 +124,7 @@ export function RodDrawPane({
     }
   };
 
-  const finish = (points: Point[]) => {
+  const finish = (points: Point[], keep?: boolean) => {
     const clean = points.filter((p, i) => i === 0 || Math.hypot(p.x - points[i - 1].x, p.y - points[i - 1].y) > 1);
     const length = clean.slice(1).reduce((n, q, i) => n + Math.hypot(q.x - clean[i].x, q.y - clean[i].y), 0);
     ctx.endSnap();
@@ -124,13 +133,13 @@ export function RodDrawPane({
     // An area closes on its first point: a last point dropped on it is the closing click, not a corner.
     const shape = closed && clean.length > 3 && Math.hypot(clean[0].x - clean[clean.length - 1].x, clean[0].y - clean[clean.length - 1].y) <= 1 ? clean.slice(0, -1) : clean;
     const big = closed ? Math.abs(shoelace(shape)) >= MIN_AREA_MM2 : length >= MIN_ROD_MM;
-    if (shape.length >= fewest && big) onFinish(shape);
+    if (shape.length >= fewest && big) onFinish(shape, keep);
     else onCancel();
   };
 
   /** A point put at the pointer: an area closes on a click by its first point; a shape that takes a
    *  fixed number of points (a run's two, a sail's four) ends on the last of them. */
-  const add = (q: Point, clientX: number, clientY: number) => {
+  const add = (q: Point, clientX: number, clientY: number, keep?: boolean) => {
     const first = pts[0];
     if (closed && first && pts.length >= fewest) {
       const fp = ctx.clientToMm(clientX, clientY);
@@ -140,7 +149,7 @@ export function RodDrawPane({
       }
     }
     const next = [...pts, q];
-    if (maxPoints && next.length >= maxPoints) finish(next);
+    if (maxPoints && next.length >= maxPoints) finish(next, keep);
     else setPts(next);
   };
 
@@ -193,10 +202,26 @@ export function RodDrawPane({
         width={2e7}
         height={2e7}
         fill="transparent"
-        className="cursor-crosshair"
+        className={"cursor-crosshair" + (drag ? " touch-none" : "")}
         // The left button draws and nothing else; the middle still pans the canvas mid-rod.
         onPointerDown={(e) => {
-          if (e.button === 0) e.stopPropagation();
+          if (e.button !== 0) return;
+          e.stopPropagation();
+          if (!drag) return;
+          // A press-drag: from the point already put, else from the press itself, to the release.
+          const from = pts.length ? pts : [nextPoint(e.clientX, e.clientY, e.altKey, undefined, [])];
+          startPointerGesture(e, {
+            onStart: () => {
+              if (!pts.length) setPts(from);
+            },
+            // The live line is painted by the pane's own pointermove, with this render's points.
+            onMove: (ev) => {
+              pointer.current = { x: ev.clientX, y: ev.clientY, alt: ev.altKey };
+            },
+            onEnd: (ev, moved) => {
+              if (moved) finish([...from, nextPoint(ev.clientX, ev.clientY, ev.altKey, undefined, from)], ev.shiftKey);
+            },
+          });
         }}
         onPointerMove={(e) => {
           pointer.current = { x: e.clientX, y: e.clientY, alt: e.altKey };
@@ -206,7 +231,7 @@ export function RodDrawPane({
           e.stopPropagation();
           if (e.detail > 1) return; // the second click of a double-click ends it, below
           const cm = parseFloat(typed);
-          add(nextPoint(e.clientX, e.clientY, e.altKey, typed && cm > 0 ? cm * 10 : undefined), e.clientX, e.clientY);
+          add(nextPoint(e.clientX, e.clientY, e.altKey, typed && cm > 0 ? cm * 10 : undefined), e.clientX, e.clientY, e.shiftKey);
           setTyped("");
         }}
         onDoubleClick={(e) => {

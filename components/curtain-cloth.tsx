@@ -150,10 +150,12 @@ function CurtainClothView({
 /** A ROD's own marks (spec 2026-11-07 §6.2): the rod as a hairline along its path and a small filled
  *  square at each post — none under a cantilevered end, which is what tells a ר from an L. Sized in
  *  the caller's mm (the canvas passes a screen-steady size, print a printed one). */
-function RodMarksView({ path, posts, postMm, ink = "var(--color-ink)" }: { path: Point[]; posts: Point[]; postMm: number; ink?: string }) {
+function RodMarksView({ path, posts, postMm, ink = "var(--color-ink)", rodMm, fill }: { path: Point[]; posts: Point[]; postMm: number; ink?: string; /** The rod's real thickness, in the caller's mm: drawn as a band that wide under the hairline (a bare rod, a heavy one). Absent = the hairline alone. */ rodMm?: number; /** The band's colour (the rod's shade). Absent = the ink, faint. */ fill?: string }) {
+  const pts = path.map((q) => `${q.x},${q.y}`).join(" ");
   return (
     <g className="pointer-events-none">
-      <polyline points={path.map((q) => `${q.x},${q.y}`).join(" ")} fill="none" stroke={ink} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+      {rodMm ? <polyline points={pts} fill="none" stroke={fill ?? ink} strokeOpacity={fill ? 1 : 0.35} strokeWidth={rodMm} strokeLinecap="butt" strokeLinejoin="round" /> : null}
+      <polyline points={pts} fill="none" stroke={ink} strokeWidth={1} vectorEffect="non-scaling-stroke" />
       {posts.map((q, i) => (
         <rect key={i} x={q.x - postMm / 2} y={q.y - postMm / 2} width={postMm} height={postMm} fill={ink} />
       ))}

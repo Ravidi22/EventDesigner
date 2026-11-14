@@ -249,6 +249,7 @@ export async function isPlacedAnywhere(variantIds: string[]): Promise<boolean> {
           select 1
           from jsonb_array_elements(${designDocuments.content} -> 'placements') as placement
           where placement ->> 'variantId' in (${idList}) or placement ->> 'vessel' in (${idList})
+             or placement -> 'aisle' ->> 'piece' in (${idList})
         )`,
       ),
     )
@@ -259,9 +260,11 @@ export async function isPlacedAnywhere(variantIds: string[]): Promise<boolean> {
   const [vessel] = await db()
     .select({ one: sql<number>`1` })
     .from(products)
-    .where(and(eq(products.organizationId, organizationId), eq(products.archived, false), sql`${products.categoryFields} ->> 'vessel' in (${idList})`))
+    .where(and(eq(products.organizationId, organizationId), eq(products.archived, false), sql`(${products.categoryFields} ->> 'vessel' in (${idList}) or ${products.categoryFields} ->> 'piece' in (${idList}))`))
     .limit(1);
 
+  // (…the same read holds the PIECE an aisle row is lined with — lib/catalog/aisle.ts — deleted, the
+  // aisle would stand bare on every plan and count nothing.)
   // …or a part of a composite, which is a design waiting to be placed (isPartOfComposite).
   return !!hit || !!vessel || (await isPartOfComposite(variantIds, organizationId));
 }

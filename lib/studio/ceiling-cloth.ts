@@ -76,6 +76,14 @@ export const SAIL_MAX_TIES = 4;
 /** How much of its width a swag keeps where it is gathered to its line, at the end of every
  *  scallop — the plan's pinch and the room's. */
 export const GATHER = 0.7;
+/** …and ONE swag from point to point is bunched at the two points it hangs from: a third of its width
+ *  there (2026-11-13 — a single scallop is tied at its ends, not caught up along a line). */
+export const SWAG_GATHER = 0.35;
+/** How much of its width a run keeps where it is gathered: a lone swag's ends, a scalloped run's
+ *  gathers. */
+export function gatherOf(run: Pick<ClothRun, "waves">): number {
+  return run.waves === 1 ? SWAG_GATHER : GATHER;
+}
 /** The narrowest cloth and the shortest scallop honoured — a typo must not draw a hairline. */
 const MIN_WIDTH_MM = 100;
 
@@ -94,11 +102,16 @@ export function wavesFor(lengthMm: number, waves?: number): number {
 
 // ── A drape's runs ──────────────────────────────────────────────────────────────────────────────
 
+/** The cloth never comes closer to the floor than this, however deep it is asked to hang. */
+const SWAG_FLOOR_MM = 200;
+
 /** One swag of cloth in the air, as every reader draws it. */
 export interface ClothRun {
   a: Point;
   b: Point;
   heightMm: number;
+  /** End B's height when the swag is not level (RunRail.heightBMm). Absent = `heightMm`. */
+  heightBMm?: number;
   sagMm: number;
   widthMm: number;
   waves: number;
@@ -119,7 +132,11 @@ export function clothRuns(rail: RunRail | CanopyRail): ClothRun[] {
   const out = lines
     .map((r) => {
       const lengthMm = Math.hypot(r.b.x - r.a.x, r.b.y - r.a.y);
-      return { a: r.a, b: r.b, heightMm: r.heightMm, sagMm: Math.max(0, rail.sagMm ?? RUN_SAG_MM), widthMm, waves: wavesFor(lengthMm, rail.waves), lengthMm, lights: rail.lights === true };
+      const tilt: { heightBMm?: number } = rail.type === "run" && rail.heightBMm !== undefined && rail.heightBMm !== rail.heightMm ? { heightBMm: rail.heightBMm } : {};
+      // The cloth never hangs to the floor: a depth typed before an end was lowered is held above it.
+      const lowEnd = Math.min(r.heightMm, tilt.heightBMm ?? r.heightMm);
+      const sagMm = Math.min(Math.max(0, rail.sagMm ?? RUN_SAG_MM), Math.max(0, lowEnd - SWAG_FLOOR_MM));
+      return { a: r.a, b: r.b, heightMm: r.heightMm, ...tilt, sagMm, widthMm, waves: wavesFor(lengthMm, rail.waves), lengthMm, lights: rail.lights === true };
     })
     .filter((r) => r.lengthMm >= 1);
   runsCache.set(rail, out);
@@ -139,7 +156,8 @@ export function runGathers(run: ClothRun): Point[] {
 /** How far across its line the cloth reaches, a fraction `s` (0..1) along the run: the full width at
  *  the middle of every scallop, GATHER of it where it is gathered. */
 export function runHalfWidth(run: ClothRun, s: number): number {
-  return (run.widthMm / 2) * (GATHER + (1 - GATHER) * Math.abs(Math.sin(Math.PI * run.waves * s)));
+  const g = gatherOf(run);
+  return (run.widthMm / 2) * (g + (1 - g) * Math.abs(Math.sin(Math.PI * run.waves * s)));
 }
 
 /** How far below its height the cloth hangs, a fraction `s` along the run: `sagMm` at the middle of
@@ -148,12 +166,178 @@ export function runDrop(run: ClothRun, s: number): number {
   return run.sagMm * Math.abs(Math.sin(Math.PI * run.waves * s));
 }
 
+/** The height of the LINE the cloth hangs from, a fraction `s` along the run: A's height at 0, B's at
+ *  1 (a level run's one height all along). */
+export function runTop(run: ClothRun, s: number): number {
+  return run.heightMm + ((run.heightBMm ?? run.heightMm) - run.heightMm) * s;
+}
+
+/** How high the cloth itself is there: its line less its drop. */
+export function runZ(run: ClothRun, s: number): number {
+  return runTop(run, s) - runDrop(run, s);
+}
+
+/** The swag's LOWEST point from the floor — the headroom under it. Walked, not solved: a tilted swag's
+ *  low point is neither its middle nor its low end. */
+export function runLowestMm(run: ClothRun): number {
+  const steps = Math.max(24, run.waves * 16);
+  let low = Infinity;
+  for (let i = 0; i <= steps; i++) low = Math.min(low, runZ(run, i / steps));
+  return Math.round(low);
+}
+
+/** The cloth's own length along its curve, end to end — what is cut, as against the plan's straight
+ *  line the row is billed by. Walked in the room (plan distance and height both). */
+export function runClothLengthMm(run: ClothRun): number {
+  const steps = Math.max(48, run.waves * 24);
+  let sum = 0;
+  let prev = runZ(run, 0);
+  for (let i = 1; i <= steps; i++) {
+    const z = runZ(run, i / steps);
+    sum += Math.hypot(run.lengthMm / steps, z - prev);
+    prev = z;
+  }
+  return Math.round(sum);
+}
+
+// ── One swag, point to point (2026-11-13; the user: "drag it from point to point and put the curve of
+// it (depth)") ───────────────────────────────────────────────────────────────────────────────────
+//
+// A swag is drawn with one press-drag, and its depth is a HANDLE on the plan. A plan cannot show a
+// sag — it is straight down — so the swag's PROFILE is folded onto the plan beside its line (the
+// gate's convention, lib/catalog/symbols.ts): the curve the cloth makes seen from the side, 1:1, with
+// the handle at its lowest point. Pulling the handle away from the line deepens the swag.
+
+/** A new swag's depth as a share of its length, and the least and most that gives. */
+export const SWAG_SAG_SHARE = 0.12;
+const SWAG_SAG_MIN_MM = 200;
+const SWAG_SAG_MAX_MM = 1500;
+
+/** The depth a newly drawn swag of `lengthMm` starts with: 12% of its length, whole centimetres. */
+export function swagSagFor(lengthMm: number): number {
+  return Math.round(Math.min(SWAG_SAG_MAX_MM, Math.max(SWAG_SAG_MIN_MM, lengthMm * SWAG_SAG_SHARE)) / 10) * 10;
+}
+
+/** A new swag from A to B: ONE scallop the whole way, its depth written (swagSagFor) so stretching it
+ *  later keeps the curve the designer set, each end at its own height when they differ. */
+export function newSwag(a: Point, b: Point, heightMm: number, heightBMm?: number): RunRail {
+  const lengthMm = Math.hypot(b.x - a.x, b.y - a.y);
+  const hA = Math.round(heightMm);
+  const hB = heightBMm === undefined ? hA : Math.round(heightBMm);
+  return { type: "run", a: round(a), b: round(b), heightMm: hA, ...(hB !== hA ? { heightBMm: hB } : {}), waves: 1, sagMm: swagSagFor(lengthMm) };
+}
+
+/** A run's two end heights, A then B. */
+export function runEndHeights(rail: RunRail): [number, number] {
+  return [rail.heightMm, rail.heightBMm ?? rail.heightMm];
+}
+
+/** A run with end `which` (0 = A, 1 = B) at `heightMm` — the OTHER end stays where it is (a level
+ *  run stops being level); B at A's height is stored as nothing. */
+export function runEndHeight(rail: RunRail, which: 0 | 1, heightMm: number): RunRail {
+  const [hA, hB] = runEndHeights(rail);
+  const a = which === 0 ? Math.max(0, Math.round(heightMm)) : hA;
+  const b = which === 1 ? Math.max(0, Math.round(heightMm)) : hB;
+  const { heightBMm: _was, ...rest } = rail;
+  void _was;
+  return { ...rest, heightMm: a, ...(b !== a ? { heightBMm: b } : {}) };
+}
+
+/** The height of another swag's end standing exactly at `p` — a swag drawn from (or to) a point
+ *  another one hangs from is hung from the same hook, at the same height. Undefined when none is. */
+export function endHeightAt(p: Point, rails: readonly (Rail | null | undefined)[]): number | undefined {
+  for (const r of rails) {
+    if (r?.type !== "run") continue;
+    const [hA, hB] = runEndHeights(r);
+    if (Math.hypot(r.a.x - p.x, r.a.y - p.y) <= 1) return hA;
+    if (Math.hypot(r.b.x - p.x, r.b.y - p.y) <= 1) return hB;
+  }
+  return undefined;
+}
+
+/** The deepest a swag may hang: never nearer the floor than SWAG_FLOOR_MM under its lower end, never
+ *  deeper than it is long. */
+export function maxSagMm(run: ClothRun): number {
+  return Math.max(0, Math.round(Math.min(Math.min(run.heightMm, run.heightBMm ?? run.heightMm) - SWAG_FLOOR_MM, run.lengthMm)));
+}
+
+/** Where a swag's depth is held on the plan: `base` on its line at the middle of its middle scallop,
+ *  `n` the unit way its profile is folded (down the screen, else toward +x — one side, always the
+ *  same for one line), `at` the handle itself, `sagMm` out from the line. */
+export function swagHandle(run: ClothRun): { s: number; base: Point; n: Point; at: Point } {
+  const u = { x: (run.b.x - run.a.x) / (run.lengthMm || 1), y: (run.b.y - run.a.y) / (run.lengthMm || 1) };
+  let n = { x: -u.y, y: u.x };
+  if (n.y < -1e-9 || (Math.abs(n.y) <= 1e-9 && n.x < 0)) n = { x: -n.x, y: -n.y };
+  const s = (Math.floor((run.waves - 1) / 2) + 0.5) / run.waves;
+  const base = { x: run.a.x + (run.b.x - run.a.x) * s, y: run.a.y + (run.b.y - run.a.y) * s };
+  return { s, base, n, at: { x: base.x + n.x * run.sagMm, y: base.y + n.y * run.sagMm } };
+}
+
+/** The swag's profile folded onto the plan: its drop laid out sideways from its line, `per` points a
+ *  scallop — the dashed curve the handle rides. */
+export function swagProfile(run: ClothRun, per = 16): Point[] {
+  const { n } = swagHandle(run);
+  const steps = Math.max(2, run.waves * per);
+  const out: Point[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const s = i / steps;
+    const d = runDrop(run, s);
+    out.push({ x: run.a.x + (run.b.x - run.a.x) * s + n.x * d, y: run.a.y + (run.b.y - run.a.y) * s + n.y * d });
+  }
+  return out;
+}
+
+/** The depth a handle dragged to `p` asks for: how far `p` is out from the line on the fold's side —
+ *  nothing on the other side, never past maxSagMm — in whole centimetres (`free`: millimetres). */
+export function sagFromPoint(run: ClothRun, p: Point, free = false): number {
+  const { base, n } = swagHandle(run);
+  const d = Math.min(maxSagMm(run), Math.max(0, (p.x - base.x) * n.x + (p.y - base.y) * n.y));
+  return free ? Math.round(d) : Math.round(d / 10) * 10;
+}
+
+/** A run or a canopy hanging `sagMm` deep. Always written — a depth set by hand is the rail's own,
+ *  zero included (a taut cloth). */
+export function withSag<R extends RunRail | CanopyRail>(rail: R, sagMm: number): R {
+  return { ...rail, sagMm: Math.max(0, Math.round(sagMm)) };
+}
+
+/** Where a swag's END lands when it is put or dragged to `raw`: on another swag's end within `tolMm`
+ *  (swags fanned from one point share it), else on a thing's MIDDLE (a column, a pergola's post) or
+ *  its corner, else on a wall's line, else where it is — `tied` says it caught something. `free`
+ *  (Alt) catches nothing. Nothing is stored of the catch: a swag's end is a point. */
+export function snapSwagEnd(raw: Point, ctx: TieContext, ends: readonly Point[], tolMm: number, free = false): { p: Point; tied: boolean } {
+  if (free) return { p: round(raw), tied: false };
+  let best: Point | null = null;
+  let bestD = tolMm;
+  for (const e of ends) {
+    const d = Math.hypot(e.x - raw.x, e.y - raw.y);
+    if (d <= bestD) {
+      bestD = d;
+      best = e;
+    }
+  }
+  if (best) return { p: round(best), tied: true };
+  for (const c of ctx.candidates) {
+    const o = c.host.outline;
+    const mid = { x: o.reduce((k, q) => k + q.x, 0) / o.length, y: o.reduce((k, q) => k + q.y, 0) / o.length };
+    const d = Math.hypot(mid.x - raw.x, mid.y - raw.y);
+    if (d <= bestD) {
+      bestD = d;
+      best = mid;
+    }
+  }
+  if (best) return { p: round(best), tied: true };
+  const tie = snapTie(raw, ctx, tolMm);
+  return { p: tie.p, tied: tie.to.kind !== "post" };
+}
+
 /** The swag as the plan draws it: a band along the run whose two edges swell out to the full width
  *  in every scallop and pinch in where it is gathered — one closed outline, `per` points a scallop. */
 export function runOutline(run: ClothRun, per = 8): Point[] {
   const u = { x: (run.b.x - run.a.x) / (run.lengthMm || 1), y: (run.b.y - run.a.y) / (run.lengthMm || 1) };
   const n = { x: -u.y, y: u.x };
-  const steps = Math.max(2, run.waves * per);
+  // One long swag is one long curve: enough points that its edge reads round.
+  const steps = Math.max(2, run.waves === 1 ? per * 3 : run.waves * per);
   const left: Point[] = [];
   const right: Point[] = [];
   for (let i = 0; i <= steps; i++) {
@@ -170,7 +354,7 @@ export function runOutline(run: ClothRun, per = 8): Point[] {
 export function runGatherTicks(run: ClothRun): [Point, Point][] {
   const u = { x: (run.b.x - run.a.x) / (run.lengthMm || 1), y: (run.b.y - run.a.y) / (run.lengthMm || 1) };
   const n = { x: -u.y, y: u.x };
-  const h = (run.widthMm / 2) * GATHER;
+  const h = (run.widthMm / 2) * gatherOf(run);
   return runGathers(run).map((c) => [
     { x: c.x + n.x * h, y: c.y + n.y * h },
     { x: c.x - n.x * h, y: c.y - n.y * h },
@@ -247,6 +431,7 @@ export function redrawnCloth<R extends RunRail | CanopyRail | SailRail>(prior: R
   if (prior.type !== "run" && prior.type !== "canopy") return next;
   const kept = {
     heightMm: prior.heightMm,
+    ...(prior.type === "run" && next.type === "run" && prior.heightBMm !== undefined ? { heightBMm: prior.heightBMm } : {}),
     ...(prior.sagMm !== undefined ? { sagMm: prior.sagMm } : {}),
     ...(prior.widthMm !== undefined ? { widthMm: prior.widthMm } : {}),
     ...(prior.waves !== undefined ? { waves: prior.waves } : {}),
@@ -488,6 +673,41 @@ if (isMain(import.meta.url)) {
   assert(runGatherTicks(r6).length === 5 && runGathers(r6)[2].x === 3000, "five gathers on four scallops — the ends and three between");
   assert(wavesFor(700) === 1 && wavesFor(10000, 3) === 3, "never fewer than one scallop");
 
+  // ONE SWAG, point to point: a single scallop, its depth 12% of its length and written; each end at
+  // its own height; the lowest point and the cloth's own length walked.
+  const swag = newSwag({ x: 0, y: 0 }, { x: 6000, y: 0 }, 3500);
+  const [sw] = clothRuns(swag);
+  assert(swag.waves === 1 && swag.sagMm === 720 && swag.heightBMm === undefined && sw.waves === 1 && sw.sagMm === 720, `a new swag is one scallop, 12% of its length deep (${swag.sagMm})`);
+  assert(swagSagFor(1000) === 200 && swagSagFor(30000) === 1500, "…never under 20 cm nor over 1.5 m to start with");
+  assert(runLowestMm(sw) === 2780 && near(runZ(sw, 0), 3500) && near(runZ(sw, 0.5), 2780), "a level swag hangs lowest at its middle");
+  assert(runClothLengthMm(sw) > 6150 && runClothLengthMm(sw) < 6300 && near(runClothLengthMm(clothRuns({ ...swag, sagMm: 0 })[0]), 6000), `the cloth along its curve is longer than its line (${runClothLengthMm(sw)})`);
+  const tilted = newSwag({ x: 0, y: 0 }, { x: 6000, y: 0 }, 4000, 2600);
+  const [tl] = clothRuns(tilted);
+  assert(tilted.heightBMm === 2600 && near(runTop(tl, 0), 4000) && near(runTop(tl, 1), 2600) && near(runTop(tl, 0.5), 3300), "an end at its own height: the line runs from one to the other");
+  assert(runLowestMm(tl) < 2600 - 100 && runLowestMm(tl) > 2600 - 720, `…and its low point is past its middle, under its low end (${runLowestMm(tl)})`);
+  assert(clothRuns(newCanopy([{ x: 0, y: 0 }, { x: 6000, y: 0 }, { x: 6000, y: 4000 }, { x: 0, y: 4000 }], 3800)).every((q) => q.heightBMm === undefined), "a canopy's runs are level");
+  const lowered = runEndHeight(swag, 1, 2800);
+  assert(lowered.heightMm === 3500 && lowered.heightBMm === 2800 && runEndHeight(lowered, 1, 3500).heightBMm === undefined, "an end's height is typed on its own; B back at A's is level again");
+  const raisedA = runEndHeight(swag, 0, 4200);
+  assert(raisedA.heightMm === 4200 && raisedA.heightBMm === 3500, "…and A raised leaves B where it was");
+  // The handle: at the middle, out from the line by the depth, on the screen's lower side; dragged, it
+  // sets the depth in whole centimetres, nothing behind the line, never to the floor.
+  const hd = swagHandle(sw);
+  assert(near(hd.base.x, 3000) && near(hd.at.y, 720) && hd.n.y === 1, "the depth's handle stands at the middle, its depth out from the line");
+  assert(swagHandle(clothRuns(newSwag({ x: 6000, y: 0 }, { x: 0, y: 0 }, 3500))[0]).n.y === 1 && swagHandle(clothRuns(newSwag({ x: 0, y: 0 }, { x: 0, y: 5000 }, 3500))[0]).n.x === 1, "…on the same side whichever way the swag was drawn");
+  assert(sagFromPoint(sw, { x: 3000, y: 1004 }) === 1000 && sagFromPoint(sw, { x: 100, y: 1004 }) === 1000 && sagFromPoint(sw, { x: 3000, y: -400 }) === 0, "dragged out it deepens by how far out it is; behind the line is taut");
+  assert(sagFromPoint(sw, { x: 3000, y: 9000 }) === 3300 && maxSagMm(sw) === 3300, "…and never nearer the floor than 20 cm");
+  assert(withSag(swag, 1000).sagMm === 1000 && withSag(swag, 0).sagMm === 0, "a depth set by hand is written, zero too");
+  assert(clothRuns(runEndHeight(withSag(swag, 3000), 1, 2200))[0].sagMm === 2000, "an end lowered after a deep curve was set: the cloth still stops 20 cm off the floor");
+  const prof = swagProfile(sw);
+  assert(prof.length === 17 && near(prof[8].y, 720) && near(prof[0].y, 0), "its profile is folded onto the plan: the curve the cloth makes from the side");
+  assert(swagHandle(r6).s === 0.375 && near(swagHandle(r6).base.x, 2250), "a run of several scallops holds its depth on a middle one");
+  assert(near(runHalfWidth(sw, 0), 600 * SWAG_GATHER) && near(runHalfWidth(sw, 0.5), 600) && gatherOf(r6) === GATHER, "one swag is bunched at the two points it hangs from; a scalloped run is gathered as it was");
+  assert(runOutline(sw).length === 2 * 25 && runGatherTicks(sw).length === 2, "…its edge one long curve, a tick at each end");
+  assert(endHeightAt({ x: 6000, y: 0 }, [null, tilted]) === 2600 && endHeightAt({ x: 0, y: 0 }, [tilted]) === 4000 && endHeightAt({ x: 3000, y: 0 }, [tilted]) === undefined, "a swag drawn from another's end hangs from the same hook, at its height");
+  const againSwag = redrawnCloth(tilted, newRun({ x: 0, y: 0 }, { x: 3000, y: 0 }, 3000));
+  assert(againSwag.heightBMm === 2600 && againSwag.waves === 1 && againSwag.sagMm === 720, "a swag drawn again keeps both its heights and its curve");
+
   // A canopy over a 6 × 4 m area, runs along x 1.2 m apart, carries its width to every run.
   const area: Point[] = [{ x: 0, y: 0 }, { x: 6000, y: 0 }, { x: 6000, y: 4000 }, { x: 0, y: 4000 }];
   const canopy = newCanopy(area, 3800);
@@ -533,6 +753,15 @@ if (isMain(import.meta.url)) {
   assert(onWall.to.kind === "wall" && onWall.to.wallId === "w" && near(onWall.to.t, 0.6, 1e-4) && onWall.p.y === 0, "a click by the wall ties to it, on its line");
   assert(snapTie({ x: 9950, y: 4000 }, tctx, 150).to.kind === "post", "an edge (a kerb) is no wall to tie to — a post");
   assert(snapTie({ x: 6000, y: 3000 }, tctx, 150).to.kind === "post" && snapTie({ x: 6000, y: 120 }, tctx, 150, true).to.kind === "post", "open ground is a post, and so is anything with Alt held");
+
+  // A swag's end: another swag's end first, then a thing's middle or corner, then a wall, else itself.
+  const others = [{ x: 5000, y: 5000 }];
+  assert(snapSwagEnd({ x: 5060, y: 4950 }, tctx, others, 150).p.x === 5000 && snapSwagEnd({ x: 5060, y: 4950 }, tctx, others, 150).tied, "an end by another swag's end shares its point");
+  const onMid = snapSwagEnd({ x: 3040, y: 1980 }, tctx, others, 150);
+  assert(onMid.tied && onMid.p.x === 3000 && onMid.p.y === 2000, "…by a thing's middle it goes to the middle");
+  assert(snapSwagEnd({ x: 2050, y: 1030 }, tctx, others, 150).p.x === 2000 && snapSwagEnd({ x: 6000, y: 120 }, tctx, others, 150).p.y === 0, "…to its corner, or onto a wall's line");
+  const loose = snapSwagEnd({ x: 6000.4, y: 3000 }, tctx, others, 150);
+  assert(!loose.tied && loose.p.x === 6000 && !snapSwagEnd({ x: 5060, y: 4950 }, tctx, others, 150, true).tied, "open air is where it is, and so is anything with Alt held");
 
   // A sail of three: the wall, the building's corner, a post — 3 m each by default.
   const sail = newSail([onWall, corner, snapTie({ x: 6000, y: 6000 }, tctx, 150)], () => defaultClothHeight({ x: 0, y: 0 }));

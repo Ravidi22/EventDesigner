@@ -21,7 +21,8 @@ import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { vesselOf } from "@/lib/catalog/vessel";
 import { VesselMark } from "@/components/vessel-mark";
-import { resolve } from "@/lib/studio/catalog-resolver";
+import { aisleViewOf, resolve } from "@/lib/studio/catalog-resolver";
+import { AisleDrawing } from "@/components/placed-piece";
 import { borderOf } from "@/lib/catalog/border";
 import { isLedStrip } from "@/lib/venues/led";
 import { isCeilingClothCategory } from "@/lib/studio/ceiling-cloth";
@@ -63,6 +64,21 @@ function PreviewDrawn({ product, className }: { product: Product; className?: st
     return (
       <svg viewBox="-2300 -1500 4600 3000" className={"text-ink-soft " + (className ?? "")} role="img" aria-label="תצוגה מקדימה של המראה על התוכנית">
         {product.category === "sails" ? <SailSymbol w={4000} h={2600} tone={colour} ink="currentColor" /> : <CeilingDrapeSymbol L={4200} D={1400} tone={colour} ink="currentColor" />}
+      </svg>
+    );
+  }
+
+  // A ROD (the built-in מוט וילון) previews as itself: the rod at its row's thickness, a post at each
+  // end — never as a band of cloth.
+  if (product.category === "curtain-rods") {
+    const colour = swatch ?? product.appearance?.style?.fill ?? "#8E8A9C";
+    const thick = Math.max(30, Math.min(300, product.dimensions.depthMm || 30));
+    return (
+      <svg viewBox="-1400 -700 2800 1400" className={"text-ink-soft " + (className ?? "")} role="img" aria-label="תצוגה מקדימה של המראה על התוכנית">
+        <rect x={-1200} y={-thick / 2} width={2400} height={thick} fill={colour} stroke="currentColor" strokeOpacity={0.6} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        {[-1200, 1200].map((x) => (
+          <rect key={x} x={x - 70} y={-70} width={140} height={140} fill="currentColor" />
+        ))}
       </svg>
     );
   }
@@ -114,6 +130,22 @@ function planArt(product: Product): { art: ReactNode; w: number; h: number; reac
   // will draw it rather than as a second opinion about it.
   const { w, h } = footprintBounds(f);
   // The category's picture, when it has one — the card shows the item the way the plan will.
+  // An aisle previews as its lining — the piece its row names down both sides, the runner between.
+  const aisle = aisleViewOf(product);
+  if (aisle) {
+    return {
+      art: (
+        <>
+          <AisleDrawing view={aisle} detail={false} />
+          <FootprintShape footprint={f} fill="none" stroke={resolved.stroke} strokeOpacity={0.3} strokeWidth={1} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
+        </>
+      ),
+      w,
+      h,
+      reach: 0,
+      round: false,
+    };
+  }
   const symbol = symbolOf(product, f);
   const surfaced = !symbol && anySurface(product.appearance);
   // The vase its row is made in (lib/catalog/vessel.ts), drawn with it, as the plan will.

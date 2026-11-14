@@ -373,7 +373,7 @@ export const STANDARD_KIT: StandardItem[] = [
   // Per UNIT, not per m²: a box item's m² is its FOOTPRINT (lib/design-document/measure.ts — width ×
   // depth), which for a 4m × 10cm screen is 0.4 m² of floor, not the 10 m² of picture it lights.
   kit("builtin-led-screen", { name: "מסך לד", category: "led-screens", layer: "floor", dimensions: { widthMm: 4000, depthMm: 100, heightMm: 2500 }, spec: "קיר לד 4×2.5 מ׳ — הצד הקדמי מאיר" }),
-  kit("builtin-curtain-rod", { name: "מוט וילון", category: "curtain-rods", layer: "ceiling", dimensions: { widthMm: 1000, depthMm: 30, heightMm: 0 }, spec: "מוט עומד לווילון — מחויב לפי המטרים של הווילון", priceUnit: "m" }),
+  kit("builtin-curtain-rod", { name: "מוט וילון", category: "curtain-rods", layer: "ceiling", dimensions: { widthMm: 3000, depthMm: 30, heightMm: 0 }, spec: "מוט עומד לווילון — מניחים אותו על התוכנית ותולים עליו וילון; מחויב לפי המטרים של המוט", priceUnit: "m" }),
   kit("builtin-ceiling-drape", { name: "בד תקרה", category: "ceiling-drapes", layer: "ceiling", dimensions: { heightMm: 0 }, spec: "בד בקשתות בין שתי נקודות, או על שטח", priceUnit: "m" }),
   kit("builtin-sail", { name: "מפרש", category: "sails", layer: "ceiling", dimensions: { heightMm: 0 }, spec: "בד מתוח בין שלוש או ארבע נקודות קשירה", priceUnit: "m2" }),
   // Slats are the roof a row with no drawing style has (SYMBOL_STYLES.pergola), so none is stored.

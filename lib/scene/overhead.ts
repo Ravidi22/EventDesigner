@@ -33,11 +33,12 @@ import { isMain } from "../self-check";
 import type { InstanceRequest, ItemBuild } from "./collect";
 import { type ItemContext, fallbackBody } from "./item-context";
 import { flowerBuild } from "./flowers";
+import { shapedFlowersBody } from "./flower-cover";
 import { applyTransform } from "./frame";
 import { ENVELOPE, clothMaterial, crystalMaterial, emissiveMaterial, foliageMaterial, glassMaterial, metalMaterial } from "./materials";
 import { type MaterialRef, type NodeTag, type Part, type Vec3, vec3 } from "./types";
 import { frondSpan } from "./organic";
-import { runDrop, runHalfWidth, runLights, type ClothRun } from "@/lib/studio/ceiling-cloth";
+import { runDrop, runHalfWidth, runLights, runTop, type ClothRun } from "@/lib/studio/ceiling-cloth";
 
 // ── the constants ───────────────────────────────────────────────────────────────────────────────
 
@@ -81,6 +82,14 @@ export interface CurtainOpts {
   style?: CurtainStyle;
   dropMm?: number;
   posts?: Point[];
+  /** A free-standing rod's own thickness and its posts' (lib/studio/rail.ts rodThickMm / rodPostMm).
+   *  Absent = the 3 cm rod on 5 cm posts every curtain has had. */
+  rodMm?: number;
+  postMm?: number;
+  /** A BARE ROD — the rod and its posts with no cloth on them (the built-in מוט וילון placed by
+   *  itself), in `rodColour` when its row has a shade. */
+  bare?: boolean;
+  rodColour?: string;
 }
 /** The rod's and a hung arrangement's cable: the plan's muted metal, not the designer's tone. */
 const ROD = "#b6b2c4";
@@ -866,11 +875,47 @@ export function hungFlowersBody(ctx: ItemContext): ItemBuild {
   }
   const tag: NodeTag = ctx.tag ?? (ctx.product ? { type: "flowers", label: ctx.product.name } : { type: "flowers" });
   const H = Math.max(40, ctx.heightMm > 0 ? ctx.heightMm : Math.round(r * 1.2));
-  const b = flipZ(flowerBuild(ctx.flowers, H, tag), H);
+  // Flowers that follow their shape (a hoop, a flower ceiling, a cloud of any outline): built
+  // upright and turned over, so the cap of every shape looks DOWN at the room.
+  const shaped = ctx.flowers.form === "shape";
+  const b = flipZ(shaped ? shapedFlowersBody(ctx, tag) : flowerBuild(ctx.flowers, H, tag), H);
   if (ctx.flowers.form === "cascade") hangFall(b, ctx.flowers, H);
-  b.parts.push(cyl(r, BASE_DISC_MM, vec3(0, 0, H - BASE_DISC_MM), b.material));
+  if (!shaped) b.parts.push(cyl(r, BASE_DISC_MM, vec3(0, 0, H - BASE_DISC_MM), b.material));
+  if (ctx.flowers.trailMm) hangStrands(b, ctx.flowers.trailMm, H, tag);
   b.parts.push(...chainParts(H, ctx.chainMm, r * 0.6, cable));
   return b;
+}
+
+/** A strand is cut to one of this many lengths (one instanced geometry each); a bead every this far
+ *  down it; every this-many-th low head lets one fall. */
+const STRAND_LENGTHS = 5;
+const STRAND_BEAD_MM = 46;
+const STRAND_EVERY = 2;
+const STRAND_MAX = 420;
+
+/** STRANDS under a hung piece (FlowerDrawSpec.trailMm — wisteria under a flower ceiling): from the
+ *  heads on its underside, a thread of small florets each, the longest `trailMm`, in the head's own
+ *  colour a little paler toward the tip. Instanced per colour and length. */
+function hangStrands(build: ItemBuild, trailMm: number, H: number, tag: NodeTag): void {
+  const low = build.instanced.filter((r) => r.key.startsWith("flower:") && r.parts[0]?.shape === "bloom" && r.at.at.z < H * 0.55);
+  const every = Math.max(STRAND_EVERY, Math.ceil(low.length / STRAND_MAX));
+  low.forEach((r, i) => {
+    if (i % every) return;
+    const colour = r.material?.colour ?? "#d9c7e8";
+    // Seeded by where it hangs: lengths wander, the long ones the fewest.
+    const u = Math.abs(Math.sin(r.at.at.x * 12.9898 + r.at.at.y * 78.233) * 43758.5453) % 1;
+    const step = 1 + Math.floor(u * u * STRAND_LENGTHS);
+    const len = Math.max(120, (trailMm * step) / STRAND_LENGTHS);
+    const beads = Math.max(3, Math.round(len / STRAND_BEAD_MM));
+    const parts: Part[] = [{ shape: "cylinder", rTop: 1.5, rBottom: 1.5, h: len, at: vec3(0, 0, -len), segments: 5, material: foliageMaterial("#7d9a6e") }];
+    for (let k = 0; k < beads; k++) {
+      const t = (k + 0.6) / beads;
+      // Fuller in the middle, a point at the tip — a raceme.
+      const rr = 9 + 13 * Math.sin(Math.PI * Math.min(1, t * 1.15)) * (1 - 0.45 * t);
+      parts.push({ shape: "blob", r: rr, at: vec3(Math.sin(k * 2.4) * rr * 0.5, Math.cos(k * 2.4) * rr * 0.5, -len * t), seed: k + 1, lumps: 6, rough: 0.2, detail: 1 });
+    }
+    build.instanced.push({ key: `strand:${colour}:${step}:${Math.round(trailMm)}`, parts, material: { colour, kind: "petal" }, tag, at: { at: vec3(r.at.at.x, r.at.at.y, r.at.at.z), rotationDeg: Math.round(u * 360) }, castShadow: false });
+  });
 }
 
 // ── dispatch ────────────────────────────────────────────────────────────────────────────────────
@@ -907,10 +952,15 @@ export function curtainBody(path: Point[], topMm: number, colour: string, tag: N
   // drop: the cloth hangs from the rail down `dropMm`, the floor when absent or longer.
   const pleat = CURTAIN_PLEATS[opts.style ?? "waves"] ?? CURTAIN_PLEATS.waves;
   const drop = opts.dropMm && opts.dropMm > 0 && opts.dropMm < h ? opts.dropMm : h;
-  b.parts.push({ shape: "ribbon", path, h: drop, at: vec3(0, 0, h - drop), pleatMm: pleat.pleatMm, amplitudeMm: pleat.amplitudeMm });
+  if (!opts.bare) b.parts.push({ shape: "ribbon", path, h: drop, at: vec3(0, 0, h - drop), pleatMm: pleat.pleatMm, amplitudeMm: pleat.amplitudeMm });
+  // The rod's own section and its posts' (a typed thickness — lib/studio/rail.ts), in its shade when
+  // it is a bare rod with one.
+  const rodR = opts.rodMm && opts.rodMm > 0 ? opts.rodMm / 2 : ROD_R_MM;
+  const post = opts.postMm && opts.postMm > 0 ? opts.postMm : POST_MM;
+  const metal = metalMaterial(opts.rodColour ?? ROD);
   // A free-standing rod's posts (spec 2026-11-07 §6.2): a square post from the floor to the rod at
   // every end and bend but a cantilevered tip.
-  for (const q of opts.posts ?? []) b.parts.push({ shape: "box", w: POST_MM, d: POST_MM, h: h + ROD_ABOVE_MM + ROD_R_MM, at: vec3(q.x, q.y, 0), material: metalMaterial(ROD) });
+  for (const q of opts.posts ?? []) b.parts.push({ shape: "box", w: post, d: post, h: h + ROD_ABOVE_MM + rodR, at: vec3(q.x, q.y, 0), material: metal });
   // The rail, one length per stretch of the path — a single rod on a straight wall, bent round the
   // bow of a curved one (a straight rod from end to end would cut through the room).
   for (let i = 1; i < path.length; i++) {
@@ -921,7 +971,7 @@ export function curtainBody(path: Point[], topMm: number, colour: string, tag: N
     // A cylinder grows up from its base; tilted 90° about its own x axis AFTER rotDeg (types.ts
     // Part) it lies along its turned +y — rotDeg = bearing − 90 lays that along the stretch.
     const bearing = deg(Math.atan2(z.y - a.y, z.x - a.x));
-    b.parts.push({ shape: "cylinder", rTop: ROD_R_MM, rBottom: ROD_R_MM, h: len, at: vec3(a.x, a.y, h + ROD_ABOVE_MM), rotDeg: bearing - 90, tiltDeg: 90, segments: 10, material: metalMaterial(ROD) });
+    b.parts.push({ shape: "cylinder", rTop: rodR, rBottom: rodR, h: len, at: vec3(a.x, a.y, h + ROD_ABOVE_MM), rotDeg: bearing - 90, tiltDeg: 90, segments: 10, material: metal });
   }
   return b;
 }
@@ -933,6 +983,15 @@ export function curtainBody(path: Point[], topMm: number, colour: string, tag: N
 const SAIL_GRID = 12;
 const SWAG_PER_WAVE = 12;
 const SWAG_ACROSS = 4;
+/** ONE swag from point to point (2026-11-13) is a long curve seen whole and from below: a finer grid,
+ *  a belly across its width as cloth hangs between its two edges, and soft folds along it. */
+const SWAG_ONE_ALONG = 36;
+const SWAG_ONE_ACROSS = 16;
+/** How far the cloth's middle bellies under its edges, as a share of its half-width there. */
+const SWAG_BELLY = 0.22;
+/** Its lengthwise folds: how many across the cloth, and how deep the deepest hangs, mm. */
+const SWAG_FOLDS = 3;
+const SWAG_FOLD_MM = 26;
 /** A sail's post of its own: a pole 4 cm across, from the ground to its tie. */
 const SAIL_POST_R_MM = 40;
 
@@ -992,22 +1051,41 @@ export function sailBody(sheet: { polygon: Point[]; heights: number[]; sagMm: nu
   return b;
 }
 
+/** How far ONE swag's cloth hangs under its own curve, `s` along it and `t` (−1…1) across it: the
+ *  belly between its two edges and its soft lengthwise folds, both fading to nothing at the two points
+ *  it is tied to. Nothing for a scalloped run. The grid and the lights woven in both read it. */
+function swagUnder(run: ClothRun, s: number, t: number): number {
+  if (run.waves !== 1) return 0;
+  const open = Math.sin(Math.PI * s);
+  const belly = SWAG_BELLY * runHalfWidth(run, s) * (1 - t * t) * open;
+  const folds = Math.abs(t) < 1 ? (SWAG_FOLD_MM * open * (1 + Math.cos(Math.PI * SWAG_FOLDS * t))) / 2 : 0;
+  return belly + folds;
+}
+
 /** One swag as a grid (Part "sheet"): along the run, its height less its drop in every scallop
  *  (ceiling-cloth.ts runDrop); across it, as wide as the plan draws it there (runHalfWidth — gathered
  *  to GATHER of its width at every gather), its middle a little lower than its edges, as cloth hangs. */
 export function swagGrid(run: ClothRun): Vec3[][] {
   const u = { x: (run.b.x - run.a.x) / (run.lengthMm || 1), y: (run.b.y - run.a.y) / (run.lengthMm || 1) };
   const nrm = { x: -u.y, y: u.x };
-  const cols = Math.max(8, run.waves * SWAG_PER_WAVE);
+  const one = run.waves === 1;
+  const cols = one ? SWAG_ONE_ALONG : Math.max(8, run.waves * SWAG_PER_WAVE);
+  const across = one ? SWAG_ONE_ACROSS : SWAG_ACROSS;
   const rows: Vec3[][] = [];
-  for (let k = 0; k <= SWAG_ACROSS; k++) {
-    const t = (k / SWAG_ACROSS) * 2 - 1;
+  for (let k = 0; k <= across; k++) {
+    const t = (k / across) * 2 - 1;
     const row: Vec3[] = [];
     for (let i = 0; i <= cols; i++) {
       const s = i / cols;
       const drop = runDrop(run, s);
       const half = runHalfWidth(run, s);
-      row.push(vec3(run.a.x + (run.b.x - run.a.x) * s + nrm.x * t * half, run.a.y + (run.b.y - run.a.y) * s + nrm.y * t * half, run.heightMm - drop - 0.15 * drop * (1 - t * t)));
+      if (one) {
+        // Its two edges ride the swag's own curve; between them the cloth bellies, and hangs in soft
+        // folds that fade to nothing at the two points it is tied to (and at its edges).
+        row.push(vec3(run.a.x + (run.b.x - run.a.x) * s + nrm.x * t * half, run.a.y + (run.b.y - run.a.y) * s + nrm.y * t * half, runTop(run, s) - drop - swagUnder(run, s, t)));
+        continue;
+      }
+      row.push(vec3(run.a.x + (run.b.x - run.a.x) * s + nrm.x * t * half, run.a.y + (run.b.y - run.a.y) * s + nrm.y * t * half, runTop(run, s) - drop - 0.15 * drop * (1 - t * t)));
     }
     rows.push(row);
   }
@@ -1029,7 +1107,13 @@ export function ceilingDrapeBody(runs: readonly ClothRun[], colour: string): Ite
   for (const run of runs) {
     b.parts.push({ shape: "sheet", rows: swagGrid(run), at: vec3(0, 0, 0) });
     for (const q of runLights(run)) {
-      const at = vec3(q.x, q.y, run.heightMm - q.dropMm - FAIRY_R_MM * 2);
+      // How far along the run this light is — its line's height there (a swag hung end to end at two
+      // heights, ceiling-cloth.ts runTop).
+      const s = run.lengthMm > 0 ? ((q.x - run.a.x) * (run.b.x - run.a.x) + (q.y - run.a.y) * (run.b.y - run.a.y)) / (run.lengthMm * run.lengthMm) : 0;
+      // …and how far across the cloth, for the belly it hangs in there.
+      const off = run.lengthMm > 0 ? ((q.x - run.a.x) * -(run.b.y - run.a.y) + (q.y - run.a.y) * (run.b.x - run.a.x)) / run.lengthMm : 0;
+      const half = runHalfWidth(run, s);
+      const at = vec3(q.x, q.y, runTop(run, s) - q.dropMm - swagUnder(run, s, half > 0 ? off / half : 0) - FAIRY_R_MM * 2);
       b.parts.push(sphere(FAIRY_R_MM, at, bulb, 6));
       b.emitters.push({ at, radiusMm: FAIRY_R_MM * 5, colour: FAIRY, strength: FAIRY_STRENGTH });
     }
@@ -1293,6 +1377,12 @@ if (isMain(import.meta.url)) {
   const onRod = curtainBody([{ x: 0, y: 0 }, { x: 3000, y: 0 }, { x: 3000, y: 2000 }], 2400, "#ffffff", { type: "item" }, { posts: [{ x: 0, y: 0 }, { x: 3000, y: 0 }] });
   const posts = onRod.parts.filter((p) => p.shape === "box");
   assert(posts.length === 2 && posts.every((p) => p.shape === "box" && p.at.z === 0 && p.h > 2400), "a rod's two posts stand from the floor past the rod, none under its arm");
+  assert(posts.every((p) => p.shape === "box" && p.w === POST_MM) && onRod.parts.some((p) => p.shape === "cylinder" && p.rTop === ROD_R_MM), "…the 3 cm rod on 5 cm posts it always was, with no thickness typed");
+  // A BARE ROD (2026-11-13 — the built-in מוט וילון placed by itself): the rod and its posts, no cloth,
+  // at its typed thickness.
+  const bareRod = curtainBody([{ x: 0, y: 0 }, { x: 3000, y: 0 }], 2400, "#ffffff", { type: "item" }, { posts: [{ x: 0, y: 0 }, { x: 3000, y: 0 }], bare: true, rodMm: 80, postMm: 100, rodColour: "#c9a24a" });
+  assert(!bareRod.parts.some((p) => p.shape === "ribbon") && bareRod.parts.filter((p) => p.shape === "box").length === 2, "a bare rod has no cloth — two posts and a rod");
+  assert(bareRod.parts.some((p) => p.shape === "cylinder" && p.rTop === 40) && bareRod.parts.every((p) => p.shape !== "box" || p.w === 100), "…an 8 cm rod on 10 cm posts when that is what was typed");
   assert(onRod.parts.filter((p) => p.shape === "cylinder").length === 2, "…and the rod bends round its corner, one length per stretch");
 
   assert(ceilingUndersideMm(4000, 600) === 2800, "under a 4 m ceiling a chandelier's underside is at 2.8 m");
@@ -1325,6 +1415,18 @@ if (isMain(import.meta.url)) {
   const fairy = lit.parts.filter((p): p is Extract<Part, { shape: "sphere" }> => p.shape === "sphere");
   assert(fairy.length === 24 && lit.emitters.length === 24 && fairy.every((p) => p.material?.kind === "emissive" && p.at.z < 3500 && p.at.z > 3500 - 300 - 45 - FAIRY_R_MM * 2 - 1e-6), `a lit run: twenty-four fairy lights under its cloth (${fairy.length})`);
   assert(lit.emitters.every((e) => e.strength < 0.4), "…each too faint to be taken for a candle");
+  // ONE SWAG hung from 4 m down to 2.6 m, 70 cm deep (2026-11-13): its line runs from one height to
+  // the other, the cloth under it, and a light near the low end hangs under the LOW end's line.
+  const slope: ClothRun = { ...run, heightMm: 4000, heightBMm: 2600, waves: 1, sagMm: 700, lights: true };
+  const sloped = ceilingDrapeBody([slope], "#f3ede2");
+  const slopeEdge = sloped.parts.find((p): p is Extract<Part, { shape: "sheet" }> => p.shape === "sheet")!.rows[0];
+  assert(Math.abs(slopeEdge[0].z - 4000) < 1 && Math.abs(slopeEdge[slopeEdge.length - 1].z - 2600) < 1, "a swag hung end to end at two heights starts at one and ends at the other");
+  const midCol = slopeEdge[Math.floor(slopeEdge.length / 2)];
+  assert(Math.abs(midCol.z - (3300 - 700)) < 1, `…its middle its depth under the line between them (${Math.round(midCol.z)})`);
+  const lastLight = sloped.parts.filter((p): p is Extract<Part, { shape: "sphere" }> => p.shape === "sphere").reduce((a, q) => (q.at.x > a.at.x ? q : a));
+  assert(lastLight.at.z < 2700 && lastLight.at.z > 2400, `…and its lights ride it down (${Math.round(lastLight.at.z)})`);
+  const spine = sloped.parts.find((p): p is Extract<Part, { shape: "sheet" }> => p.shape === "sheet")!.rows[SWAG_ONE_ACROSS / 2];
+  assert(spine.length === SWAG_ONE_ALONG + 1 && spine[SWAG_ONE_ALONG / 2].z < midCol.z - 100 && Math.abs(spine[0].z - 4000) < 1, "…one swag bellies between its edges and is tied tight at its ends");
   const mid = strips[0].rows[SWAG_ACROSS / 2];
   const atS = (s: number) => mid[Math.round(s * (mid.length - 1))];
   assert(near(atS(0).z, 3500) && near(atS(1 / 4).z, 3500) && near(atS(1 / 8).z, 3500 - 300 - 45), "it hangs from its height where gathered and sags in every scallop");

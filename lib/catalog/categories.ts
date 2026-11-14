@@ -46,6 +46,7 @@ import type { PriceUnit } from "./types";
 import { Sailboat, Waves } from "lucide-react";
 import { Grid3x3 } from "lucide-react";
 import { GalleryVerticalEnd } from "lucide-react";
+import { Route } from "lucide-react";
 
 export interface CategoryField {
   key: string;
@@ -73,6 +74,7 @@ export type CategoryGroupId =
   | "grp-stages"
   | "grp-bars"
   | "grp-chuppahs"
+  | "grp-florals"
   | "grp-table-design"
   | "grp-ceiling-design"
   | "grp-flowers"
@@ -90,12 +92,18 @@ export const CATEGORY_GROUPS: CategoryGroup[] = [
   { id: "grp-stages", label: "במות" },
   { id: "grp-bars", label: "ברים ומזנונים" },
   { id: "grp-chuppahs", label: "חופות" },
+  // FLOWERS, wherever they stand (2026-11-13, the user: "it is all related to סידורי פרחים and it is
+  // an on-table design by definition — it can be floor, ceiling — might be good to define it פרחים"):
+  // a centrepiece on a table, a wall, an arch or a sleeve on the floor, a cloud or a hoop overhead.
+  // A department of its own, so a flower wall is not filed under "עיצוב שולחן"; WHERE a row stands
+  // is the row's layer, asked first (CategoryDef.places).
+  { id: "grp-florals", label: "פרחים" },
   { id: "grp-table-design", label: "עיצוב שולחן" },
   { id: "grp-ceiling-design", label: "עיצובי תקרה" },
   // The flowers THEMSELVES — stems, greens, dried — as a florist sells them: what a supplier
   // publishes on the marketplace, and what an arrangement's spec rows are picked from. Every
   // category in it is `supplierOnly`, so a STUDIO never sees this department (shownGroups).
-  { id: "grp-flowers", label: "פרחים וירק" },
+  { id: "grp-flowers", label: "פרחי קטיף וירק" },
   // SCENERY (Backdrops S2): what stands behind the scene and is seen from the front — a backdrop
   // wall of panels, an arch, a wave. Drawn on the FRONT plane (the shape editor's חזית), not from above.
   { id: "grp-scenery", label: "תפאורה" },
@@ -189,6 +197,14 @@ export interface CategoryDef {
    *  like `defaultStock`, stored on the row and editable. Absent = per unit. A sail is sold by the
    *  square metre of its polygon, a ceiling drape by the metre of its runs (spec 2026-11-07 §6.3/§6.4). */
   defaultPriceUnit?: PriceUnit;
+  /** A row of this category stands WHEREVER the designer says — on a table, on the floor, hung from
+   *  the ceiling — and none of the three is "the" one (flowers: a centrepiece, a wall, a cloud). The
+   *  new-item picker offers a tile per place (PLACES) and the form asks it beside the name; the answer
+   *  is the row's `layer`, which every reader already goes by (landing, planes, the quote's sections).
+   *  `defaultLayer` is only what a CSV line or a script starts from. */
+  places?: true;
+  /** Names this category went by before, still matched by a CSV import and the catalog's search. */
+  aliases?: readonly string[];
   /** A NEW row of this category starts as a FRONT panel (Backdrops S2): its first shape is drawn on
    *  the front plane — a face width × height, a thickness — rather than a footprint seen from above
    *  (the drawer's `blankProduct` seeds `appearance.plane = "front"` and a FRONT_THICK_MM depth). A
@@ -222,7 +238,11 @@ export const CATEGORIES: CategoryDef[] = [
   // the arrangement carries a flower spec (`flowers` — rows of flower × stems, lib/catalog/
   // flowers.ts) and typed only when it carries none. How many stems the supplier sells in a bunch
   // is a different question, and it stays where it lives — orderUnit.
-  { id: "flower-arrangements", label: "סידורי פרחים", group: "grp-table-design", defaultLayer: "table", icon: Sprout, dims: "round", fields: [{ key: "stems", label: "כמות גבעולים בסידור", suffix: "גבעולים" }], defaultStock: "consumable", defaultSpareRate: 10, flowers: true },
+  //
+  // "פרחים" since 2026-11-13 (was "סידורי פרחים" under עיצוב שולחן; the id is kept — rows point at it):
+  // the same row stands on a table, on the floor (a wall, an arch, a sleeve round a column) or hangs
+  // (a cloud, a hoop), so the place is asked per row (`places`) and the department is its own.
+  { id: "flower-arrangements", label: "פרחים", group: "grp-florals", defaultLayer: "table", icon: Sprout, dims: "round", fields: [{ key: "stems", label: "כמות גבעולים בסידור", suffix: "גבעולים" }], defaultStock: "consumable", defaultSpareRate: 10, flowers: true, places: true, aliases: ["סידורי פרחים"] },
   // The VESSEL — a vase, an urn, a footed bowl, a glass cylinder — as the studio stocks it: bought
   // once and set again at every event, so owned. Not a centrepiece: that is what is arranged in it,
   // used up and priced as a design, and a catalog that filed the 80cm gold vase there would count it
@@ -234,7 +254,7 @@ export const CATEGORIES: CategoryDef[] = [
   // arrangement's spec rows are made of; a supplier organisation publishes these on the
   // marketplace. SUPPLIER ONLY: a studio has no stem rows of its own (its פרחים are its סידורי
   // פרחים) — a copy made before 2026-11-07 keeps its category and still draws as a single head.
-  { id: "flowers", label: "פרחים", group: "grp-flowers", defaultLayer: "table", icon: Flower, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10, supplierOnly: true },
+  { id: "flowers", label: "פרחי קטיף", group: "grp-flowers", defaultLayer: "table", icon: Flower, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10, supplierOnly: true },
   { id: "greenery", label: "ירק וענפים", group: "grp-flowers", defaultLayer: "table", icon: Leaf, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10, supplierOnly: true },
   { id: "dried-flowers", label: "פרחים יבשים", group: "grp-flowers", defaultLayer: "table", icon: Wheat, dims: "round", fields: [], needsHeight: false, defaultStock: "consumable", defaultSpareRate: 10, supplierOnly: true },
   { id: "chandeliers", label: "שנדליירים", group: "grp-ceiling-design", defaultLayer: "ceiling", icon: Lightbulb, dims: "round", fields: [{ key: "arms", label: "כמות קנים", suffix: "נרות" }] },
@@ -303,11 +323,23 @@ export const CATEGORIES: CategoryDef[] = [
   // drawn and stacked as a rug and kept out of the clearance check) — and stretched, it keeps its
   // post and slat spacing in millimetres, only gaining slats.
   { id: "pergolas", label: "פרגולות", group: "grp-chuppahs", defaultLayer: "floor", icon: Columns3, dims: "box", fields: [{ key: "postMm", label: "עובי עמוד (מ״מ)" }], defaultHeightMm: 2600, defaultResize: { stepMm: 100, width: { minMm: 1500, maxMm: 20000 }, depth: { minMm: 1500, maxMm: 20000 } }, builtIn: true },
+  // AN AISLE (שדרה — lib/catalog/aisle.ts; 2026-11-13, the user: "need to add new category שדרה"): the
+  // walk to the chuppah as ONE row and one placement — a rectangle stretched to the length the event
+  // needs (defaultResize: its length, and its width across), lined down both sides with a PIECE of the
+  // same catalog (`categoryFields.piece`: a flower box, a column, a lantern) at a step, a runner down
+  // the middle. The pieces are derived on every read and counted, quoted and ordered as N of their own
+  // row; the aisle has no height of its own to ask (its pieces' is theirs). Beside the חופות it leads to.
+  { id: "aisles", label: "שדרות", group: "grp-chuppahs", defaultLayer: "floor", icon: Route, dims: "box", fields: [], needsHeight: false, placeOnce: true, defaultResize: { stepMm: 100, width: { minMm: 1000, maxMm: 60000 }, depth: { minMm: 800, maxMm: 15000 } } },
   { id: "curtains", label: "ווילונות", group: "grp-accessories", defaultLayer: "ceiling", icon: Blinds, dims: "box", fields: [], anchor: "wall", sizing: "stretch", rails: ["wall", "side", "rod"] },
   // The ROD a curtain on a free-standing rod hangs from (spec 2026-11-07 §6.2), billed by the metre
   // off the curtain itself (MeasureContext.rodOf — the studio's first row here), as a stage's skirt
-  // is off the stage: never placed on its own.
-  { id: "curtain-rods", label: "מוטות וילון", group: "grp-accessories", defaultLayer: "ceiling", icon: Minus, dims: "box", fields: [], needsHeight: false, builtIn: true },
+  // is off the stage. Since 2026-11-13 it is PLACED on its own too (the user: "the curtain cannot be
+  // placed on the new מוט וילון"): dropped, it is a BARE ROD — a placement on a `rod` rail with no
+  // cloth (lib/studio/rail.ts isRodRow), billed by its own metres — and a curtain let go on it is hung
+  // there (curtainDrop "adopt": the rod's placement becomes the curtain's, its rod kept). It rides the
+  // drapes' pipeline (`anchor: "wall"`), on a rod alone; not `sizing: "stretch"`, so the drawer still
+  // asks its size: the row's width is the length a new rod is laid at, its depth the rod's thickness.
+  { id: "curtain-rods", label: "מוטות וילון", group: "grp-accessories", defaultLayer: "ceiling", icon: Minus, dims: "box", fields: [], needsHeight: false, builtIn: true, anchor: "wall", rails: ["rod"] },
   // A line of LIGHT on a rail (spec 2026-11-07 §7.1, lib/venues/led.ts): along a wall at a height,
   // along a side of a stage, a bar or a building, or a free run between two points. It hangs on a
   // rail exactly as a drape does (`anchor: "wall"` sorts it with the drapes for every reader that
@@ -404,6 +436,7 @@ export function passGroups(pass: "hall" | "design"): CategoryGroupId[] {
   return [...HALL_PASS_GROUPS, ...extra.filter((g) => !HALL_PASS_GROUPS.includes(g))];
 }
 export const DESIGN_PASS_GROUPS: CategoryGroupId[] = [
+  "grp-florals",
   "grp-table-design",
   "grp-ceiling-design",
   "grp-chuppahs",
@@ -424,6 +457,19 @@ export const LAYER_LABEL: Record<Layer, string> = {
   floor: "רצפה",
   ceiling: "תקרה",
 };
+
+/** The three places a row of a `places` category may stand, in the words the picker and the form
+ *  ask them in: `label` answers "איפה זה עומד?", `kinds` says what is usually made there. */
+export const PLACES: readonly { layer: Layer; label: string; kinds: string }[] = [
+  { layer: "table", label: "על שולחן", kinds: "סידור · מרכז · ראנר" },
+  { layer: "floor", label: "על הרצפה", kinds: "קיר · קשת · עמוד · מיצב" },
+  { layer: "ceiling", label: "תלוי מהתקרה", kinds: "תקרה · ענן · חישוק" },
+];
+
+/** Does `text` name this category — by its label or a name it went by before? */
+export function categoryNamed(c: { label: string; aliases?: readonly string[] }, text: string): boolean {
+  return c.label.includes(text) || !!c.aliases?.some((a) => a.includes(text));
+}
 
 /** The studio's style vocabulary — what the drawer offers when tagging a product, and what the
  *  catalog and the studio rail filter by.

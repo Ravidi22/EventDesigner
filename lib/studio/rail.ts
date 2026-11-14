@@ -66,6 +66,10 @@ export interface RodRail {
   points: Point[];
   heightMm: number;
   cantilever?: "start" | "end";
+  /** The rod's own thickness across, mm (rodThickMm) — the bar the cloth hangs on, and with it its
+   *  posts. Absent = ROD_THICK_MM, the rod every curtain has had. A drawing and a 3D fact: the quote
+   *  bills a rod by its length. */
+  thickMm?: number;
 }
 
 /** A straight line in the AIR — a swag of cloth across a ceiling, an LED line between two points. */
@@ -74,6 +78,10 @@ export interface RunRail {
   a: Point;
   b: Point;
   heightMm: number;
+  /** End B's height when it is not A's (./ceiling-cloth.ts, 2026-11-13 — a swag from a high point down
+   *  to a lower one). Absent = level: `heightMm` at both ends. A ceiling drape's alone; an LED strip
+   *  ignores it. */
+  heightBMm?: number;
   sagMm?: number;
   /** A ceiling drape's cloth across the line, mm (./ceiling-cloth.ts — spec §6.4). Absent = the 1.2 m
    *  default; an LED strip ignores it. */
@@ -675,6 +683,151 @@ export function rodPointMoved(rail: RodRail, i: number, p: Point): RodRail {
   return { ...rail, points: pts };
 }
 
+// ── A rod's own measurements, and the rod as a thing placed by itself ───────────────────────────
+
+/** A rod's thickness when its rail says none: the 3 cm bar every curtain's rod has been drawn as. */
+export const ROD_THICK_MM = 30;
+export const ROD_THICK_MIN_MM = 10;
+export const ROD_THICK_MAX_MM = 300;
+/** The shortest rod a typed length may leave (and the shortest last stretch of a bent one). */
+export const ROD_MIN_MM = 300;
+
+/** How thick a rod is across, mm — its own, held to what a rod can be, else the default. */
+export function rodThickMm(rail: Pick<RodRail, "thickMm">): number {
+  const t = rail.thickMm;
+  return t && t > 0 ? Math.max(ROD_THICK_MIN_MM, Math.min(ROD_THICK_MAX_MM, Math.round(t))) : ROD_THICK_MM;
+}
+
+/** A rod's post, across: a 5 cm square section, or the rod's own thickness and a little when it is
+ *  a heavier one — a post is never thinner than what it carries. */
+export function rodPostMm(rail: Pick<RodRail, "thickMm">): number {
+  return Math.max(50, rodThickMm(rail) + 20);
+}
+
+/** A rod with its thickness typed — the default is never stored (absent = the old drawing). */
+export function rodWithThick(rail: RodRail, thickMm: number): RodRail {
+  const { thickMm: _old, ...rest } = rail;
+  void _old;
+  if (!(thickMm > 0)) return rest;
+  const t = Math.max(ROD_THICK_MIN_MM, Math.min(ROD_THICK_MAX_MM, Math.round(thickMm)));
+  return t === ROD_THICK_MM ? rest : { ...rest, thickMm: t };
+}
+
+/** A rod's length along itself, mm — its polyline as it stands (a ר's arm held to its reach). */
+export function rodRunMm(rail: RodRail): number {
+  return pathLength(rodPath(rail));
+}
+
+/** A rod with its length TYPED: its first post stays where it is and its LAST stretch is made longer
+ *  or shorter along its own direction, so the whole comes to `lengthMm` — a straight rod is simply
+ *  that long; an L keeps its first arm and its corner. Never under ROD_MIN_MM for that last stretch
+ *  (a typed total shorter than the arms before it leaves the shortest arm there is); a ר's arm is
+ *  still held to its reach by rodPath. Whole millimetres. */
+export function rodWithLength(rail: RodRail, lengthMm: number): RodRail {
+  const pts = rail.points;
+  if (pts.length < 2 || !(lengthMm > 0)) return rail;
+  const before = pathLength(pts.slice(0, -1));
+  const a = pts[pts.length - 2];
+  const b = pts[pts.length - 1];
+  const l = Math.hypot(b.x - a.x, b.y - a.y);
+  if (l < 1e-6) return rail;
+  const want = Math.max(ROD_MIN_MM, lengthMm - before);
+  const end = { x: Math.round(a.x + ((b.x - a.x) * want) / l), y: Math.round(a.y + ((b.y - a.y) * want) / l) };
+  return { ...rail, points: [...pts.slice(0, -1), end] };
+}
+
+/** The catalog category a ROD's own row is filed in (lib/catalog/categories.ts): the studio's built-in
+ *  מוט וילון. A placement of such a row is a BARE ROD — a rod standing with nothing on it yet. */
+export const ROD_CATEGORY = "curtain-rods";
+export function isRodRow(product: Pick<Product, "category"> | undefined | null): boolean {
+  return product?.category === ROD_CATEGORY;
+}
+
+/** How near a bare rod a curtain must be let go to be hung on it. */
+export const ROD_ADOPT_MM = 800;
+/** How far from a wall or a side a dropped curtain still goes to it. Past this it is in the open, and
+ *  stands on a rod of its own where it was let go — a curtain dropped in the middle of a 30 m hall
+ *  used to fly to a wall fifteen metres away. */
+export const HANG_REACH_MM = 3000;
+/** A curtain's own rod, dropped in the open: 3 m along the drop. */
+export const ROD_DROP_MM = 3000;
+/** The width the built-in rod row was first shipped with — a placeholder for a row that was "never
+ *  placed", not a length anybody chose. */
+const ROD_ROW_LEGACY_MM = 1000;
+/** How long a rod dropped from its row is laid: the row's width, once the studio has typed one — a
+ *  row still carrying the first kit's 1 m placeholder (or none) is laid at ROD_DROP_MM. */
+export function rodDropLength(rowWidthMm: number | undefined): number {
+  return rowWidthMm && rowWidthMm > 0 && rowWidthMm !== ROD_ROW_LEGACY_MM ? Math.max(ROD_MIN_MM, rowWidthMm) : ROD_DROP_MM;
+}
+
+function distanceToPath(p: Point, path: readonly Point[]): number {
+  let best = Infinity;
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1];
+    const b = path[i];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const l2 = dx * dx + dy * dy;
+    const f = l2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
+    best = Math.min(best, Math.hypot(p.x - (a.x + dx * f), p.y - (a.y + dy * f)));
+  }
+  return best;
+}
+
+/** The bare rod nearest a point: a placement of a rod's own row (`isRod` says which variants are),
+ *  standing on a rod rail. Null with none on the plan. */
+export function nearestBareRod(
+  placements: readonly Pick<Placement, "id" | "variantId" | "rail">[],
+  isRod: (variantId: string) => boolean,
+  p: Point,
+): { id: string; distanceMm: number } | null {
+  let best: { id: string; distanceMm: number } | null = null;
+  for (const pl of placements) {
+    if (pl.rail?.type !== "rod" || !isRod(pl.variantId)) continue;
+    const d = distanceToPath(p, rodPath(pl.rail));
+    if (!best || d < best.distanceMm) best = { id: pl.id, distanceMm: d };
+  }
+  return best;
+}
+
+/** Where a curtain let go at `p` hangs. Of what is in reach — a bare ROD within ROD_ADOPT_MM (the
+ *  curtain is hung on it: `adopt`), the nearest WALL and the nearest SIDE of a tall thing within
+ *  HANG_REACH_MM — the nearest wins; with nothing in reach it stands on a rod of its own through the
+ *  drop, `rodLengthMm` long, when its category takes one (`takes`). Null = nowhere to hang it. */
+export type CurtainDrop = { kind: "adopt"; placementId: string } | { kind: "rail"; rail: Rail };
+export function curtainDrop(o: {
+  p: Point;
+  wall: { wallId: string; distanceMm: number } | null;
+  side: { rail: SideRail; distanceMm: number } | null;
+  rod: { id: string; distanceMm: number } | null;
+  takes: (t: RailType) => boolean;
+  /** The height a rod of its own starts at here (defaultRailHeight). */
+  rodHeightMm: number;
+  rodLengthMm?: number;
+}): CurtainDrop | null {
+  const wallOk = o.wall && o.takes("wall") ? o.wall : null;
+  const sideOk = o.side && o.takes("side") ? o.side : null;
+  const wall = wallOk && wallOk.distanceMm <= HANG_REACH_MM ? wallOk : null;
+  const side = sideOk && sideOk.distanceMm <= HANG_REACH_MM ? sideOk : null;
+  const rod = o.rod && o.takes("rod") && o.rod.distanceMm <= ROD_ADOPT_MM ? o.rod : null;
+  const nearest = Math.min(wall?.distanceMm ?? Infinity, side?.distanceMm ?? Infinity, rod?.distanceMm ?? Infinity);
+  if (rod && rod.distanceMm === nearest) return { kind: "adopt", placementId: rod.id };
+  if (side && side.distanceMm === nearest) return { kind: "rail", rail: side.rail };
+  if (wall) return { kind: "rail", rail: { type: "wall", wallId: wall.wallId, from: 0, to: 1 } };
+  if (o.takes("rod")) return { kind: "rail", rail: rodAt(o.p, o.rodLengthMm ?? ROD_DROP_MM, o.rodHeightMm) };
+  // A category that takes no rod (none today) still goes to its wall or side, however far.
+  if (sideOk && (!wallOk || sideOk.distanceMm < wallOk.distanceMm)) return { kind: "rail", rail: sideOk.rail };
+  if (wallOk) return { kind: "rail", rail: { type: "wall", wallId: wallOk.wallId, from: 0, to: 1 } };
+  return null;
+}
+
+/** A straight rod `lengthMm` long through `p`, along x, at `heightMm` — what a drop in the open lays. */
+export function rodAt(p: Point, lengthMm: number, heightMm: number, thickMm?: number): RodRail {
+  const half = Math.max(ROD_MIN_MM, lengthMm) / 2;
+  const rail: RodRail = { type: "rod", points: [{ x: Math.round(p.x - half), y: Math.round(p.y) }, { x: Math.round(p.x + half), y: Math.round(p.y) }], heightMm };
+  return thickMm ? rodWithThick(rail, thickMm) : rail;
+}
+
 /** A canopy's runs: parallel lines across its outline at `directionDeg`, cut where they cross it,
  *  spread evenly so the strips they stand for tile the area edge to edge (the spacing is honoured to
  *  the nearest whole number of strips). A concave outline cuts a line into several runs. */
@@ -934,7 +1087,37 @@ if (isMain(import.meta.url)) {
   assert(rr.lines[0].posts?.length === 2 && rr.lines[0].hang === 0, "a post at the start and the bend, none under the arm's end; the cloth on the rod's line");
   assert(railLengthMm({ ...rod, cantilever: undefined }, ctx) === 7000 && resolveRail({ ...rod, cantilever: undefined }, ctx)?.type === "lines", "without the ר it is the whole polyline, a post at every point");
   assert(resolveRail({ type: "rod", points: [{ x: 0, y: 0 }], heightMm: 2400 }, ctx) === null, "a rod of one point is no rod");
-  assert(defaultRailHeight({ x: 0, y: 0 }) === ROD_HEIGHT_MM && defaultRailHeight({ x: 0, y: 0 }, () => 3200) === 3200, "a new rod is 2.4 m, unless a roof is there to say");
+  // The rod's own measurements (2026-11-13: "the rod width and length should be editable").
+  assert(rodThickMm(rod) === ROD_THICK_MM && rodPostMm(rod) === 50 && rodWithThick(rod, 30).thickMm === undefined, "a rod with no thickness is the 3 cm rod on 5 cm posts it always was — and the default is never stored");
+  const heavy = rodWithThick(rod, 80);
+  assert(heavy.thickMm === 80 && rodThickMm(heavy) === 80 && rodPostMm(heavy) === 100 && rodWithThick(heavy, 5000).thickMm === ROD_THICK_MAX_MM, "a typed thickness is kept, its posts grow with it, and it is held to what a rod can be");
+  const straight: RodRail = { type: "rod", points: [{ x: 1000, y: 500 }, { x: 4000, y: 500 }], heightMm: 2400 };
+  const longer = rodWithLength(straight, 4500);
+  assert(rodRunMm(straight) === 3000 && longer.points[0].x === 1000 && longer.points[1].x === 5500 && longer.points[1].y === 500, "a straight rod typed 4.5 m keeps its first post and reaches 4.5 m along itself");
+  const bent = rodWithLength({ ...rod, cantilever: undefined }, 5000);
+  assert(bent.points[1].x === 3000 && bent.points[2].y === 2000 && rodRunMm(bent) === 5000, "an L typed 5 m keeps its first arm and its corner — the last arm is what changes");
+  assert(rodWithLength({ ...rod, cantilever: undefined }, 1000).points[2].y === ROD_MIN_MM, "…never to less than the shortest arm there is");
+  // A bare rod, and where a dropped curtain goes.
+  const rodRow = (v: string) => v === "rod-row";
+  const rodPlan = [
+    { id: "bare", variantId: "rod-row", rail: straight },
+    { id: "dressed", variantId: "curtain", rail: { ...straight, points: [{ x: 1000, y: 3000 }, { x: 4000, y: 3000 }] } as RodRail },
+  ];
+  assert(nearestBareRod(rodPlan, rodRow, { x: 2000, y: 900 })?.id === "bare" && near(nearestBareRod(rodPlan, rodRow, { x: 2000, y: 900 })!.distanceMm, 400), "the nearest bare rod is found by its line");
+  assert(nearestBareRod(rodPlan, rodRow, { x: 2000, y: 2900 })?.id === "bare", "…and a curtain's own rod is not one, however near the point is to it");
+  const anyRail = () => true;
+  const dropAt = (o: Partial<Parameters<typeof curtainDrop>[0]>) => curtainDrop({ p: { x: 0, y: 0 }, wall: null, side: null, rod: null, takes: anyRail, rodHeightMm: 2400, ...o });
+  const adopted = dropAt({ rod: { id: "bare", distanceMm: 400 }, wall: { wallId: "w", distanceMm: 900 } });
+  assert(adopted?.kind === "adopt" && adopted.placementId === "bare", "a curtain let go on a bare rod is hung on it, though a wall is not far");
+  const toWall = dropAt({ rod: { id: "bare", distanceMm: 400 }, wall: { wallId: "w", distanceMm: 100 } });
+  assert(toWall?.kind === "rail" && toWall.rail.type === "wall", "…but at the wall itself it goes on the wall");
+  const inOpen = dropAt({ wall: { wallId: "w", distanceMm: 9000 }, rod: { id: "bare", distanceMm: 5000 }, p: { x: 7000, y: 7000 } });
+  assert(inOpen?.kind === "rail" && inOpen.rail.type === "rod" && inOpen.rail.points[0].x === 5500 && inOpen.rail.points[1].x === 8500 && inOpen.rail.heightMm === 2400, "let go in the open — nine metres from a wall — it stands on a 3 m rod of its own, where it was dropped");
+  const noRod = dropAt({ wall: { wallId: "w", distanceMm: 9000 }, takes: (t) => t !== "rod" });
+  assert(noRod?.kind === "rail" && noRod.rail.type === "wall" && dropAt({ takes: (t) => t !== "rod" }) === null, "a category that takes no rod still goes to its wall — and with no wall, nowhere");
+  assert(rodDropLength(undefined) === 3000 && rodDropLength(1000) === 3000 && rodDropLength(4500) === 4500 && rodDropLength(100) === ROD_MIN_MM, "a rod is laid as long as its row says — 3 m while the row still carries the first kit's placeholder");
+  assert(isRodRow({ category: ROD_CATEGORY }) && !isRodRow({ category: "curtains" }) && !isRodRow(undefined), "a rod row is told by its category");
+  assert(defaultRailHeight({ x: 0, y: 0 }) === ROD_HEIGHT_MM &&defaultRailHeight({ x: 0, y: 0 }, () => 3200) === 3200, "a new rod is 2.4 m, unless a roof is there to say");
 
   // RUN — one line in the air.
   const run = resolveRail({ type: "run", a: { x: 0, y: 0 }, b: { x: 3000, y: 4000 }, heightMm: 3500, sagMm: 300 }, ctx);

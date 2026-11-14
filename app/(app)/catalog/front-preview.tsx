@@ -6,6 +6,9 @@ import { shapesOf } from "@/lib/catalog/shape-list";
 import { elevationBoxes } from "@/lib/element/elevation";
 import { sampledBounds } from "@/lib/studio/footprint";
 import { OutlinePath } from "@/components/footprint-shape";
+import { FlowerDrawing } from "@/components/flower-symbol";
+import { faceFlowerSpecOf } from "@/lib/catalog/flower-spec";
+import { SYMBOL_BY_CATEGORY } from "@/lib/catalog/symbols";
 import { Dim, type DimTone } from "@/components/venue-dims";
 
 // A row drawn from the FRONT (Backdrops S2 — a backdrop of panels, an arch, a wave): the catalog card
@@ -22,6 +25,10 @@ function frontArt(product: Product): { art: ReactNode; minX: number; maxX: numbe
   const swatch = product.variants.find((v) => !v.archived && v.swatch)?.swatch;
   const itemFill = product.appearance?.style?.fill;
   const itemH = product.dimensions.heightMm || 0;
+  // A row of FLOWERS drawn on the front plane is a flower wall, an arch covered along its curve: its
+  // faces are drawn flowered (lib/catalog/flower-cover.ts), as the room stands them.
+  const kind = product.appearance?.symbol === false ? undefined : SYMBOL_BY_CATEGORY[product.category];
+  const flowered = kind === "flowers" || kind === "centerpiece";
   const boxes = elevationBoxes(shapes, itemH, "front");
   // Farthest back first (plan y grows toward the front); ties in list order.
   const order = boxes.map((b, k) => ({ b, k })).sort((p, q) => shapes[p.b.index].y - shapes[q.b.index].y || p.k - q.k);
@@ -57,6 +64,7 @@ function frontArt(product: Product): { art: ReactNode; minX: number; maxX: numbe
               vectorEffect="non-scaling-stroke"
             />
           ))}
+          {flowered && !b.outlineOnly && <FlowerDrawing spec={faceFlowerSpecOf(product, s.id, b.front.pieces, swatch ?? itemFill)} />}
         </g>
       );
     }

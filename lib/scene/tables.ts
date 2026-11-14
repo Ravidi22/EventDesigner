@@ -34,6 +34,7 @@ import { borderOf, type Border } from "@/lib/catalog/border";
 import { chandelierDrawOf } from "@/lib/catalog/chandelier";
 import { chuppahDrawOf } from "@/lib/catalog/chuppah";
 import { ownBodyParts } from "./element-body";
+import { baseProfileOf } from "@/lib/element/adapter";
 import { type DressingSpot, dressBlockOf, dressingSpots, placementFootprint, tableBlock, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
 import { DEFAULT_TONE } from "@/components/item-symbol";
 import { primeCatalog } from "@/lib/catalog/storage";
@@ -41,7 +42,7 @@ import { isMain } from "../self-check";
 import { placeSettings, type Keepout, type SettingSeat } from "./tableware";
 import { SceneCollector } from "./collect";
 import { applyTransform, roomTransform, seatTransform } from "./frame";
-import { chairRequest, itemBody, type ItemContext } from "./items";
+import { chairRequest, itemBody, vesselRimShare, type ItemContext } from "./items";
 import { clothMaterial, hexOf, swatchMaterial } from "./materials";
 import { type BodyNode, type LabelNode, type NodeTag, type Part, type SceneInput, type Transform, transform, vec3 } from "./types";
 
@@ -435,6 +436,8 @@ function contextFor(product: Product | undefined, resolved: Resolved | undefined
   if (chandelier) ctx.chandelier = chandelier;
   const chuppah = chuppahDrawOf(product?.appearance);
   if (chuppah) ctx.chuppah = chuppah;
+  const profile = baseProfileOf(product);
+  if (profile) ctx.profile = profile;
   if (product && (kind === "flowers" || kind === "centerpiece")) ctx.flowers = flowerDrawSpecOf(product, footprint, own);
   if (placement) {
     const climb = climbRise(product, placement.climb);
@@ -518,11 +521,13 @@ export function dressingOf(
     if (vase) {
       const vaseCtx = contextFor(vase.product, vase, resolveFootprint(vase.product), author);
       out.item(`${p.id}:vase`, { type: "item", id: p.id, label: vase.product.name }, itemBody("vase", vaseCtx), standAt(z));
-      z += VASE_RIM_SHARE * (vase.product.dimensions.heightMm || 0);
+      z += vesselRimShare(vase.product) * (vase.product.dimensions.heightMm || 0);
     } else if (kind === "flowers" || kind === "centerpiece") {
       const under = vaseUnder(spot, spots);
       if (under) z += VASE_RIM_SHARE * (resolve(under.p.variantId)?.product.dimensions.heightMm || 0);
     }
+    // What stands on the table knows how far the floor is (a runner's fall hangs to it).
+    ctx.standMm = tableHeightOf(table) + (z - topZ);
     out.item(p.id, { type: kind === "flowers" ? "flowers" : "item", id: p.id, label: product?.name }, itemBody(kind, ctx), standAt(z));
   }
   return spots.length;

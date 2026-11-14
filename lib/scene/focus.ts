@@ -17,6 +17,8 @@ import type { ResolvedZone } from "@/lib/venues/zone";
 import type { DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
 import { resolve } from "@/lib/studio/catalog-resolver";
 import { hangHeightOf } from "@/lib/studio/hang";
+import { railOf } from "@/lib/studio/rail";
+import { clothRuns, runLowestMm } from "@/lib/studio/ceiling-cloth";
 import { roofAt } from "@/lib/venues/roofs";
 import { ceilingUndersideMm } from "./overhead";
 import { placementFootprint, tableBlock, tableFootprint } from "@/components/footprint-shape";
@@ -77,7 +79,29 @@ function tableSubject(doc: DesignDocumentContent, t: DesignTable): Subject {
   return { centre: t.position, reachMm: Math.hypot(b.w, b.h) / 2 || 900, zMm: TABLE_TOP_MM };
 }
 
+/** Cloth (or a line of light) in the AIR — a swag from point to point, an area of swags, a sail: it is
+ *  where its RAIL's points are, never where its placement was first put (an end dragged across the
+ *  room leaves `position` behind), and it is looked at between its line and its lowest point, from
+ *  far enough back to hold its whole length (seen headless, 2026-11-13: framed as a 50 cm item at its
+ *  first centre, a 10 m swag was a band across the lens). Null for any other rail. */
+function clothSubject(p: Placement): Subject | null {
+  const rail = railOf(p);
+  if (!rail || (rail.type !== "run" && rail.type !== "canopy" && rail.type !== "sail")) return null;
+  const pts = rail.type === "run" ? [rail.a, rail.b] : rail.type === "canopy" ? rail.outline : rail.ties.map((t) => t.p);
+  if (pts.length < 2) return null;
+  const centre = { x: pts.reduce((n, q) => n + q.x, 0) / pts.length, y: pts.reduce((n, q) => n + q.y, 0) / pts.length };
+  const reachMm = Math.max(500, ...pts.map((q) => Math.hypot(q.x - centre.x, q.y - centre.y)));
+  if (rail.type === "sail") return { centre, reachMm, zMm: rail.ties.reduce((n, t) => n + t.heightMm, 0) / rail.ties.length };
+  const runs = clothRuns(rail);
+  if (!runs.length) return { centre, reachMm, zMm: rail.heightMm };
+  const top = runs.reduce((n, r) => n + (r.heightMm + (r.heightBMm ?? r.heightMm)) / 2, 0) / runs.length;
+  const low = Math.min(...runs.map(runLowestMm));
+  return { centre, reachMm, zMm: (top + low) / 2 };
+}
+
 function placementSubject(doc: DesignDocumentContent, p: Placement, structure: Pick<VenueStructure, "features">, zones: readonly ResolvedZone[]): Subject | null {
+  const cloth = clothSubject(p);
+  if (cloth) return cloth;
   // An item on a table is the table being dressed; one on a banquette is its stage.
   if (p.tableId) {
     const t = doc.tables.find((x) => x.id === p.tableId);
@@ -211,6 +235,8 @@ if (isMain(import.meta.url)) {
     placements: [
       placement("c1", { layer: "table", tableId: "t2", position: { x: 0, y: 0 } }),
       placement("ch", { layer: "ceiling", position: { x: 5000, y: 5000 }, hangHeightMm: 2800 }),
+      // A swag from (1,1) to (9,7) m, 4 m down to 3 m, a metre deep — its placement left at a corner.
+      placement("sw", { layer: "ceiling", position: { x: 500, y: 500 }, rail: { type: "run", a: { x: 1000, y: 1000 }, b: { x: 9000, y: 7000 }, heightMm: 4000, heightBMm: 3000, waves: 1, sagMm: 1000 } }),
       placement("s1", {
         position: { x: 5000, y: 2000 },
         stage: {
@@ -262,6 +288,12 @@ if (isMain(import.meta.url)) {
   // A chandelier is looked at where it hangs, from standing height.
   const hung = at([{ kind: "placement", id: "ch" }]);
   assert(hung && near(hung.look.z, 2800) && near(hung.eye.z, PORTRAIT_EYE_MM), "a ceiling item: looked at at its hang height");
+
+  // A swag is looked at where its rail is — its middle, between its line and its lowest point — from
+  // far enough back to hold its length.
+  const swag = at([{ kind: "placement", id: "sw" }]);
+  assert(swag && near(swag.look.x, 5000) && near(swag.look.y, 4000) && swag.look.z > 2500 && swag.look.z < 3500, `a swag: looked at at its rail's middle, under its line (${swag?.look.z})`);
+  assert(swag && Math.hypot(swag.eye.x - 5000, swag.eye.y - 4000) >= 5000, "…from at least its half-length away");
 
   // A stage at its deck.
   const stage = at([{ kind: "placement", id: "s1" }]);

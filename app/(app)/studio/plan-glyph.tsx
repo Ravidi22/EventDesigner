@@ -19,7 +19,8 @@ import { pergolaPostOf } from "@/lib/venues/pergola";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { climbRise } from "@/lib/studio/climb-item";
 import { vesselOf } from "@/lib/catalog/vessel";
-import { resolve } from "@/lib/studio/catalog-resolver";
+import { aisleViewOf, resolve } from "@/lib/studio/catalog-resolver";
+import { AisleDrawing } from "@/components/placed-piece";
 import { VesselMark } from "@/components/vessel-mark";
 
 // The thing under the pointer while an item is being dragged off the rail — the same picture that
@@ -52,8 +53,10 @@ export function glyphSize(product: Product, mmPerPx: number): { w: number; h: nu
 export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: number }) {
   const footprint = resolveFootprint(product);
   // The category's picture when it has one (lib/catalog/symbols.ts) — the same one it lands as.
-  const symbol = symbolOf(product, footprint);
-  const content = symbol ? { mode: "none" as const, name: product.name } : resolveContent(product);
+  // An aisle is carried as its lining (lib/catalog/aisle.ts), the way it lands.
+  const aisle = aisleViewOf(product);
+  const symbol = aisle ? null : symbolOf(product, footprint);
+  const content = symbol || aisle ? { mode: "none" as const, name: product.name } : resolveContent(product);
   const b = footprintBounds(footprint);
   const { w, h } = glyphSize(product, mmPerPx);
   const label = content.mode === "name" ? content.name : "";
@@ -87,6 +90,7 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
       aria-hidden
     >
       {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} />}
+      {aisle && <AisleDrawing view={aisle} detail={false} />}
       {symbol && (
         <ItemSymbol
           kind={symbol}
@@ -108,14 +112,14 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
       <FootprintShape
         footprint={footprint}
         fill={style.fill}
-        fillOpacity={symbol ? 0 : style.fillOpacity}
+        fillOpacity={symbol || aisle ? 0 : style.fillOpacity}
         stroke={style.stroke}
         strokeOpacity={style.strokeOpacity}
         strokeWidth={style.strokeWidth}
         strokeDasharray={style.dashArray.length ? style.dashArray.join(" ") : undefined}
         vectorEffect="non-scaling-stroke"
       />
-      {!symbol && anySurface(product.appearance) && (
+      {!symbol && !aisle && anySurface(product.appearance) && (
         <>
           <ItemSurface
             appearance={product.appearance}

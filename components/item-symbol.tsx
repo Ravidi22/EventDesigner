@@ -1,5 +1,6 @@
 import { memo, type ReactNode } from "react";
-import { footprintBounds, footprintOutlines, type Footprint } from "@/lib/studio/footprint";
+import { footprintBounds, footprintOutlines, pieceOf, type Footprint } from "@/lib/studio/footprint";
+import { pictureFrame } from "@/lib/catalog/picture-frame";
 import { evenInset } from "@/lib/studio/footprint";
 import {
   CLOTH_DROP_MM,
@@ -35,6 +36,7 @@ import { CHUPPAH_FINISH_COLOUR, chuppahLayout, chuppahOf, cloudFlowers, cloudPie
 import { FlowerDrawing } from "./flower-symbol";
 import { SurfaceFill } from "./surface-fill";
 import { defaultMix, seedOf, type FlowerDrawSpec, type FlowerForm } from "@/lib/catalog/flower-draw";
+import { coverShapesOf } from "@/lib/catalog/flower-spec";
 import { barDrawing, bottleRadiusMm, BOTTLE_PITCH_MM, counterShelfMm, counterTopMm, type Strip } from "@/lib/catalog/bar-draw";
 import { outlinePathD } from "@/lib/studio/geometry";
 import { rugFringe, rugInset, type RugShape } from "@/lib/studio/rug-shape";
@@ -174,8 +176,19 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       </g>
     );
   }
+  // THE PICTURE BELONGS TO THE FIRST SHAPE (lib/catalog/picture-frame.ts): on a hexagon, a half-round,
+  // a hand-drawn outline — or with a second shape added beside the first — it is drawn in the first
+  // shape's box, where that stands, over the shapes themselves (below). The kinds that follow an
+  // outline by their own rules keep them: a bar and a banquette along their band, a chuppah on its
+  // outline's corners, a dance floor clipped to it.
+  // …and FLOWERS, which cover whatever they are drawn as (lib/catalog/flower-cover.ts): a ring, an arc,
+  // a spiral, lines, several shapes — every outline flowered, none of them a box to lay a dome into.
+  const flowered = (kind === "flowers" || kind === "centerpiece") && (footprint.kind === "custom" || footprint.kind === "multi");
+  const ownShape = kind === "bar" || kind === "bench" || kind === "dance-floor" || (kind === "chuppah" && footprint.kind === "custom") || flowered;
+  const frame = ownShape ? null : pictureFrame(footprint);
+  const framed = frame && !frame.plain ? frame : null;
   // A chuppah on a drawn outline (a hexagon of timber) stands in that outline's box.
-  const { w, h, round } = kind === "chuppah" && footprint.kind === "custom" ? { ...footprintBounds(footprint), round: false } : boxOf(footprint);
+  const { w, h, round } = framed ?? ((kind === "chuppah" && footprint.kind === "custom") || flowered ? { ...footprintBounds(footprint), round: false } : boxOf(footprint));
   // A bar of any shape — a ח, an oval ring, a horseshoe — is laid along its band (lib/catalog/
   // bar-draw.ts); every other picture is drawn in a box and needs a primitive one.
   // …and a banquette too: laid along its band (lib/design-document/bench.ts benchLayoutFor).
@@ -203,7 +216,7 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       body = lamp(w, h, round, c, line, drawStyle as LampStyle | undefined);
       break;
     case "flowers":
-      body = <FlowerDrawing spec={flowers ?? plainFlowers(w, h, tone)} ink={ink} print={c.print} detail={detail} />;
+      body = <FlowerDrawing spec={flowers ?? (flowered ? shapedFlowers(footprint, tone) : plainFlowers(w, h, tone))} ink={ink} print={c.print} detail={detail} />;
       break;
     case "centerpiece":
       // The base it stands on, faint, under the flowers spilling over it.
@@ -215,7 +228,7 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
               <circle r={w * 0.43} fill="none" {...line} strokeOpacity={line.strokeOpacity * 0.35} />
             </>
           )}
-          <FlowerDrawing spec={flowers ?? plainFlowers(w, h, tone)} ink={ink} print={c.print} detail={detail} />
+          <FlowerDrawing spec={flowers ?? (flowered ? shapedFlowers(footprint, tone) : plainFlowers(w, h, tone))} ink={ink} print={c.print} detail={detail} />
         </>
       );
       break;
@@ -298,7 +311,29 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       body = <DanceFloorPattern w={w} h={h} footprint={footprint.kind === "rect" ? undefined : footprint} tone={t} ink={ink} print={c.print} base />;
       break;
   }
+  if (framed)
+    return (
+      <g className="pointer-events-none">
+        {shapesUnder(footprint, c, line)}
+        <g transform={`translate(${framed.x} ${framed.y})`}>{body}</g>
+      </g>
+    );
   return <g className="pointer-events-none">{body}</g>;
+}
+
+/** The shapes a picture is drawn over when the item is not a plain box (picture-frame.ts): the FIRST
+ *  shape's own outline, quiet — the picture inside it says what it is, the outline what it takes up —
+ *  and every shape added beside it as the shape it is, in the item's tone (never filled overhead). */
+function shapesUnder(footprint: Footprint, c: Colours, line: Line): ReactNode {
+  const quiet = { fill: "none", ...line, strokeOpacity: line.strokeOpacity * 0.55, strokeLinejoin: "round" as const };
+  if (footprint.kind !== "multi") return <FootprintShape footprint={footprint} {...quiet} />;
+  return footprint.parts.map((p, i) =>
+    pieceOf(p, i) === 0 ? (
+      <path key={i} d={outlinePathD(p.outline, p.edgeCurves)} {...quiet} />
+    ) : (
+      <path key={i} d={outlinePathD(p.outline, p.edgeCurves)} fill={c.overhead || p.open ? "none" : c.tone} fillOpacity={c.print ? 1 : 0.85} {...line} strokeLinejoin="round" strokeDasharray={c.overhead ? "5 4" : undefined} />
+    ),
+  );
 }
 
 /** A banquette standing on its own (lib/design-document/bench.ts), in its own frame — the strip is
@@ -399,6 +434,22 @@ const polar = (r: number, deg: number) => ({ x: r * Math.cos((deg * Math.PI) / 1
  * of these, not hundreds.
  */
 const plain = new Map<string, FlowerDrawSpec>();
+/** The default mix following a footprint that is not a box (a tile with no row behind it): one spec
+ *  per footprint object and tone. */
+const shapedSpecs = new WeakMap<Footprint, Map<string, FlowerDrawSpec>>();
+function shapedFlowers(footprint: Footprint, tone: string | undefined): FlowerDrawSpec {
+  let byTone = shapedSpecs.get(footprint);
+  if (!byTone) shapedSpecs.set(footprint, (byTone = new Map()));
+  const key = tone ?? "";
+  let spec = byTone.get(key);
+  if (!spec) {
+    const b = footprintBounds(footprint);
+    spec = { form: "shape", w: Math.round(b.w), h: Math.round(b.h), lines: defaultMix(), shade: tone, seed: seedOf(`shape|${Math.round(b.w)}|${Math.round(b.h)}`), cover: coverShapesOf(footprint) };
+    byTone.set(key, spec);
+  }
+  return spec;
+}
+
 function plainFlowers(w: number, h: number, tone: string | undefined, form?: FlowerForm): FlowerDrawSpec {
   const f = form ?? (Math.max(w, h) >= Math.min(w, h) * 2.2 ? "runner" : "dome");
   const key = `${f}|${Math.round(w)}|${Math.round(h)}|${tone ?? ""}`;

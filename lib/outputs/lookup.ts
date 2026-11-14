@@ -1,7 +1,7 @@
 // Wiring: adapt the catalog resolver + category registry into the injected lookups that
 // the pure aggregations (aggregate.ts, quote.ts) consume. This is the only outputs file that
 // touches the catalog graph.
-import { benchOf, deckOf, resolve } from "@/lib/studio/catalog-resolver";
+import { aisleBrings, benchOf, deckOf, resolve } from "@/lib/studio/catalog-resolver";
 import { loadProducts } from "@/lib/catalog/storage";
 import { CATEGORIES, CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { stemsOf } from "@/lib/catalog/flowers";
@@ -90,6 +90,7 @@ export function measureContext(structure?: VenueStructure, doc?: DesignDocumentC
       const p = loadProducts().find((x) => x.category === "curtain-rods" && !x.archived);
       return p ? (p.variants[0]?.id ?? p.id) : undefined;
     },
+    isRod: (variantId) => resolve(variantId)?.product.category === "curtain-rods",
     unitOf: (variantId) => resolve(variantId)?.product.priceUnit ?? "unit",
     // Along the wall — a drape round a bowed wall covers the arc, not the chord.
     wallLengthMm: structure ? (wallId) => wallTrack(structure, wallId)?.lengthMm : undefined,
@@ -114,5 +115,7 @@ export function measureContext(structure?: VenueStructure, doc?: DesignDocumentC
     climbOf: (variantId) => climbKindOf(resolve(variantId)?.product),
     // An arrangement's vase is packed and counted with it (lib/catalog/vessel.ts).
     vesselOf: (p) => vesselOf(p, (id) => resolve(id)?.product),
+    // An aisle is N of the piece that lines it, and of that piece's vase (lib/catalog/aisle.ts).
+    aisleOf: (p) => aisleBrings(p, (piece) => vesselOf(piece, (id) => resolve(id)?.product)),
   };
 }

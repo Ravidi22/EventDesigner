@@ -128,7 +128,7 @@ export function ownBodyParts(
   product: Product | undefined,
   footprint: Footprint,
   body: MaterialRef,
-  opts: { baseProfileIsPicture?: boolean; only?: (p: ResolvedPart) => boolean } = {},
+  opts: { baseProfileIsPicture?: boolean; only?: (p: ResolvedPart) => boolean; /** Every shape but the first is the model's — the picture stands on the first alone (lib/catalog/picture-frame.ts). */ others?: boolean } = {},
 ): { parts: Part[]; rest: Footprint } | null {
   const el = elementOf(product, footprint);
   if (!el) return null;
@@ -140,7 +140,8 @@ export function ownBodyParts(
   // piece with the picture inside it.
   // `only` narrows what the model builds (a bar's recipe honours its own back pieces' heights, so
   // only its front panels are the model's).
-  const isOwn = (p: ResolvedPart) => (opts.only ? opts.only(p) : !!p.part.own || (!opts.baseProfileIsPicture && p.index === 0 && p.part.op.kind === "revolve"));
+  const isOwn = (p: ResolvedPart) =>
+    opts.only ? opts.only(p) : p.index === 0 ? (!!p.part.own && p.part.op.kind !== "revolve") || (!opts.baseProfileIsPicture && p.part.op.kind === "revolve") : !!p.part.own || !!opts.others;
   if (!el.geometry.parts.some(isOwn)) return null;
   const own = { ...el.geometry, parts: el.geometry.parts.filter(isOwn) };
   const rest = el.geometry.parts.filter((p) => p.index === 0 || !p.part.own).flatMap((p) => p.pieces);

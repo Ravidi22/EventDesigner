@@ -12,7 +12,7 @@ import type { Plane } from "@/lib/studio/planes";
 import { deckOf, resolve } from "@/lib/studio/catalog-resolver";
 import { catalogVersion } from "@/lib/catalog/storage";
 import { edgeItemShape, toRoom } from "@/lib/design-document/stage";
-import { railClothLine, railLines, railOf, sketchRailContext } from "@/lib/studio/rail";
+import { isRodRow, railClothLine, railLines, railOf, sketchRailContext } from "@/lib/studio/rail";
 import { clothPolygons, clothView, isCeilingClothCategory } from "@/lib/studio/ceiling-cloth";
 import { footprintBounds, resolveFootprint } from "@/lib/studio/footprint";
 import { rugPolygon, rugShapeOf } from "@/lib/studio/rug-shape";
@@ -264,6 +264,8 @@ export function clearanceSubjects(
     if (isLedStrip(r?.product)) continue;
     // A sail or a ceiling drape is over people's heads, as a chandelier is — no one's obstacle (spec §6.3).
     if (r?.anchor === "wall" && isCeilingClothCategory(r.product.category)) continue;
+    // A BARE ROD has no cloth coming down to the floor: its two posts are in nobody's way.
+    if (r?.anchor === "wall" && isRodRow(r.product)) continue;
     if (r?.anchor === "wall") {
       if (visible.ceiling) add({ kind: "placement", id: p.id });
       continue;

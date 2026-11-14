@@ -9,7 +9,7 @@
 // host's one setPlacementRail. Absent field = the default, shown as the placeholder — a blank box
 // says "as the cloth would be".
 import type { Rail, RailSheet, SailRail, CanopyRail, RunRail } from "@/lib/studio/rail";
-import { clothRuns, CLOTH_WIDTH_MM, RUN_SAG_MM, sailTieHeight } from "@/lib/studio/ceiling-cloth";
+import { clothRuns, CLOTH_WIDTH_MM, maxSagMm, RUN_SAG_MM, runClothLengthMm, runEndHeight, runEndHeights, runLowestMm, sailTieHeight } from "@/lib/studio/ceiling-cloth";
 import { Note, PanelRow } from "@/components/inspector-bar";
 import { NumberField } from "@/components/number-field";
 import { Button } from "@/components/button";
@@ -86,11 +86,26 @@ function DrapePanel({ rail, onRail, onRedraw }: { rail: RunRail | CanopyRail; on
   const runs = clothRuns(rail);
   const autoWaves = runs[0]?.waves ?? 1;
   const canopy = rail.type === "canopy" ? rail : null;
+  // ONE SWAG's two ends, each at its own height (2026-11-13) — א the end it was drawn from.
+  const swag = rail.type === "run" ? rail : null;
+  const ends = swag ? runEndHeights(swag) : null;
+  const one = swag ? runs[0] : undefined;
   return (
     <>
-      <PanelRow label="גובה (ס״מ)" htmlFor="drape-h">
-        <NumberField id="drape-h" decimals={0} min={100} max={1500} step={10} commitOnBlur value={cm(rail.heightMm)} onChange={(v) => onRail({ ...rail, heightMm: v * 10 })} className="w-24" />
-      </PanelRow>
+      {swag && ends ? (
+        <>
+          <PanelRow label="גובה קצה א׳ (ס״מ)" htmlFor="drape-ha">
+            <NumberField id="drape-ha" decimals={0} min={50} max={1500} step={10} commitOnBlur value={cm(ends[0])} onChange={(v) => onRail(runEndHeight(swag, 0, v * 10))} className="w-24" />
+          </PanelRow>
+          <PanelRow label="גובה קצה ב׳ (ס״מ)" htmlFor="drape-hb">
+            <NumberField id="drape-hb" decimals={0} min={50} max={1500} step={10} commitOnBlur value={cm(ends[1])} onChange={(v) => onRail(runEndHeight(swag, 1, v * 10))} className="w-24" />
+          </PanelRow>
+        </>
+      ) : (
+        <PanelRow label="גובה (ס״מ)" htmlFor="drape-h">
+          <NumberField id="drape-h" decimals={0} min={100} max={1500} step={10} commitOnBlur value={cm(rail.heightMm)} onChange={(v) => onRail({ ...rail, heightMm: v * 10 })} className="w-24" />
+        </PanelRow>
+      )}
       <PanelRow label="רוחב הבד (ס״מ)" htmlFor="drape-w">
         <NumberField id="drape-w" decimals={0} min={10} max={600} hideZero placeholder={`${cm(CLOTH_WIDTH_MM)}`} value={rail.widthMm ? cm(rail.widthMm) : 0} onChange={(v) => onRail(own(rail, "widthMm", v * 10))} className="w-24" />
       </PanelRow>
@@ -107,8 +122,8 @@ function DrapePanel({ rail, onRail, onRedraw }: { rail: RunRail | CanopyRail; on
           </PanelRow>
         </>
       )}
-      <PanelRow label="שקיעה באמצע (ס״מ)" htmlFor="drape-sag">
-        <NumberField id="drape-sag" decimals={0} min={0} max={300} hideZero placeholder={`${cm(RUN_SAG_MM)}`} value={rail.sagMm ? cm(rail.sagMm) : 0} onChange={(v) => onRail(own(rail, "sagMm", v * 10))} className="w-24" />
+      <PanelRow label={swag ? "עומק הקימור (ס״מ)" : "שקיעה באמצע (ס״מ)"} htmlFor="drape-sag">
+        <NumberField id="drape-sag" decimals={0} min={0} max={one ? Math.max(300, cm(maxSagMm(one))) : 300} hideZero placeholder={`${cm(RUN_SAG_MM)}`} value={rail.sagMm ? cm(rail.sagMm) : 0} onChange={(v) => onRail(own(rail, "sagMm", v * 10))} className="w-24" />
       </PanelRow>
       <PanelRow label={canopy ? "גלים בכל רצועה" : "גלים לאורך"} htmlFor="drape-waves">
         <NumberField id="drape-waves" decimals={0} min={0} max={40} hideZero placeholder={`${autoWaves}`} value={rail.waves ?? 0} onChange={(v) => onRail(own(rail, "waves", v))} className="w-20" />
@@ -140,8 +155,9 @@ function DrapePanel({ rail, onRail, onRedraw }: { rail: RunRail | CanopyRail; on
       <Note>
         {canopy
           ? "רצועות מקבילות לכל רוחב השטח, בכיוון ובמרווח שנבחרו — גוררים פינה על התוכנית כדי לשנות את השטח."
-          : "בד בין שתי נקודות, נאסף בכל גל ושוקע באמצעו — גוררים את הקצוות על התוכנית."}{" "}
-        ריק — ברירת המחדל. מתומחר לפי אורך הבד.
+          : "בד בין שתי נקודות — גוררים את הקצוות על התוכנית, ואת המעוין שבאמצע כדי להעמיק את הקימור (הקו המקווקו הוא הבד במבט מהצד)."}{" "}
+        ריק — ברירת המחדל. מתומחר לפי אורך הקו על התוכנית.
+        {one ? ` הנקודה הנמוכה ${(runLowestMm(one) / 1000).toFixed(2)} מ׳ מהרצפה · אורך הבד לאורך הקימור ${(runClothLengthMm(one) / 1000).toFixed(2)} מ׳.` : ""}
       </Note>
     </>
   );

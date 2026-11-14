@@ -12,7 +12,7 @@
 // This module never reads a price: `Resolved.price`, `unitPrice`, the studio's cost and
 // `supplierId` are not read anywhere under lib/scene (`check:costs` scans the folder), and the
 // check proves the fixture's secret price never reaches the scene.
-import { resolve, chairBlockOf } from "@/lib/studio/catalog-resolver";
+import { resolve, aisleOf, chairBlockOf } from "@/lib/studio/catalog-resolver";
 import { placementFootprint } from "@/components/footprint-shape";
 import { catalogBox, type Footprint } from "@/lib/studio/footprint";
 import { chairStyleOf, curtainStyleOf, symbolOf } from "@/lib/catalog/symbols";
@@ -26,7 +26,7 @@ import { pointInPolygon } from "@/lib/venues/faces";
 import { footprintPolygons } from "@/lib/studio/proximity";
 import type { StructureFeature } from "@/lib/venues/structure";
 import { CURTAIN_FILL, curtainLines, curtainOf, curtainPieces } from "@/lib/venues/curtain";
-import { isRailed, offsetPath, railLines, railOf, sketchRailContext } from "@/lib/studio/rail";
+import { isRailed, isRodRow, offsetPath, railLines, railOf, rodPostMm, rodThickMm, sketchRailContext } from "@/lib/studio/rail";
 import type { Placement } from "@/lib/design-document/types";
 import type { Point } from "@/lib/studio/hall";
 import { SceneCollector } from "./collect";
@@ -36,9 +36,10 @@ import { SCREEN_FRAME, ledStripBody, screenBody, stripBaseMm } from "./led";
 import { envelopeNodes } from "./envelope";
 import { elevationOf, RUG_MM, type Elevation } from "./elevation";
 import { roomTransform } from "./frame";
-import { chairRequest, itemBody } from "./items";
+import { chairRequest, itemBody, vesselRimShare } from "./items";
+import { vesselOf } from "@/lib/catalog/vessel";
 import { type ItemContext } from "./item-context";
-import { floorKindBody, rugBody } from "./floor-kinds";
+import { aisleRunnerBody, floorKindBody, rugBody } from "./floor-kinds";
 import { danceFloorBody } from "./dance-floor";
 import { hexOf } from "./materials";
 import { ceilingUndersideMm, curtainBody, hungFlowersBody } from "./overhead";
@@ -140,6 +141,21 @@ function floorPlacement(input: SceneInput, out: SceneCollector, p: Placement, el
     }
     return;
   }
+  // AN AISLE (lib/catalog/aisle.ts) is its runner and the piece that lines it at every spot — each one
+  // built as its own row is, standing where the plan draws it and on whatever floor is under it there.
+  const aisle = aisleOf(p);
+  if (aisle) {
+    const run = aisle.layout.runner;
+    if (run) out.item(`${p.id}~runner`, { type: "item", id: p.id, label: aisle.product.name }, aisleRunnerBody(run), roomTransform(p, floorOf(placementFootprint(p))));
+    const turn = ((p.rotation ?? 0) * Math.PI) / 180;
+    const cos = Math.cos(turn);
+    const sin = Math.sin(turn);
+    for (const piece of aisle.pieces) {
+      const { x, y } = piece.position;
+      floorPlacement(input, out, { ...piece, position: { x: p.position.x + x * cos - y * sin, y: p.position.y + x * sin + y * cos }, rotation: (p.rotation ?? 0) + piece.rotation }, elevation, roofedMm);
+    }
+    return;
+  }
   const { product, kind, ctx, footprint } = contextOf(input, p);
   if (product?.category === "rugs" || product?.category === "dance-floors") {
     // The rug's own top is what floorZ reads under it; its base is a rug lower. A carpet laid to an
@@ -155,7 +171,21 @@ function floorPlacement(input: SceneInput, out: SceneCollector, p: Placement, el
   const z = floorOf(footprint);
   // A chuppah hung with no posts rides on cables to the ceiling over it (lib/venues/roofs.ts).
   if (kind === "chuppah" && roofedMm && roofedMm > z + ctx.heightMm) ctx.chainMm = roofedMm - z - ctx.heightMm;
-  out.item(p.id, tagOf(kind, p, product?.name), itemBody(kind, ctx), roomTransform(p, z));
+  // An arrangement standing on the floor IN A VESSEL (lib/catalog/vessel.ts) — an urn, or a PLINTH it
+  // is set on: the vessel first, the flowers raised to where it holds them, as on a table (./tables.ts
+  // dressingOf). Before 2026-11-13 the floor path built the flowers alone, on the floor.
+  let lift = 0;
+  if (kind === "flowers" || kind === "centerpiece") {
+    const vaseId = vesselOf(p, (id) => resolve(id)?.product);
+    const vase = vaseId ? contextOf(input, { id: `${p.id}:vase`, variantId: vaseId, layer: "floor", quantity: 1, position: p.position, rotation: p.rotation, scale: 1 }) : null;
+    if (vase?.product) {
+      out.item(`${p.id}:vase`, { type: "item", id: p.id, label: vase.product.name }, itemBody(vase.kind, vase.ctx), roomTransform(p, z));
+      lift = vesselRimShare(vase.product) * (vase.product.dimensions.heightMm || 0);
+      // …and what falls off it (a runner's fall) hangs that far, to the floor.
+      if (lift > 0) ctx.standMm = lift;
+    }
+  }
+  out.item(p.id, tagOf(kind, p, product?.name), itemBody(kind, ctx), roomTransform(p, z + lift));
 }
 
 /** A design item standing on a banquette: where the plan spreads it along the strip, on its top. */
@@ -206,7 +236,16 @@ function curtain(input: SceneInput, out: SceneCollector, p: Placement): void {
   const resolved = resolve(p.variantId);
   const product = resolved?.product;
   const colour = hexOf(resolved?.swatch) ?? hexOf(product?.appearance?.style?.fill) ?? "#f3ede2";
-  const opts = { style: curtainStyleOf(product), dropMm: p.dropMm, posts: line.posts };
+  // A rod's own thickness (and its posts'), and a BARE ROD — the built-in מוט וילון with no cloth on
+  // it yet (lib/studio/rail.ts isRodRow): the rod and its posts alone, in its row's shade.
+  const bare = isRodRow(product);
+  const opts = {
+    style: curtainStyleOf(product),
+    dropMm: p.dropMm,
+    posts: line.posts,
+    ...(rail.type === "rod" ? { rodMm: rodThickMm(rail), postMm: rodPostMm(rail) } : {}),
+    ...(bare ? { bare: true, rodColour: hexOf(resolved?.swatch) ?? hexOf(product?.appearance?.style?.fill) } : {}),
+  };
   const tag = { type: "item" as const, id: p.id };
   if (line.wall) {
     const track = line.wall.track;

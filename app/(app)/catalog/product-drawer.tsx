@@ -11,6 +11,7 @@ import {
   Eye,
   FileText,
   Flower2,
+  Route,
   ImagePlus,
   Layers,
   PackageCheck,
@@ -50,7 +51,7 @@ import { SupplierSelect } from "@/app/(app)/suppliers/supplier-select";
 import { catalogBox, frontFace, resolveContent, resolveFootprint, roundSizeMm, rowShapeDims } from "@/lib/studio/footprint";
 import { RESIZE_DEFAULT_STEP_MM, type ResizeSpec } from "@/lib/catalog/types";
 import { HANG_FIELD, HANG_MAX_MM } from "@/lib/studio/hang";
-import { CATEGORIES, CATEGORY_BY_ID, CATEGORY_GROUPS, LAYERS, styleTagsOf, type CategoryDef } from "@/lib/catalog/categories";
+import { CATEGORIES, CATEGORY_BY_ID, CATEGORY_GROUPS, LAYERS, PLACES, categoryNamed, styleTagsOf, type CategoryDef } from "@/lib/catalog/categories";
 import { CANDLE_STYLE_LABEL, CHAIR_STYLE_LABEL, SYMBOL_STYLES, chairStyleOf, drawStyleOf, symbolOf } from "@/lib/catalog/symbols";
 import { CHUPPAH_ROOF_LABEL, chuppahDrawOf, chuppahOf } from "@/lib/catalog/chuppah";
 import { rescaleOutline } from "@/lib/catalog/shape-list";
@@ -69,6 +70,9 @@ import { SwitchRow } from "@/components/toggle";
 import { Select } from "@/components/select";
 import { loadProducts } from "@/lib/catalog/storage";
 import { VESSEL_HOLDERS } from "@/lib/catalog/vessel";
+import { AISLE_CATEGORY, AISLE_PIECE_FIELD, AISLE_SIZE_MM, aislePatch, aisleSpecOf, aisleWords } from "@/lib/catalog/aisle";
+import { aisleViewOf } from "@/lib/studio/catalog-resolver";
+import { AisleFields, AislePiecePicker, aislePieceChoices } from "./aisle-fields";
 import { VesselPicker, vesselChoices } from "./vessel-picker";
 import { TextField } from "@/components/text-field";
 import { NumberField } from "@/components/number-field";
@@ -450,6 +454,7 @@ const NAME_EXAMPLE: Record<string, string> = {
   lamps: "מנורת שולחן פליז",
   chandeliers: "שנדליר קריסטל",
   rugs: "שטיח פרסי",
+  aisles: "שדרת ורדים לחופה",
   curtains: "וילון שיפון לבן",
   arches: "קשת פרחים",
   backdrops: "קיר רקע קשתות לבן",
@@ -457,6 +462,11 @@ const NAME_EXAMPLE: Record<string, string> = {
   columns: "עמוד יווני",
   fountains: "מזרקת אבן",
   trees: "עץ זית בעציץ",
+};
+
+/** …and for a category whose rows stand anywhere (CategoryDef.places), by where this one stands. */
+const PLACE_NAME_EXAMPLE: Record<string, Partial<Record<Product["layer"], string>>> = {
+  "flower-arrangements": { floor: "קיר פרחים 3×2.4", ceiling: "ענן פרחים תלוי" },
 };
 
 /** One line under the preview naming the category's PICTURE as it is set — "4 עמודים וגגון · גג: בד",
@@ -477,7 +487,7 @@ function pictureLine(p: Product): string | null {
   return label;
 }
 
-type RowKey = "img" | "flowers" | "shades" | "price" | "plan" | "spec" | "stock" | "vis";
+type RowKey = "img" | "flowers" | "aisle" | "shades" | "price" | "plan" | "spec" | "stock" | "vis";
 type RequiredKey = "name" | "shape" | "dims" | "height";
 
 /** "מוצר חדש" / "עריכת מוצר" — the catalog's product drawer (2026-11-09, the user's redesign from
@@ -540,7 +550,8 @@ export function ProductDrawer({
   const [fromForm, setFromForm] = useState(false);
   const [query, setQuery] = useState("");
   // Which "אפשר להשלים אחר כך" rows are open. Every row starts folded: they read back on their ends.
-  const [rows, setRows] = useState<ReadonlySet<RowKey>>(() => new Set());
+  // An aisle's row opens with its make-up out: the piece that lines it is the first thing asked of it.
+  const [rows, setRows] = useState<ReadonlySet<RowKey>>(() => new Set<RowKey>(product?.category === AISLE_CATEGORY ? ["aisle"] : []));
   // "המראה עודכן" on the preview for a moment after the editor saves — the answer to "did it take?".
   const [flash, setFlash] = useState(false);
   const flashTimer = useRef<number | null>(null);
@@ -739,9 +750,12 @@ export function ProductDrawer({
         : leaveFront
           ? { plane: undefined, bendDeg: undefined, faceTurnDeg: undefined }
           : {};
+      // A NEW aisle starts at a size (8 × 3 m — lib/catalog/aisle.ts): its two numbers are its length
+      // and its width across, and an unmeasured one would draw nothing to line.
+      const aisleSeed = !d.id && id === AISLE_CATEGORY && !d.dimensions.widthMm && !d.dimensions.depthMm && !handDrawn;
       return {
         ...d,
-        dimensions: enterFront ? { ...reseeded, depthMm: FRONT_THICK_MM } : leaveFront ? { ...reseeded, depthMm: undefined } : reseeded,
+        dimensions: aisleSeed ? { ...reseeded, ...AISLE_SIZE_MM, diameterMm: undefined } : enterFront ? { ...reseeded, depthMm: FRONT_THICK_MM } : leaveFront ? { ...reseeded, depthMm: undefined } : reseeded,
         category: id,
         layer: c.defaultLayer,
         categoryFields: {},
@@ -762,8 +776,12 @@ export function ProductDrawer({
         appearance: handDrawn ? d.appearance : { ...d.appearance, shape: defaultShape(c), content: contentOf(d), ...planeSeed },
       };
     });
-  const pickCategory = (id: string) => {
+  /** `layer`: the place picked with the category, for one whose rows stand anywhere (PLACES). */
+  const pickCategory = (id: string, layer?: Product["layer"]) => {
     if (id !== draft.category) changeCategory(id);
+    if (layer) setDraft((d) => (d.layer === layer ? d : { ...d, layer }));
+    // An aisle's make-up is the first thing asked of it: its row opens with that fold out.
+    if (id === AISLE_CATEGORY) setRows((cur) => new Set([...cur, "aisle"]));
     setStage("form");
     setQuery("");
   };
@@ -838,6 +856,19 @@ export function ProductDrawer({
       return { ...d, categoryFields: v ? { ...rest, vessel: v } : rest };
     });
   const liveVariants = draft.variants.filter((v) => !v.archived);
+  // AN AISLE (lib/catalog/aisle.ts): the piece that lines it — another row of this catalog, by variant
+  // — and how it is laid. Read back through the same view the plan draws.
+  const isAisle = draft.category === AISLE_CATEGORY;
+  const pieceValue = typeof draft.categoryFields[AISLE_PIECE_FIELD] === "string" ? (draft.categoryFields[AISLE_PIECE_FIELD] as string) : "";
+  const setPiece = (v: string) =>
+    setDraft((d) => {
+      const { [AISLE_PIECE_FIELD]: _old, ...rest } = d.categoryFields;
+      void _old;
+      return { ...d, categoryFields: v ? { ...rest, [AISLE_PIECE_FIELD]: v } : rest };
+    });
+  const pieceChoices = isAisle ? aislePieceChoices(loadProducts()) : [];
+  const pieceLabel = pieceValue ? pieceChoices.find((o) => o.value === pieceValue)?.label : undefined;
+  const aisleView = isAisle ? aisleViewOf(draft) : null;
 
   // ── The header's pill: the category, and the way back to the tiles ─────────────────────────────
   const categoryPill =
@@ -864,7 +895,13 @@ export function ProductDrawer({
     // that category. A row already in one keeps it; a built-in is offered its own alone.
     const offered = offeredCategories(categories, { isSupplier: supplierOrg, product }).filter((c) => c.id !== COMPOSITE_CATEGORY);
     const q = query.trim();
-    const groups = CATEGORY_GROUPS.map((g) => ({ g, items: offered.filter((c) => c.group === g.id && (!q || c.label.includes(q))) })).filter((x) => x.items.length > 0);
+    // A category whose rows stand anywhere (CategoryDef.places — flowers) is offered once per PLACE:
+    // "where does it stand" is the first thing that tells a centrepiece from a flower wall.
+    const tiles = (c: CategoryDef) =>
+      c.places
+        ? PLACES.map((p) => ({ c, key: `${c.id}:${p.layer}`, layer: p.layer as Product["layer"] | undefined, label: `${c.label} · ${p.label}`, hint: p.kinds }))
+        : [{ c, key: c.id, layer: undefined as Product["layer"] | undefined, label: c.label, hint: seedOf(c) }];
+    const groups = CATEGORY_GROUPS.map((g) => ({ g, items: offered.filter((c) => c.group === g.id && (!q || categoryNamed(c, q))).flatMap(tiles) })).filter((x) => x.items.length > 0);
     return (
       <Drawer title={isEdit ? "עריכת מוצר" : "מוצר חדש"} onClose={onClose}>
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
@@ -888,14 +925,14 @@ export function ProductDrawer({
             <div key={g.id} className="space-y-2">
               <SectionDivider label={g.label} />
               <div className="grid grid-cols-3 gap-2">
-                {items.map((c) => {
+                {items.map(({ c, key, layer, label, hint }) => {
                   const Icon = c.icon;
-                  const current = fromForm && c.id === draft.category;
+                  const current = fromForm && c.id === draft.category && (!layer || layer === draft.layer);
                   return (
                     <button
-                      key={c.id}
+                      key={key}
                       type="button"
-                      onClick={() => pickCategory(c.id)}
+                      onClick={() => pickCategory(c.id, layer)}
                       aria-pressed={current}
                       className={`relative flex min-w-0 flex-col items-start gap-2 rounded-md border bg-surface p-2.5 text-start transition-colors hover:border-accent-line hover:bg-inset ${
                         current ? "border-accent" : "border-border"
@@ -905,8 +942,8 @@ export function ProductDrawer({
                         <Icon className="h-[18px] w-[18px]" strokeWidth={1.75} />
                       </span>
                       <span className="min-w-0">
-                        <span className="block text-[13px] font-semibold leading-tight text-ink">{c.label}</span>
-                        <span className="mt-0.5 block text-[11px] leading-snug text-muted">{seedOf(c)}</span>
+                        <span className="block text-[13px] font-semibold leading-tight text-ink">{label}</span>
+                        <span className="mt-0.5 block text-[11px] leading-snug text-muted">{hint}</span>
                       </span>
                       {current && (
                         <span className="absolute end-2 top-2 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-accent text-canvas">
@@ -971,6 +1008,7 @@ export function ProductDrawer({
     flowers: category.flowers
       ? [flowerRows ? `${flowerRows === 1 ? "פרח אחד" : `${flowerRows} פרחים`} · ${stems} גבעולים` : stems ? `${stems} גבעולים` : "אין מפרט", vesselLabel].filter(Boolean).join(" · ")
       : (vesselLabel ?? "ללא כלי"),
+    aisle: aisleView ? (pieceLabel ? `${pieceLabel} · ${aisleWords(aisleView.layout)}` : "לא נבחר פריט") : "",
     shades: liveVariants.length === 0 ? "אין גוונים" : liveVariants.length === 1 ? "גוון אחד" : `${liveVariants.length} גוונים`,
     price: draft.unitPrice ? `${formatPrice(draft.unitPrice)} ${PRICE_UNIT_LABEL[draft.priceUnit ?? "unit"]}` : "לא נקבע",
     plan: [
@@ -1051,11 +1089,23 @@ export function ProductDrawer({
                 label="שם המוצר"
                 value={draft.name}
                 onChange={(v) => patch({ name: v })}
-                placeholder={`לדוגמה: ${NAME_EXAMPLE[draft.category] ?? "מפת שולחן קטיפה"}`}
+                placeholder={`לדוגמה: ${PLACE_NAME_EXAMPLE[draft.category]?.[draft.layer] ?? NAME_EXAMPLE[draft.category] ?? "מפת שולחן קטיפה"}`}
                 error={submitted && missing.name}
                 errorMessage="יש להזין שם מוצר."
                 autoFocus
               />
+
+              {/* Where it stands — asked here, beside the name, for a category whose rows stand
+                  anywhere (flowers: a table, the floor, the ceiling). It IS the row's layer: where a
+                  drop lands, which plane lists it, which section of the quote it is read under. */}
+              {category.places && (
+                <Segmented
+                  label="איפה זה עומד?"
+                  value={draft.layer}
+                  options={PLACES.map((p) => [p.layer, p.label] as const)}
+                  onChange={(v) => patch({ layer: v })}
+                />
+              )}
 
               <div className="space-y-2.5">
                 <div className="flex items-baseline gap-2">
@@ -1197,7 +1247,7 @@ export function ProductDrawer({
                               number — rescaled at "1", then "12", it would lose its shape. */}
                           <NumberField
                             id="p-width"
-                            label={line ? "אורך (ס״מ)" : "רוחב (ס״מ)"}
+                            label={line || isAisle ? "אורך (ס״מ)" : "רוחב (ס״מ)"}
                             required
                             hideZero
                             min={0}
@@ -1210,7 +1260,7 @@ export function ProductDrawer({
                           {thicknessField || (
                             <NumberField
                               id="p-depth"
-                              label={line ? "עובי (ס״מ)" : "עומק (ס״מ)"}
+                              label={line ? "עובי (ס״מ)" : isAisle ? "רוחב (ס״מ)" : "עומק (ס״מ)"}
                               required
                               hideZero
                               min={0}
@@ -1286,6 +1336,30 @@ export function ProductDrawer({
                 — drawn under it on the plan, packed and counted with it. A placement may set it in
                 another, or in none. A centrepiece has no flower rows, only the vessel. A row of its
                 own (the user's call, 2026-11-09): not required, so not in הבסיס. */}
+            {/* What an AISLE is made of: the piece that lines it (any floor-standing row of this
+                catalog) and how it is laid — a piece every so far, one side or both, the runner. The
+                preview above draws it as it will land; the count is the plan's, from its length. */}
+            {isAisle && (
+              <FoldRow icon={Route} title="הרכב השדרה" summary={sum.aisle} open={rows.has("aisle")} onToggle={() => toggleRow("aisle")}>
+                <div className="space-y-4">
+                  <div>
+                    <span className={fieldLabelClassName}>{pieceLabel ? `הפריט שלאורך השדרה — ${pieceLabel}` : "הפריט שלאורך השדרה"}</span>
+                    <AislePiecePicker value={pieceValue} onChange={setPiece} choices={pieceChoices} lead={[{ value: "", label: "בלי פריט" }]} listClassName="max-h-44" />
+                    <p className="mt-1 text-xs leading-relaxed text-muted">
+                      {pieceChoices.length === 0
+                        ? "אין עדיין בקטלוג פריט שיכול לעמוד לאורך שדרה — מוסיפים קודם קופסת פרחים, עמוד, פנס או עץ."
+                        : "כל פריט מהקטלוג שעומד במקום — קופסת פרחים, עמוד, פנס, עץ. הוא מצויר בכל נקודה לאורך השדרה, ונספר, נארז ומתומחר לפי השורה שלו."}
+                    </p>
+                  </div>
+                  <AisleFields
+                    spec={aisleSpecOf(draft)}
+                    layout={aisleView?.layout}
+                    onChange={(p) => setDraft((d) => ({ ...d, appearance: { shape: "rect" as const, content: "none" as const, ...d.appearance, aisle: aislePatch(d.appearance?.aisle, p) } }))}
+                    idPrefix="aisle"
+                  />
+                </div>
+              </FoldRow>
+            )}
             {(category.flowers || vesselHolder) && (
               <FoldRow
                 icon={category.flowers ? Flower2 : Amphora}
@@ -1303,7 +1377,7 @@ export function ProductDrawer({
                       onChange={(flowers) => patch({ flowers })}
                       onTypedStems={(v) => setField("stems", v)}
                     />
-                    {vesselHolder && <VesselField value={vesselValue} onChange={setVessel} />}
+                    {vesselHolder && draft.layer !== "ceiling" && <VesselField value={vesselValue} onChange={setVessel} />}
                   </div>
                 ) : (
                   <VesselField value={vesselValue} onChange={setVessel} untitled />

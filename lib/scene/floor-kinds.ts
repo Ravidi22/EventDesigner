@@ -45,12 +45,12 @@ import { type ClimbHost, climbRisers, climbTreads, riserHeightMm, treadDepthMm }
 import { isMain } from "../self-check";
 import { pergolaFromStyle, pergolaGeometry, pergolaLines, pergolaPostOf } from "@/lib/venues/pergola";
 import { CHUPPAH_FINISH_COLOUR, CHUPPAH_PROFILES, CLOUD_LENS, chuppahLayout, chuppahOf, cloudFlowers, cloudPieces } from "@/lib/catalog/chuppah";
-import { profileAt } from "@/lib/element/revolve";
+import { profileAt, revolveProfileMm } from "@/lib/element/revolve";
 import type { InstanceRequest, ItemBuild } from "./collect";
 import { type ItemContext, fallbackBody } from "./item-context";
 import { chairParts, chairRequest, darkened, pale } from "./items";
 import { flowerBuild } from "./flowers";
-import { treeParts } from "./plants";
+import { treeEnvelopeParts, treeParts } from "./plants";
 import { applyTransform, compose, turn } from "./frame";
 import { ENVELOPE, clothMaterial, foliageMaterial, glossMaterial, metalMaterial, swatchMaterial, waterMaterial } from "./materials";
 import { type MaterialRef, type NodeTag, type Part, type Transform, type Vec3, transform, vec3 } from "./types";
@@ -149,6 +149,14 @@ const plane = (outline: BuiltOutline, at: Vec3, material?: MaterialRef, side?: "
 };
 
 const make = (material: MaterialRef): ItemBuild => ({ parts: [], material, instanced: [], emitters: [] });
+
+/** A round thing turned to `profile` (ItemContext.profile — fractions of its radius and height), an
+ *  oval one stretched to its depth, in one material: a pouf, a column, a fountain's stone. */
+function turnedPart(ctx: ItemContext, profile: readonly { r: number; z: number }[], material: MaterialRef, heightMm = ctx.heightMm): Part {
+  const part: Part = { shape: "lathe", profile: revolveProfileMm(profile, ctx.widthMm / 2, Math.max(10, heightMm)), at: vec3(0, 0, 0), segments: 32, material };
+  if (ctx.widthMm > 0 && Math.abs(ctx.depthMm - ctx.widthMm) > 1) part.scaleY = ctx.depthMm / ctx.widthMm;
+  return part;
+}
 
 /** Several builds as one: the first one's material, everything else appended. */
 function merge(first: ItemBuild, ...rest: ItemBuild[]): ItemBuild {
@@ -291,6 +299,12 @@ export function floorKindBody(kind: SymbolKind, ctx: ItemContext): ItemBuild {
  *  (:911) — the stool chairParts already is. */
 function sofaBody(ctx: ItemContext): ItemBuild {
   const { widthMm: w, depthMm: d, heightMm: h, tone } = ctx;
+  // A round one with a profile of its own (ItemContext.profile) is a pouf turned to it, in its fabric.
+  if (ctx.profile && isRound(ctx.footprint)) {
+    const b = make(matte(tone));
+    b.parts.push(turnedPart(ctx, ctx.profile, matte(tone)));
+    return b;
+  }
   if (isRound(ctx.footprint)) {
     const { parts, material } = chairParts("stool", w, d, h, tone);
     return { parts, material, instanced: [], emitters: [] };
@@ -395,6 +409,14 @@ function columnBody(ctx: ItemContext): ItemBuild {
   const { widthMm: w, depthMm: d, heightMm: h, tone } = ctx;
   const R = Math.min(w, d) / 2;
   const stone = glossMaterial(tone);
+  // A column turned to its OWN profile (ItemContext.profile, the editor's ״צללית העמוד״): plinth, shaft
+  // and capital as the one turned piece it was drawn as — in the column's own polished stone, which
+  // the flat solid it used to become had lost.
+  if (ctx.profile && isRound(ctx.footprint)) {
+    const turnedColumn = make(stone);
+    turnedColumn.parts.push(turnedPart(ctx, ctx.profile, stone));
+    return turnedColumn;
+  }
   const reed = glossMaterial(darkened(tone, 0.08));
   const b = make(stone);
   const plinth = h * 0.12;
@@ -407,6 +429,29 @@ function columnBody(ctx: ItemContext): ItemBuild {
   }
   b.parts.push(lathe([{ r: R * 0.74, z: capital }, { r: R * 0.8, z: h * 0.94 }, { r: R, z: h * 0.985 }, { r: R, z: h }], vec3(0, 0, 0), stone));
   return b;
+}
+
+/** How much of a profiled fountain's height its stone takes — the jet has the rest. */
+const FOUNTAIN_BODY = 0.82;
+
+/** The BOWLS of a profile (fractions): its open TOP, and every rim below it where it has widened and
+ *  turns back in — a basin's lip, a tier's edge — each wide enough to hold water (over a fifth of
+ *  the widest). Where water lies, at the rim's height and reach. */
+export function profileBowls(profile: readonly { r: number; z: number }[]): { r: number; z: number }[] {
+  const out: { r: number; z: number }[] = [];
+  const widest = Math.max(...profile.map((p) => p.r)) || 1;
+  let rose = false;
+  for (let i = 1; i < profile.length; i++) {
+    const p = profile[i];
+    const before = profile[i - 1];
+    const after = profile[i + 1];
+    if (p.r > before.r + 1e-6) rose = true;
+    if (p.r < before.r - 1e-6) rose = false;
+    const rim = !after || (rose && after.r < p.r - 1e-6);
+    if (rim && p.z > 1e-6 && p.r >= widest * 0.2) out.push({ r: p.r, z: p.z });
+    if (rim) rose = false;
+  }
+  return out;
 }
 
 // ── fountain (item-symbol.tsx:966) ──────────────────────────────────────────────────────────────
@@ -423,6 +468,18 @@ function fountainBody(ctx: ItemContext): ItemBuild {
   const stone = matte(STONE);
   const water: MaterialRef = tone === DEFAULT_TONE.fountain.toLowerCase() ? waterMaterial() : { ...waterMaterial(), colour: tone };
   const b = make(stone);
+  // A fountain turned to its OWN profile (ItemContext.profile, ״צללית המזרקה״): its basin and tiers as
+  // drawn, in stone — and still a fountain: water lying in every bowl the profile makes (where it
+  // turns back in under a rim), the jet rising from its top and the splash glowing at night. Before
+  // 2026-11-13 the profile replaced all of it with one pale-blue solid.
+  if (ctx.profile && isRound(ctx.footprint)) {
+    const body = Math.max(10, h * FOUNTAIN_BODY);
+    b.parts.push(turnedPart(ctx, ctx.profile, stone, body));
+    for (const bowl of profileBowls(ctx.profile)) b.parts.push(cyl(Math.max(10, bowl.r * (w / 2) * 0.94), 6, vec3(0, 0, bowl.z * body - 6), water));
+    b.parts.push(cyl(Math.max(8, R * 0.03), Math.max(10, h - body), vec3(0, 0, body), { colour: SPOUT, kind: "water", opacity: 0.7 }));
+    b.emitters.push({ at: vec3(0, 0, h), radiusMm: R * 0.1, colour: SPOUT, strength: 0.6 });
+    return b;
+  }
   const inset = Math.max(60, R * 0.08);
   for (const outline of footprintOutlines(ctx.footprint)) {
     const inner = scaleOutline(outline, (w / 2 - inset) / (w / 2), (d / 2 - inset) / (d / 2));
@@ -516,7 +573,9 @@ function treeBody(ctx: ItemContext): ItemBuild {
   const ry = d / 2;
   const H = Math.max(h, ((rx + ry) / 2) * 1.4);
   const b = make(foliageMaterial(tone));
-  b.parts.push(...treeParts(rx, ry, H, tone));
+  // A crown of its OWN shape (ItemContext.profile, the editor's ״צורת הצמרת״): leaves inside the
+  // envelope, trunk where it is thin — a ball on a stem, a cypress, a two-ball topiary.
+  b.parts.push(...(ctx.profile && isRound(ctx.footprint) ? treeEnvelopeParts(rx, ry, H, tone, ctx.profile) : treeParts(rx, ry, H, tone)));
   return b;
 }
 
@@ -1022,6 +1081,18 @@ function rampBody(ctx: ItemContext): ItemBuild {
  *  in from the edge (item-symbol.tsx:1293–1294) — as four thin strips a shade darker on top, and
  *  the fringe min(70, 0.05 m) (:1295) off the two SHORT ends (:1300) as small boxes, at most
  *  twenty an end so the part count stays modest. */
+/** AN AISLE's runner (lib/catalog/aisle.ts): a strip of cloth down its walk, in the aisle's own frame
+ *  — length along x, centred on (0, y) — a rug thick, with a hem a shade darker along each long edge. */
+export function aisleRunnerBody(runner: { widthMm: number; lengthMm: number; y: number; colour: string }): ItemBuild {
+  const cloth: MaterialRef = { colour: runner.colour, kind: "fabric" };
+  const hemTone: MaterialRef = { colour: darkened(runner.colour, 0.12), kind: "fabric" };
+  const b = make(cloth);
+  b.parts.push(box(runner.lengthMm, runner.widthMm, RUG_MM, vec3(0, runner.y, 0), cloth));
+  const hem = Math.min(60, runner.widthMm * 0.06);
+  if (hem > 4) for (const s of [-1, 1]) b.parts.push(box(runner.lengthMm, hem, RUG_BAND_MM, vec3(0, runner.y + s * (runner.widthMm / 2 - hem * 1.5), RUG_MM), hemTone));
+  return b;
+}
+
 export function rugBody(ctx: ItemContext): ItemBuild {
   const { widthMm: w, depthMm: d, tone } = ctx;
   const fabric = swatchMaterial(ctx.resolved, ctx.product, tone, "fabric", true);
@@ -1479,5 +1550,22 @@ if (isMain(import.meta.url)) {
     assert(b.parts.every((p) => (p.shape === "sphere" ? p.at.z - p.r : p.at.z) >= -1e-6), `${kind} stands on the floor`);
   }
   assert(JSON.stringify(arch) === JSON.stringify(floorKindBody("arch", ctxOf({ kind: "rect", widthMm: 3000, depthMm: 600 }, 2500, DEFAULT_TONE.arch))), "the same arch builds the same twice");
+  // ── The profile is READ by the recipe (2026-11-13, lib/catalog/body-profiles.ts) ──
+  const baluster = [{ r: 0.8, z: 0 }, { r: 0.5, z: 0.1 }, { r: 0.6, z: 0.9 }, { r: 1, z: 1 }];
+  const turnedColumn = floorKindBody("column", ctxOf({ kind: "circle", diameterMm: 500 }, 3000, DEFAULT_TONE.column, { profile: baluster }));
+  assert(turnedColumn.parts.length === 1 && turnedColumn.parts[0].shape === "lathe" && turnedColumn.material.kind === column.material.kind, "a column with a profile is that shaft turned, in the column's own stone");
+  // A two-tier fountain: a basin's rim at 0.3 h of the stone and a bowl's at its top.
+  const tiers = [{ r: 0.9, z: 0 }, { r: 1, z: 0.3 }, { r: 0.15, z: 0.34 }, { r: 0.12, z: 0.8 }, { r: 0.5, z: 1 }];
+  assert(JSON.stringify(profileBowls(tiers)) === JSON.stringify([{ r: 1, z: 0.3 }, { r: 0.5, z: 1 }]), "a profile's bowls are its rims — the basin's lip and the top tier's");
+  assert(profileBowls([{ r: 0.9, z: 0 }, { r: 1, z: 0.25 }, { r: 1, z: 1 }]).length === 1 && profileBowls([{ r: 1, z: 0 }, { r: 0.05, z: 1 }]).length === 0, "a straight-walled basin holds water at its top; a cone holds none");
+  const turnedFountain = floorKindBody("fountain", ctxOf({ kind: "circle", diameterMm: 2000 }, 1500, DEFAULT_TONE.fountain, { profile: tiers }));
+  assert(turnedFountain.parts.filter((p) => p.shape === "lathe").length === 1 && turnedFountain.parts.filter((p) => p.material?.kind === "water").length === 3 && turnedFountain.emitters.length === 1, "a fountain with a profile is its stone turned — with water in both bowls, its jet and its glow kept");
+  const crown = [{ r: 0.07, z: 0 }, { r: 0.07, z: 0.46 }, { r: 0.62, z: 0.52 }, { r: 1, z: 0.74 }, { r: 0.62, z: 0.95 }, { r: 0.04, z: 1 }];
+  const ballTree = floorKindBody("tree", ctxOf({ kind: "circle", diameterMm: 2000 }, 3000, DEFAULT_TONE.tree, { profile: crown }));
+  const ballBlobs = ballTree.parts.filter((p) => p.shape === "blob");
+  assert(ballBlobs.length >= 2 && ballBlobs.every((p) => p.at.z > 3000 * 0.45) && ballTree.parts.some((p) => p.shape === "cylinder" && p.at.z === 0 && p.h > 1200) && ballTree.parts.some((p) => p.shape === "leaves"), "a tree with a crown profile: leaves inside the envelope, a bare trunk under it");
+  assert(JSON.stringify(floorKindBody("tree", ctxOf({ kind: "circle", diameterMm: 3500 }, 4000, DEFAULT_TONE.tree))) === JSON.stringify(tree), "…and a tree with none is the tree it always was");
+  const pouf = floorKindBody("sofa", ctxOf({ kind: "circle", diameterMm: 900 }, 420, DEFAULT_TONE.sofa, { profile: baluster }));
+  assert(pouf.parts.length === 1 && pouf.parts[0].shape === "lathe", "a round sofa with a profile is a pouf turned to it");
   console.log("scene floor kinds ok");
 }

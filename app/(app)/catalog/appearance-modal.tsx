@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlignCenterVertical,
   Armchair,
@@ -95,7 +95,8 @@ import { ElevationQuickBar } from "./elevation-bar";
 import { bandResize, drawnFront, elevationBoxes, elevationNudge, faceSized, placedFront, type ElevationView as SideView } from "@/lib/element/elevation";
 import { bendKeepingMiddle, petalOutline, toFront, toPlan, waveOutline } from "@/lib/element/front";
 import { RevolveFields, type RevolveTiles } from "./revolve-editor";
-import { REVOLVE_LABEL, revolveFormOf } from "@/lib/element/revolve";
+import { REVOLVE_FORMS, REVOLVE_LABEL, REVOLVE_PRESETS, revolveFormOf } from "@/lib/element/revolve";
+import { BODY_UNREAD, BODY_WORD, LAMP_PROFILES, LAMP_SHADE_KEYS, LAMP_SHADE_LABEL, TREE_CROWNS, TREE_CROWN_KEYS, TREE_CROWN_LABEL } from "@/lib/catalog/body-profiles";
 import { ScenePane } from "./scene-pane";
 import { itemBaseZ, itemScene, itemSceneKey } from "@/lib/scene/item-scene";
 import { Menu, type MenuItem } from "@/components/menu";
@@ -122,6 +123,8 @@ import { ItemSurface } from "@/components/surface-fill";
 import { hasSurface } from "@/lib/catalog/textures";
 import { SurfacePicker, surfaceLabel } from "./surface-picker";
 import { ItemSymbol } from "@/components/item-symbol";
+import { AisleDrawing } from "@/components/placed-piece";
+import { aisleViewOf } from "@/lib/studio/catalog-resolver";
 import { FootprintBorder } from "@/components/item-symbol";
 import { BorderFields } from "@/components/border-fields";
 import { Swatch, SwatchField } from "@/components/swatch-field";
@@ -142,7 +145,8 @@ import {
   type SymbolKind,
 } from "@/lib/catalog/symbols";
 import { FLOWER_FORMS, FLOWER_FORM_HINT, FLOWER_FORM_LABEL, FLOWER_PROFILES, FLOWER_PROFILE_FORMS, FLOWER_PROFILE_LABEL, defaultFlowerForm, isFlowerForm, type FlowerDrawSpec } from "@/lib/catalog/flower-draw";
-import { drawLinesOf, flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
+import { arrangementPatch, drawLinesOf, flowerDrawSpecOf, followsShape } from "@/lib/catalog/flower-spec";
+import { spiralOutline } from "@/lib/catalog/flower-cover";
 import { FlowerDrawing } from "@/components/flower-symbol";
 import { climbRise } from "@/lib/studio/climb-item";
 import { AlignMenu, alignItems, type AlignPanel } from "../studio/align-menu";
@@ -532,9 +536,36 @@ const FRONT_PRESETS: readonly { id: FrontPreset; label: string; title: string }[
   { id: "petal", label: "עלה", title: "עלה — פאנל בצורת עלה כותרת" },
 ];
 const isFrontPreset = (id: string): id is FrontPreset => id === "wave" || id === "petal";
-/** What a click on the canvas places: a shape of the drawer, or a front tool. */
-type Armed = RailShape | FrontPreset;
-const armedLabel = (a: Armed) => (isFrontPreset(a) ? FRONT_PRESETS.find((t) => t.id === a)!.label : SHAPE_LABEL[a]);
+/** A SPIRAL (lib/catalog/flower-cover.ts spiralOutline; the user, 2026-11-13: "more shapes — like
+ *  spiral"): a band winding out from its middle, laid as a hand-drawn outline in the plan or the חזית
+ *  view and reshaped point by point like any other. Flowers follow it; anything else is built as it. */
+const SPIRAL = "spiral";
+type SpiralPreset = typeof SPIRAL;
+const SPIRAL_MM = 1400;
+/** What a click on the canvas places: a shape of the drawer, a front tool, or the spiral. */
+type Armed = RailShape | FrontPreset | SpiralPreset;
+const armedLabel = (a: Armed) => (a === SPIRAL ? "ספירלה" : isFrontPreset(a) ? FRONT_PRESETS.find((t) => t.id === a)!.label : SHAPE_LABEL[a]);
+
+/** The spiral's picture on its tile: its own centre line. */
+function SpiralIcon() {
+  const pts = Array.from({ length: 49 }, (_, i) => {
+    const a = (i / 48) * 2.5 * 2 * Math.PI;
+    const r = 1.5 + (9 * i) / 48;
+    return `${(r * Math.cos(a)).toFixed(1)} ${(r * Math.sin(a)).toFixed(1)}`;
+  });
+  return (
+    <svg viewBox="-12 -12 24 24" className="h-6 w-6" aria-hidden>
+      <path d={"M" + pts.join("L")} fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** A spiral laid on the plan at `at`: a hand-drawn outline about that point. */
+function spiralPart(at: { x: number; y: number }): ShapePart {
+  const outline = spiralOutline(SPIRAL_MM).map((v) => ({ x: Math.round(v.x + at.x), y: Math.round(v.y + at.y) }));
+  const b = customShapeBounds(outline);
+  return { id: crypto.randomUUID(), shape: "custom", outline, x: Math.round(b.cx), y: Math.round(b.cy), rotation: 0, widthMm: Math.round(b.w), depthMm: Math.round(b.h) };
+}
 
 /** A front tool's picture on its tile: the preset's own outline. */
 function FrontPresetIcon({ id }: { id: FrontPreset }) {
@@ -590,11 +621,13 @@ function ShapeRail({ armed, drawing, onArm, onDraw, view }: { armed: Armed | nul
             />
           ))}
         </ToolGrid>
-        {front && (
-          <ToolGrid label="חזית">
-            {FRONT_PRESETS.map((t) => (
-              <ToolTile key={t.id} glyph={<FrontPresetIcon id={t.id} />} label={t.label} title={t.title} armed={armed === t.id} onClick={() => onArm(armed === t.id ? null : t.id)} dragId={t.id} />
-            ))}
+        {!disabled && (
+          <ToolGrid label={front ? "חזית" : "מיוחדות"}>
+            {front &&
+              FRONT_PRESETS.map((t) => (
+                <ToolTile key={t.id} glyph={<FrontPresetIcon id={t.id} />} label={t.label} title={t.title} armed={armed === t.id} onClick={() => onArm(armed === t.id ? null : t.id)} dragId={t.id} />
+              ))}
+            <ToolTile glyph={<SpiralIcon />} label="ספירלה" title={front ? "ספירלה — רצועה מתפתלת, בחזית" : "ספירלה — רצועה מתפתלת מהמרכז החוצה"} armed={armed === SPIRAL} onClick={() => onArm(armed === SPIRAL ? null : SPIRAL)} dragId={SPIRAL} />
           </ToolGrid>
         )}
       </div>
@@ -907,6 +940,52 @@ const FLOWER_ENVELOPES: RevolveTiles = {
   note: "הפרחים נפרשים על הצללית — מלמעלה ומהצדדים — והירק ממלא אותה; לא גוף מלא. הרוחב הגדול ביותר הוא הקוטר על התוכנית; חלק צר מדי לפרחים (גזע) הוא צרור גבעולים.",
 };
 
+/** A lamp's body is the WHOLE lamp from the side (lib/catalog/body-profiles.ts lampParts): its base
+ *  below the neck, its shade above. Each tile is a shade on its stem. */
+const LAMP_TILES: RevolveTiles = {
+  title: "צורת האהיל — המנורה מהצד",
+  none: "לפי הסוג",
+  nonePoints: LAMP_PROFILES.empire,
+  forms: LAMP_SHADE_KEYS.map((k) => ({ key: k, label: LAMP_SHADE_LABEL[k], points: LAMP_PROFILES[k] })),
+  note: "הצללית היא המנורה כולה: מתחת לנקודה הצרה ביותר — הבסיס, ממתכת; מעליה — האהיל, מבד ומואר מבפנים. צללית בלי צוואר (חרוט, פנס) היא אהיל שעומד על השולחן.",
+};
+
+/** A tree's body is its CROWN's envelope (lib/catalog/body-profiles.ts TREE_CROWNS): leaves where it
+ *  is wide, trunk where it is thin. */
+const TREE_TILES: RevolveTiles = {
+  title: "צורת הצמרת — העץ מהצד",
+  none: "צמרת רגילה",
+  forms: TREE_CROWN_KEYS.map((k) => ({ key: k, label: TREE_CROWN_LABEL[k], points: TREE_CROWNS[k] })),
+  note: "העלים ממלאים את הצללית; חלק צר שלה הוא גזע. הרוחב הגדול ביותר הוא קוטר הצמרת על התוכנית.",
+};
+
+/** What each other picture makes of its first shape's profile, in a line (lib/catalog/body-profiles.ts). */
+const BODY_NOTE: Partial<Record<SymbolKind, string>> = {
+  vase: "הכלי נבנה בצורת הצללית — חלול, בזכוכית, במתכת או בזיגוג של הגוון שלו.",
+  column: "העמוד נחרט בצורת הצללית — בסיס, גוף וכותרת כיחידה אחת, באבן המלוטשת שלו.",
+  fountain: "האבן נחרטת בצורת הצללית; מים עומדים בכל קערה שהיא יוצרת, והסילון עולה מראשה.",
+  candlestick: "גוף הפמוט נחרט בצורת הצללית, במתכת או בקריסטל שלו; הנרות עומדים עליו.",
+  chair: "מושב עגול נבנה כהדום בצורת הצללית, בבד שלו.",
+  sofa: "מושב עגול נבנה כהדום בצורת הצללית, בבד שלו.",
+};
+
+/** The tiles a first shape's body is offered with, by the picture it is drawn as (the kinds whose
+ *  recipe READS the profile — lib/scene/items.ts PROFILE_IS_PICTURE): the category's own shapes for a
+ *  lamp and a tree, the turned vessels under the category's own word for the rest. Undefined = the
+ *  plain "גוף" (an item with no picture, or one the profile is simply added to). */
+function bodyTilesOf(kind: SymbolKind | null): RevolveTiles | undefined {
+  if (kind === "lamp") return LAMP_TILES;
+  if (kind === "tree") return TREE_TILES;
+  const word = kind ? BODY_WORD[kind] : undefined;
+  if (!kind || !word) return undefined;
+  return {
+    title: word,
+    none: "לפי הציור",
+    forms: REVOLVE_FORMS.map((k) => ({ key: k, label: REVOLVE_LABEL[k], points: REVOLVE_PRESETS[k] })),
+    note: BODY_NOTE[kind] ?? "",
+  };
+}
+
 function PictureFields({
   product,
   preview,
@@ -935,7 +1014,7 @@ function PictureFields({
   // Any version picked turns the picture back on.
   const pick = (p: Partial<MapAppearance>) => onChange({ symbol: undefined, ...p });
   const none = <NoneTile on={off} footprint={footprint} onPick={() => onChange({ symbol: false })} />;
-  if (!kind) return <Note>הציור חל על צורה אחת — עיגול, אליפסה או מלבן. לצורה הזו מוצג תוכן במקומו.</Note>;
+  if (!kind) return <Note>הציור מצויר בתוך הצורה הראשונה של הפריט. הצורה הזו היא ברובה אוויר — טבעת, קשת, רצועה או קווים בלבד — ואין בה מקום לציור, ולכן מוצג תוכן במקומו.</Note>;
   return (
     <div className="space-y-3">
       {/* A picture with no versions of its own: itself, or ללא. */}
@@ -1113,7 +1192,16 @@ function PictureFields({
       {/* Which form an arrangement takes — a dome, a low cushion, a wild garden, a cascade, a runner,
           bud vases (lib/catalog/flower-draw.ts). Absent = by its height. The flowers in each tile are
           the row's own spec in its first shade, so the tiles show THIS arrangement six ways. */}
-      {(product.category === "flower-arrangements" || product.category === "centerpieces") && (
+      {/* FLOWERS FOLLOW THEIR SHAPE (lib/catalog/flower-cover.ts): drawn as anything but a circle, an
+          ellipse or a rectangle — a ring, an arc, a spiral, lines, several shapes — the arrangement has
+          no form to pick: every shape is covered, at its own height. */}
+      {(product.category === "flower-arrangements" || product.category === "centerpieces") && followsShape(resolveFootprint(preview)) && (
+        <div className="space-y-2">
+          <span className={fieldLabelClassName}>צורת הסידור</span>
+          <Note>הפרחים מכסים כל צורה כפי שצוירה — טבעת, קשת, ספירלה, קו או קיר בחזית — כל אחת בגובה שלה. צורה גבוהה היא עמוד או שרוול של פרחים.</Note>
+        </div>
+      )}
+      {(product.category === "flower-arrangements" || product.category === "centerpieces") && !followsShape(resolveFootprint(preview)) && (
         <div>
           <span className={fieldLabelClassName}>צורת הסידור</span>
           <div className="grid grid-cols-3 gap-1" role="radiogroup" aria-label="צורת הסידור">
@@ -1124,7 +1212,8 @@ function PictureFields({
               const b = footprintBounds(resolveFootprint(preview));
               const shown = form ?? defaultFlowerForm(preview.dimensions.heightMm, b.w, b.h);
               const wide = shown === "runner";
-              const spec: FlowerDrawSpec = { form: shown, w: wide ? 1600 : 600, h: wide ? 360 : 600, lines: drawLinesOf(preview), shade: tone, seed: 11 };
+              // "By the shape" is shown on a box a round form would not fill.
+              const spec: FlowerDrawSpec = { form: shown, w: wide ? 1600 : 600, h: wide ? 360 : shown === "shape" ? 400 : 600, lines: drawLinesOf(preview), shade: tone, seed: 11 };
               return (
                 <button
                   key={form ?? "auto"}
@@ -1196,11 +1285,64 @@ function PictureFields({
       {(symbol === "flowers" || symbol === "centerpiece") &&
         onProfile &&
         (() => {
-          const b = footprintBounds(resolveFootprint(preview));
+          const fp = resolveFootprint(preview);
+          if (followsShape(fp)) return null;
+          const b = footprintBounds(fp);
           const chosen = preview.appearance?.symbolStyle;
           const form = isFlowerForm(chosen) ? chosen : defaultFlowerForm(preview.dimensions.heightMm, b.w, b.h);
           if (form === "runner" || form === "bud" || form === "single") return null;
           return <RevolveFields value={preview.appearance?.revolve} onChange={(revolve) => onProfile(revolve)} tiles={FLOWER_ENVELOPES} onEditInView={onEditInView} />;
+        })()}
+
+      {/* How FULL it is drawn, a runner's fall off its table, a hung piece's strands (ArrangementSpec,
+          lib/catalog/flower-spec.ts). Drawing only — the stems ordered and quoted are the spec's rows. */}
+      {(product.category === "flower-arrangements" || product.category === "centerpieces") &&
+        (() => {
+          const a = preview.appearance?.arrangement;
+          const set = (patch: Parameters<typeof arrangementPatch>[1]) => onChange({ arrangement: arrangementPatch(a, patch) });
+          const fp = resolveFootprint(preview);
+          const b = footprintBounds(fp);
+          const chosen = preview.appearance?.symbolStyle;
+          const form = followsShape(fp) ? "shape" : isFlowerForm(chosen) ? chosen : defaultFlowerForm(preview.dimensions.heightMm, b.w, b.h);
+          return (
+            <div className="space-y-2">
+              {form === "shape" && (
+                <>
+                  <PanelRow label="ליפוף ספירלי (סיבובים)" htmlFor="arr-spiral">
+                    <NumberField id="arr-spiral" decimals={1} min={0} max={12} commitOnBlur value={a?.spiral ?? 0} onChange={(v) => set({ spiral: v > 0 ? v : undefined })} className="w-20" />
+                  </PanelRow>
+                  <Note>0 = כיסוי מלא מכל הצדדים. מספר — הפרחים מטפסים בספירלה סביב צורה גבוהה (עמוד).</Note>
+                </>
+              )}
+              {form !== "shape" && form !== "bud" && (
+                <SwitchRow checked={a?.fullness !== "spec"} onChange={(on) => set({ fullness: on ? undefined : "spec" })} label="סידור מלא" hint="הפרחים מכסים את כל הסידור, בתמהיל של המפרט. כבוי — מצוירים בדיוק הגבעולים שבמפרט." />
+              )}
+              {form === "runner" && (
+                <PanelRow label="נפילה מקצה השולחן" stack>
+                  <Select
+                    aria-label="נפילה מקצה השולחן"
+                    value={a?.fall ?? "none"}
+                    onChange={(v) => set({ fall: v === "none" ? undefined : (v as "start" | "end" | "both") })}
+                    options={[
+                      { value: "none", label: "בלי נפילה" },
+                      { value: "end", label: "מקצה אחד" },
+                      { value: "start", label: "מהקצה השני" },
+                      { value: "both", label: "משני הקצוות" },
+                    ]}
+                    className="w-full"
+                  />
+                </PanelRow>
+              )}
+              {preview.layer === "ceiling" && (
+                <>
+                  <PanelRow label="גדילים נופלים (ס״מ)" htmlFor="arr-trail">
+                    <NumberField id="arr-trail" decimals={0} min={0} max={400} commitOnBlur value={Math.round((a?.trailMm ?? 0) / 10)} onChange={(v) => set({ trailMm: v > 0 ? Math.round(v * 10) : undefined })} className="w-20" />
+                  </PanelRow>
+                  <Note>גדילי פרחים תלויים מתחת לסידור (ויסטריה) — האורך של הארוך שבהם. 0 = בלי.</Note>
+                </>
+              )}
+            </div>
+          );
         })()}
     </div>
   );
@@ -1418,8 +1560,12 @@ function ShapePanel({
   onChange,
   groups,
   bodyTiles,
+  bodyOff,
   onOpenElevation,
 }: {
+  /** The first shape of a picture nothing of which a profile would change (a bar, a runner, a rotunda):
+   *  the body group is not offered. */
+  bodyOff?: boolean;
   /** Goes to the חזית view with this shape kept selected — the height drawn at full size, and the
    *  body dragged on it. */
   onOpenElevation?: () => void;
@@ -1572,7 +1718,7 @@ function ShapePanel({
           turned from a side profile — a bowl, a vase, a basin's tier — for the 3D room and the חזית
           view; the plan still draws the circle, which is the body's widest ring. Not for a band or
           a slice, which have no body of revolution. */}
-      {!front && (part.shape === "circle" || part.shape === "ellipse") && !part.hollow && !(part.arc?.sweepDeg && part.arc.sweepDeg < 360) && (
+      {!front && !bodyOff && (part.shape === "circle" || part.shape === "ellipse") && !part.hollow && !(part.arc?.sweepDeg && part.arc.sweepDeg < 360) && (
         <FoldRow {...group(groups, "body")} icon={Cylinder} title={bodyTiles ? bodyTiles.title.split(" — ")[0] : "גוף"} summary={bodyValue(part, bodyTiles)}>
           <RevolveFields value={part.revolve} onChange={(revolve) => onChange({ revolve })} tiles={bodyTiles} onEditInView={onOpenElevation} />
         </FoldRow>
@@ -1967,6 +2113,18 @@ export function AppearanceModal({
   const preview: Product = shapes.length ? { ...draft, ...lookOf(draft, shapes) } : draft;
   const footprint = !stretch && shapes.length ? resolveFootprint(preview) : null;
   const previewSymbol = footprint ? symbolOf(preview, footprint) : null;
+  // An AISLE's plan is its lining (lib/catalog/aisle.ts) — the piece its row names down both sides,
+  // the runner between — laid in the box being drawn, as the sketch will lay it. Before 2026-11-13
+  // the plan view showed an empty rectangle while חזית and צד showed the room's pieces.
+  const aisleW = preview.dimensions.widthMm;
+  const aisleD = preview.dimensions.depthMm;
+  const aislePiece = draft.categoryFields?.piece;
+  const aisleSpec = draft.appearance?.aisle;
+  const aisle = useMemo(
+    () => (draft.category === "aisles" ? aisleViewOf({ ...draft, dimensions: { ...draft.dimensions, widthMm: aisleW, depthMm: aisleD } }) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [draft.category, aislePiece, aisleSpec, aisleW, aisleD],
+  );
   // The item's footprint is centred on the box of everything drawn; on the canvas that box is here.
   const drawn = shapes.length ? drawnBounds(shapes) : null;
   const itemAt = drawn ? { x: drawn.cx, y: drawn.cy } : { x: 0, y: 0 };
@@ -2031,12 +2189,13 @@ export function AppearanceModal({
    *  face — at the plan depth of the selected shape (a layer beside it), else at the item's middle. */
   const frontTile = (a: Armed, at: { x: number; y: number }): ShapePart | null => {
     const planY = one?.y ?? 0;
+    if (a === SPIRAL) return drawnFront(spiralOutline(SPIRAL_MM).map((v) => ({ x: v.x + at.x, y: v.y + at.y })), undefined, planY);
     if (!isFrontPreset(a)) return placedFront(a, at, "front", planY);
     const o = a === "wave" ? waveOutline(3000, 1200, 3) : petalOutline(1200, 2400);
     return drawnFront(o.outline.map((v) => ({ x: v.x + at.x, y: v.y + at.y })), o.edgeCurves, planY);
   };
   const place = (shape: Armed, at: { x: number; y: number }) => {
-    const part = side === "front" ? frontTile(shape, at) : isFrontPreset(shape) ? null : newPart(shape, at);
+    const part = side === "front" ? frontTile(shape, at) : shape === SPIRAL ? spiralPart(at) : isFrontPreset(shape) ? null : newPart(shape, at);
     if (!part) return;
     editShapes((l) => [...l, part]);
     setSel([part.id]);
@@ -2637,9 +2796,22 @@ export function AppearanceModal({
               if (shapes[0]?.id !== one.id) return undefined;
               if (previewSymbol === "flowers" || previewSymbol === "centerpiece") return FLOWER_ENVELOPES;
               if (previewSymbol === "chuppah") return drawStyleOf(preview) === "rotunda" ? undefined : CHUPPAH_ROOF_TILES;
-              if (previewSymbol !== "chandelier") return undefined;
+              if (previewSymbol !== "chandelier") return bodyTilesOf(previewSymbol);
               const st = chandelierOf(drawStyleOf(preview), undefined).style;
               return st === "pendants" ? PENDANT_GLASS_TILES : PROFILED_STYLES.includes(st) ? CHANDELIER_SILHOUETTES : undefined;
+            })()}
+            // No body at all where nothing would read it (lib/catalog/body-profiles.ts BODY_UNREAD, and
+            // the styles of a profiled kind that are built their own way): a field that silently does
+            // nothing is worse than no field.
+            bodyOff={(() => {
+              if (shapes[0]?.id !== one.id || !previewSymbol) return false;
+              if (BODY_UNREAD.has(previewSymbol)) return true;
+              if (previewSymbol === "chuppah") return drawStyleOf(preview) === "rotunda";
+              if (previewSymbol === "chandelier") {
+                const st = chandelierOf(drawStyleOf(preview), undefined).style;
+                return st !== "pendants" && !PROFILED_STYLES.includes(st);
+              }
+              return false;
             })()}
           />
         ) : selShapes.length > 1 ? (
@@ -2767,7 +2939,7 @@ export function AppearanceModal({
                     })}
                 onDropAt={(e, p) => {
                   const id = e.dataTransfer.getData("text/plain");
-                  if (!drawingPart && isRailShape(id)) place(id, p);
+                  if (!drawingPart && (isRailShape(id) || id === SPIRAL)) place(id, p);
                 }}
                 // The item opens in the MIDDLE of the canvas: a frame the canvas's minimum extent wide,
                 // centred on it, plus every shape so none opens off-screen.
@@ -3043,7 +3215,9 @@ export function AppearanceModal({
                         footprint is centred. */}
                     {footprint && drawn && !drawingPart && (
                       <g transform={`translate(${itemAt.x} ${itemAt.y})`} className="pointer-events-none text-ink-soft">
-                        {previewSymbol ? (
+                        {aisle ? (
+                          <AisleDrawing view={aisle} />
+                        ) : previewSymbol ? (
                           <ItemSymbol
                             kind={previewSymbol}
                             footprint={footprint}
@@ -3085,7 +3259,7 @@ export function AppearanceModal({
                     onPlace={armedShape && side === "front" ? (at) => place(armedShape, at) : undefined}
                     onDropAt={(e, at) => {
                       const id = e.dataTransfer.getData("text/plain");
-                      if (!drawingPart && side === "front" && (isRailShape(id) || isFrontPreset(id))) place(id, at);
+                      if (!drawingPart && side === "front" && (isRailShape(id) || isFrontPreset(id) || id === SPIRAL)) place(id, at);
                     }}
                     drawing={
                       drawingPart?.plane === "front"
@@ -3131,7 +3305,7 @@ export function AppearanceModal({
                     room={shapes.length ? { subject: { key: itemSceneKey(preview), build: () => itemScene(preview) }, itemAt, baseZMm: itemBaseZ(preview) } : null}
                     roomShown={roomShown}
                     hidden={!side}
-                    envelopeIds={shapes[0] && (previewSymbol === "chandelier" || previewSymbol === "flowers" || previewSymbol === "centerpiece" || previewSymbol === "chuppah") ? [shapes[0].id] : undefined}
+                    envelopeIds={shapes[0] && (previewSymbol === "chandelier" || previewSymbol === "flowers" || previewSymbol === "centerpiece" || previewSymbol === "chuppah" || previewSymbol === "lamp" || previewSymbol === "tree") ? [shapes[0].id] : undefined}
                     frame={PRODUCT_FRAME}
                   />
                 </div>

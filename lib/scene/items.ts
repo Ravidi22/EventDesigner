@@ -21,11 +21,12 @@
 //
 // Pure: no React, no three. `npx tsx lib/scene/items.ts` runs the self-check.
 import type { Footprint } from "@/lib/studio/footprint";
-import { footprintOutlines } from "@/lib/studio/footprint";
+import { footprintOutlines, resolveFootprint } from "@/lib/studio/footprint";
 import type { Point } from "@/lib/studio/hall";
 import type { Product } from "@/lib/catalog/types";
 import type { Resolved } from "@/lib/studio/catalog-resolver";
-import { type CandleStyle, type ChairStyle, type ChuppahStyle, type SymbolKind, isCandleStyle } from "@/lib/catalog/symbols";
+import { type CandleStyle, type ChairStyle, type ChuppahStyle, type SymbolKind, isCandleStyle, symbolOf } from "@/lib/catalog/symbols";
+import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { type FlowerDrawSpec, darken, defaultFlowerForm, defaultMix, isPale, seedOf } from "@/lib/catalog/flower-draw";
 import { DEFAULT_TONE, packCircles } from "@/components/item-symbol";
 import type { PlacementClimb } from "@/lib/design-document/types";
@@ -34,6 +35,10 @@ import { isMain } from "../self-check";
 import { type InstanceRequest, type ItemBuild } from "./collect";
 import { type ItemContext, fallbackBody } from "./item-context";
 import { hasOwnBody } from "@/lib/element/adapter";
+import { revolveProfileMm } from "@/lib/element/revolve";
+import { frameFootprint, pictureFrame } from "@/lib/catalog/picture-frame";
+import { lampParts, lampShadeOf } from "@/lib/catalog/body-profiles";
+import { cleanRevolve } from "@/lib/element/revolve";
 import { hasFront } from "@/lib/element/front";
 import { ownBodyParts } from "./element-body";
 import { polygonAreaMm2 } from "@/lib/studio/geometry";
@@ -43,7 +48,8 @@ import { screenBody } from "./led";
 import { danceFloorBody } from "./dance-floor";
 
 export { type ItemContext, fallbackBody } from "./item-context";
-import { flowerBuild } from "./flowers";
+import { FALL_DROP_MM, flowerBuild } from "./flowers";
+import { shapedFlowersBody } from "./flower-cover";
 import { applyTransform, compose, turn } from "./frame";
 import { ENVELOPE, clothMaterial, glassMaterial, glossMaterial, metalMaterial } from "./materials";
 import { hexOf } from "./materials";
@@ -228,16 +234,40 @@ function arm(b: ItemBuild, p: Point, z: number, material: MaterialRef) {
 
 const tagOf = (ctx: ItemContext, type: NodeTag["type"]): NodeTag => ctx.tag ?? (ctx.product ? { type, label: ctx.product.name } : { type });
 
-/** The pictures a DRAWN BODY replaces rather than joins: the recipe's whole mass is a guess the
- *  designer's own profile stands in for — a vessel's form read off its name, a column's shaft, a
- *  fountain's tiers, a lamp's shade. Everywhere else the picture stays and the body is added to it
- *  (the user, 2026-11-07: a chandelier's body "doesn't combine the shape with the drawing"). */
-const BODY_REPLACES_PICTURE: ReadonlySet<SymbolKind> = new Set<SymbolKind>(["vase", "column", "fountain", "lamp"]);
 /** The pictures that READ the base's body as their own shape rather than standing beside a solid of
- *  it: a chandelier's silhouette shapes its tiers and crystal (lib/catalog/chandelier.ts). Built as a
- *  solid as well, the profile was an opaque gold urn the size of the piece with the arms, the bulbs
- *  and the crystal inside it (the user, 2026-11-08: "it doesn't look good in the 3D"). */
-const PROFILE_IS_PICTURE: ReadonlySet<SymbolKind> = new Set<SymbolKind>(["chandelier", "flowers", "centerpiece", "chuppah"]);
+ *  it (lib/catalog/body-profiles.ts says what it is for each): a chandelier's silhouette shapes its
+ *  tiers and crystal, an arrangement's envelope carries its heads, a chuppah's is its roof's section
+ *  — and, since 2026-11-13, a lamp's is its SHADE, a tree's its crown, a vase's the vessel in its own
+ *  glass, a column's its shaft in its stone, a fountain's its basin with the water and the jet kept, a
+ *  candlestick's its turned body under its candles, a round chair's or sofa's the pouf itself. Built
+ *  as a solid as well, a profile was an opaque urn the size of the piece with the picture inside it
+ *  (the user, 2026-11-08: "it doesn't look good in the 3D"); and for the four kinds that used to
+ *  REPLACE their picture with that solid, a lamp was a matte cone with no light, a fountain a blue
+ *  lump with no water (2026-11-13: "the צללית is not working well… like אהיל"). */
+const PROFILE_IS_PICTURE: ReadonlySet<SymbolKind> = new Set<SymbolKind>(["chandelier", "flowers", "centerpiece", "chuppah", "lamp", "tree", "vase", "column", "fountain", "candlestick", "chair", "sofa"]);
+/** The pictures laid along their own outline, whatever it is — never into a box (lib/catalog/
+ *  picture-frame.ts): a bar and a banquette along their band, a pergola and a dance floor on theirs. */
+const FOLLOWS_OUTLINE: ReadonlySet<SymbolKind> = new Set<SymbolKind>(["bar", "bench", "pergola", "dance-floor"]);
+
+/** A build moved by (dx, dy) in the item's frame — a picture standing in its first shape's box. */
+function shifted(b: ItemBuild, dx: number, dy: number): ItemBuild {
+  if (!dx && !dy) return b;
+  const mv = (v: Vec3) => vec3(v.x + dx, v.y + dy, v.z);
+  return {
+    material: b.material,
+    parts: b.parts.map((p) => ({ ...p, at: mv(p.at) })),
+    instanced: b.instanced.map((r) => ({ ...r, at: { ...r.at, at: mv(r.at.at) } })),
+    emitters: b.emitters.map((e) => ({ ...e, at: mv(e.at) })),
+  };
+}
+
+/** A round thing turned to `profile` — fractions of its radius and height, an oval one stretched to
+ *  its depth — in one material. */
+function turnedPart(ctx: ItemContext, profile: readonly { r: number; z: number }[], material: MaterialRef, heightMm = ctx.heightMm): Part {
+  const part: Part = { shape: "lathe", profile: revolveProfileMm(profile, ctx.widthMm / 2, Math.max(10, heightMm)), at: vec3(0, 0, 0), segments: 32, material };
+  if (ctx.widthMm > 0 && Math.abs(ctx.depthMm - ctx.widthMm) > 1) part.scaleY = ctx.depthMm / ctx.widthMm;
+  return part;
+}
 
 /** The material the shapes' own bodies are built in: the item's tone, flat. */
 const ownMaterial = (ctx: ItemContext): MaterialRef => ({ colour: ctx.tone, kind: "matte" });
@@ -247,9 +277,9 @@ const ownMaterial = (ctx: ItemContext): MaterialRef => ({ colour: ctx.tone, kind
  *  profile, an outline-only shape) COMBINES them with its category's picture: the recipe draws the
  *  picture on the footprint, and what the shapes said about themselves is built beside it by the
  *  element model (element-body.ts ownBodyParts — a shelf a metre up, a raised tier on a stand). For
- *  the kinds in BODY_REPLACES_PICTURE the body IS the thing; for PROFILE_IS_PICTURE the base's body
- *  is the picture's own outline and nothing is added for it. The bar keeps its recipe, which honours a back piece's own height itself
- *  (floor-kinds shapedBar). */
+ *  the kinds in PROFILE_IS_PICTURE the base's body is the picture's own outline, read by its recipe
+ *  (ItemContext.profile), and nothing is added for it. The bar keeps its recipe, which honours a back
+ *  piece's own height itself (floor-kinds shapedBar). */
 export function itemBody(kind: SymbolKind | null, ctx: ItemContext): ItemBuild {
   // A bar keeps its recipe (it honours its back pieces' own heights); a FRONT panel added to it
   // (backdrops S2) is the element model's, beside it — bar-draw leaves the panel out of the backs.
@@ -259,16 +289,23 @@ export function itemBody(kind: SymbolKind | null, ctx: ItemContext): ItemBuild {
     if (own) picture.parts.push(...own.parts);
     return picture;
   }
-  if (kind !== "bar" && ctx.product && hasOwnBody(ctx.product)) {
-    if (kind === null || BODY_REPLACES_PICTURE.has(kind)) return fallbackBody(ctx);
-    const profileIsPicture = PROFILE_IS_PICTURE.has(kind);
-    const own = ownBodyParts(ctx.product, ctx.footprint, ownMaterial(ctx), { baseProfileIsPicture: profileIsPicture });
-    if (!own) return profileIsPicture ? pictureBody(kind, ctx) : fallbackBody(ctx);
-    const picture = pictureBody(kind, { ...ctx, footprint: own.rest });
-    picture.parts.push(...own.parts);
-    return picture;
-  }
-  return pictureBody(kind, ctx);
+  if (kind === null) return ctx.product && hasOwnBody(ctx.product) ? fallbackBody(ctx) : pictureBody(kind, ctx);
+  // FLOWERS FOLLOW THEIR SHAPES (./flower-cover.ts): a ring, an arc, a spiral, lines, several shapes
+  // at their own heights, a wall drawn on the front plane — every one covered, none built as a box.
+  if ((kind === "flowers" || kind === "centerpiece") && ctx.flowers?.form === "shape") return shapedFlowersBody(ctx, tagOf(ctx, "flowers"));
+  // THE PICTURE STANDS IN ITS FIRST SHAPE'S BOX (lib/catalog/picture-frame.ts — the plan's own rule):
+  // on a hexagon, a half-round, a drawn outline, or with other shapes added beside the first, the
+  // recipe is handed that box and built where it stands; every other shape is the element model's.
+  const frame = FOLLOWS_OUTLINE.has(kind) || (kind === "chuppah" && ctx.footprint.kind === "custom") ? null : pictureFrame(ctx.footprint);
+  const framed = frame && !frame.plain ? frame : null;
+  if (!ctx.product || kind === "bar" || (!framed && !hasOwnBody(ctx.product))) return pictureBody(kind, ctx);
+  const pctx: ItemContext = framed ? { ...ctx, footprint: frameFootprint(framed), widthMm: framed.w, depthMm: framed.h } : ctx;
+  const picture = framed ? shifted(pictureBody(kind, pctx), framed.x, framed.y) : pictureBody(kind, pctx);
+  // What the shapes said about their own bodies (a shelf a metre up, a raised tier), every shape added
+  // beside the first — and the first shape's own profile, unless the picture reads it itself.
+  const own = ownBodyParts(ctx.product, ctx.footprint, ownMaterial(ctx), { baseProfileIsPicture: PROFILE_IS_PICTURE.has(kind), others: !!framed && ctx.footprint.kind === "multi" });
+  if (own) picture.parts.push(...own.parts);
+  return picture;
 }
 
 /** The category's picture, as it was always built. */
@@ -287,6 +324,8 @@ function pictureBody(kind: SymbolKind | null, ctx: ItemContext): ItemBuild {
     case "centerpiece":
       return flowersBody(ctx, true);
     case "chair":
+      // A round seat with a profile of its own is a pouf turned to it, in its fabric.
+      if (ctx.profile && isRound(ctx.footprint)) return { ...make(clothMaterial(ctx.tone)), parts: [turnedPart(ctx, ctx.profile, clothMaterial(ctx.tone))] };
       return chairBody(ctx);
     case "sofa":
     case "bench":
@@ -492,6 +531,9 @@ function candlestickBody(ctx: ItemContext): ItemBuild {
   const round = isRound(ctx.footprint);
   const long = !round && Math.max(w, d) / Math.min(w, d) >= 1.8;
   const style = isCandleStyle(ctx.drawStyle) ? ctx.drawStyle : long ? "row" : "ring";
+  // A turned body of its own (ItemContext.profile): the candlestick itself in its metal or crystal,
+  // its candles standing on it — never a solid beside the recipe's stem and foot.
+  if (ctx.profile && round && (style === "ring" || style === "sleeves" || style === "tiered")) return turnedCandlestick(ctx, n, style === "sleeves");
   switch (style) {
     case "row":
       return candleRow(w, d, h, n, long, false, tone);
@@ -514,6 +556,35 @@ function candlestickBody(ctx: ItemContext): ItemBuild {
     default:
       return candleRing(w, d, h, n, false, tone);
   }
+}
+
+/** A candlestick TURNED to its own profile (lib/catalog/body-profiles.ts): the body a lathe over the
+ *  lower 0.78 of its height, in the piece's metal or crystal; one candle standing on its top — or,
+ *  for a candelabrum, its candles on a ring of arms springing from the top of the body, a centre one
+ *  on an odd count. */
+function turnedCandlestick(ctx: ItemContext, n: number, sleeves: boolean): ItemBuild {
+  const { widthMm: w, depthMm: d, heightMm: h, tone } = ctx;
+  const R = Math.min(w, d) / 2;
+  const metal = frameOf(tone);
+  const b = make(metal);
+  const bodyH = h * 0.78;
+  b.parts.push(turnedPart(ctx, ctx.profile!, metal, bodyH));
+  if (n <= 1) {
+    candle(b, 0, 0, Math.min(R * (sleeves ? 0.32 : 0.5), PILLAR_R_MM), bodyH, h, metal, sleeves);
+    return b;
+  }
+  const ring = n % 2 === 1 ? n - 1 : n;
+  const reach = R * (sleeves ? 0.62 : 0.68);
+  const r = Math.min(R * 0.21, ((Math.PI * reach) / ring) * 0.55) / (sleeves ? 1.6 : 1);
+  const armZ = bodyH * 0.92;
+  const arms = armMaterial(tone);
+  for (let i = 0; i < ring; i++) {
+    const p = polar(reach, -90 + (i * 360) / ring);
+    arm(b, p, armZ, arms);
+    candle(b, p.x, p.y, real(r, sleeves), armZ, h * 0.95, metal, sleeves);
+  }
+  if (n % 2 === 1) candle(b, 0, 0, real(r * 0.95, sleeves), bodyH, h, metal, sleeves);
+  return b;
 }
 
 /** Candles round a central stem, joined to it by its arms, a centre candle on an odd count
@@ -748,20 +819,43 @@ function fireBurner(w: number, d: number, h: number, round: boolean, tone: strin
 
 // ── lamp, vase, runner (item-symbol.tsx:647, :670, :1244) ───────────────────────────────────────
 
-/** A table lamp: the shade a lathe from its bottom rim (the whole footprint) to the top rim at 0.64
- *  of it over the top 45 % of h, a stem 0.05 of the box, a turned foot, the finial 0.07 R — and the
- *  bulb inside, which is what it is for (item-symbol.tsx:647 lamp). A square shade is lathed round. */
+/** A table lamp: a SHADE turned in its cloth (a globe in its glass), lit from inside, on a base.
+ *
+ *  With no profile of its own, the shade is its STYLE's (lib/catalog/body-profiles.ts lampShadeOf —
+ *  the plan's four, built here since 2026-11-13: the room used to build the first whatever was
+ *  picked), the one it always was when none is picked: from its bottom rim (the whole footprint) at
+ *  0.55 h to a top rim 0.64 of it — on a turned foot and a stem 0.05 of the box.
+ *
+ *  With a profile (ItemContext.profile, the editor's ״צורת האהיל״) the profile is the WHOLE lamp from
+ *  the side (lampParts): below its neck the base, turned in metal as it was drawn; above it the shade.
+ *  A profile with no neck — a cone, a lantern — is a shade standing on the table. Before that round a
+ *  lamp with a profile was one matte solid with no light in it.
+ *
+ *  An oval shade is stretched to its depth; a square one is lathed round. A finial 0.07 R on an open
+ *  top; and the bulb inside, which is what it is for. */
 function lampBody(ctx: ItemContext): ItemBuild {
   const { widthMm: w, depthMm: d, heightMm: h, tone } = ctx;
-  const R = Math.min(w, d) / 2;
-  const shade = clothMaterial(tone);
+  const round = isRound(ctx.footprint);
+  const R = round ? w / 2 : Math.min(w, d) / 2;
+  const own = ctx.profile ? lampParts(cleanRevolve(ctx.profile)) : null;
+  const glass = !own && ctx.drawStyle === "globe";
+  const shade = glass ? glassMaterial(tone) : clothMaterial(tone);
   const metal = metalMaterial(darkened(tone));
   const b = make(shade);
-  const shadeZ = h * 0.55;
-  b.parts.push(lathe([{ r: R, z: shadeZ }, { r: R * 0.64, z: h }], vec3(0, 0, 0), shade));
-  b.parts.push(lathe([{ r: R * 0.3, z: 0 }, { r: R * 0.3, z: 12 }, { r: R * 0.14, z: 30 }, { r: R * 0.07, z: 50 }], vec3(0, 0, 0), metal));
-  b.parts.push(cyl(Math.max(6, Math.min(w, d) * 0.05), shadeZ - 50, vec3(0, 0, 50), metal));
-  b.parts.push(sphere(R * 0.07, vec3(0, 0, h), metal));
+  const scaleY = round && w > 0 && Math.abs(d - w) > 1 ? d / w : undefined;
+  const turnedIn = (pts: readonly { r: number; z: number }[], material: MaterialRef): Part => ({ shape: "lathe", profile: pts.map((p) => ({ r: p.r * R, z: p.z * h })), at: vec3(0, 0, 0), material, ...(scaleY ? { scaleY } : {}) });
+  const shadePts = own ? own.shade : lampShadeOf(ctx.drawStyle);
+  b.parts.push(turnedIn(shadePts, shade));
+  const shadeZ = Math.min(...shadePts.map((p) => p.z)) * h;
+  const top = shadePts[shadePts.length - 1];
+  if (own) {
+    // Its own base, as drawn — nothing under a shade that stands on the table.
+    if (own.base.length >= 2) b.parts.push(turnedIn(own.base, metal));
+  } else {
+    b.parts.push(lathe([{ r: R * 0.3, z: 0 }, { r: R * 0.3, z: 12 }, { r: R * 0.14, z: 30 }, { r: R * 0.07, z: 50 }], vec3(0, 0, 0), metal));
+    b.parts.push(cyl(Math.max(6, Math.min(w, d) * 0.05), shadeZ - 50, vec3(0, 0, 50), metal));
+  }
+  if (top.r > 0.05) b.parts.push(sphere(R * 0.07, vec3(0, 0, h), metal));
   b.emitters.push({ at: vec3(0, 0, shadeZ + (h - shadeZ) * 0.4), radiusMm: R * 0.3, colour: ENVELOPE.bulb, strength: 1 });
   return b;
 }
@@ -770,8 +864,11 @@ function lampBody(ctx: ItemContext): ItemBuild {
  *  way lib/catalog/flower-kinds.ts reads a flower and isRunner a runner): "מרטיני" is a martini on a
  *  stem, "צילינדר" a straight cylinder, "קערה" a bowl — on a foot when it says "רגל". Otherwise
  *  the proportions: very slender is a cylinder, squat is a bowl, anything else the plan's urn. */
-export type VesselForm = "trumpet" | "cylinder" | "bowl" | "pedestal" | "urn";
+export type VesselForm = "trumpet" | "cylinder" | "bowl" | "pedestal" | "urn" | "plinth";
 const VESSEL_WORDS: [VesselForm, RegExp][] = [
+  // A PLINTH — a stand the flowers are set ON, not a vessel they stand in (2026-11-13, the user's
+  // aisle photograph: a mound of roses on every white box): a solid block of its own footprint.
+  ["plinth", /פודיום|מעמד|קובי+ה|סטנד|plinth|podium/i],
   ["trumpet", /מרטיני|חצוצר|martini|trumpet/i],
   ["cylinder", /צילינד|גליל|cylinder/i],
   ["pedestal", /(קער|bowl).*(רגל|foot|pedestal)|(רגל|foot|pedestal).*(קער|bowl)/i],
@@ -814,7 +911,22 @@ const VESSEL_PROFILES: Record<VesselForm, { outer: [number, number][]; inner: [n
     outer: [[0.32, 0], [0.32, 0.04], [0.6, 0.3], [0.86, 0.7], [1, 1]],
     inner: [[0.8, 1], [0.68, 0.6], [0.28, 0.2], [0, 0.2]],
   },
+  // A round plinth: a closed drum (a square one is a box — vaseBody).
+  plinth: {
+    outer: [[0, 0], [1, 0], [1, 1], [0, 1]],
+    inner: [],
+  },
 };
+
+/** How far up a vessel the flowers set in it start, as a share of its height: just under the rim of
+ *  a vase, and the very TOP of a plinth — they stand on it. The one number the table's dressing
+ *  (./tables.ts) and a floor arrangement (./build.ts) both raise the flowers by. */
+export function vesselRimShare(vessel: Pick<Product, "name" | "dimensions"> | undefined): number {
+  if (!vessel) return 0;
+  const d = vessel.dimensions;
+  const w = d.diameterMm ?? d.widthMm ?? 0;
+  return vesselForm(vessel.name, w, d.diameterMm ?? d.depthMm ?? w, d.heightMm ?? 0) === "plinth" ? 1 : 0.9;
+}
 
 /** A vessel: its form's profile (vesselForm) lathed on its width — an oval one stretched to its
  *  depth — outside and in. Glass when its tone is near-white, metal when its shade is a metal,
@@ -826,12 +938,49 @@ function vaseBody(ctx: ItemContext): ItemBuild {
   const shade = ctx.resolved?.variant?.name ?? "";
   const material = pale(tone) && !METAL_SHADE.test(shade) ? glassMaterial(tone) : METAL_SHADE.test(shade) ? metalMaterial(tone) : glossMaterial(tone);
   const b = make(material);
-  const { outer, inner } = VESSEL_PROFILES[form];
   const scaleY = w > 0 && Math.abs(d - w) > 1 ? d / w : undefined;
   const at = vec3(0, 0, 0);
   const shaped = (pts: [number, number][]): Part => ({ shape: "lathe", profile: pts.map(([r, z]) => ({ r: R * r, z: h * z })), at, segments: 32, ...(scaleY ? { scaleY } : {}) });
+  // A vessel turned to its OWN profile (ItemContext.profile, the editor's ״צורת הכלי״): that outline
+  // in the vessel's own glass, metal or glaze — and hollow, its inside a wall's thickness in from it.
+  if (ctx.profile) {
+    const outer = revolveProfileMm(ctx.profile, 1, 1).map((p): [number, number] => [p.r, p.z]);
+    const inside = vesselInside(outer);
+    b.parts.push(shaped(outer));
+    if (inside.length) b.parts.push(shaped(inside));
+    return b;
+  }
+  // A plinth is a solid block in its own colour — a box on a square footprint, a drum on a round one
+  // — never glass: a white stand is white, not clear.
+  if (form === "plinth") {
+    const solid = make(METAL_SHADE.test(shade) ? metalMaterial(tone) : matte(tone));
+    if (ctx.footprint.kind === "rect") solid.parts.push(box(w, d, h, at));
+    else solid.parts.push(shaped(VESSEL_PROFILES.plinth.outer));
+    return solid;
+  }
+  const { outer, inner } = VESSEL_PROFILES[form];
   b.parts.push(shaped(outer), shaped(inner));
   return b;
+}
+
+/** The inside of a vessel turned to `outer` (shares of R and h, bottom to top): from its opening down,
+ *  a wall's thickness in from the outside, to a floor a little above its foot. A top that closes (a
+ *  ball, a lid) has no opening, and no inside. */
+export function vesselInside(outer: [number, number][]): [number, number][] {
+  const WALL = 0.07;
+  const top = outer[outer.length - 1];
+  if (!top || top[0] <= WALL * 1.5) return [];
+  const zLow = outer[0][1];
+  const zTop = top[1];
+  const floor = zLow + Math.max(0.04, (zTop - zLow) * 0.12);
+  const inner: [number, number][] = [];
+  for (let i = outer.length - 1; i >= 0; i--) {
+    const [r, z] = outer[i];
+    if (z <= floor) break;
+    inner.push([Math.max(0.02, r - WALL), z]);
+  }
+  inner.push([Math.max(0.02, (inner[inner.length - 1]?.[0] ?? top[0]) * 0.6), floor], [0, floor]);
+  return inner;
 }
 
 /** A table runner (item-symbol.tsx:1244 runner): a strip of fabric D wide along the long side,
@@ -885,11 +1034,15 @@ function flowersBody(ctx: ItemContext, plated: boolean): ItemBuild {
   const { widthMm: w, depthMm: d, heightMm: h, tone } = ctx;
   const spec = ctx.flowers ?? plainSpec(w, d, h, tone);
   const tag = tagOf(ctx, "flowers");
-  if (!plated) return flowerBuild(spec, h, tag);
+  // A runner that FALLS off its table's end hangs to the floor: on a table that is the table's
+  // height (ctx.standMm, ./tables.ts); set down anywhere else — the catalog's own 3D pane, the floor —
+  // it is shown at a table's height, so the fall is seen and not buried.
+  const afloat = spec.fall && spec.form === "runner" && ctx.standMm === undefined ? FALL_DROP_MM : 0;
+  if (!plated) return afloat ? raise(flowerBuild(spec, h, tag, { dropMm: afloat }), afloat) : flowerBuild(spec, h, tag, { dropMm: ctx.standMm });
   const plate = make(glossMaterial(PLATE));
   if (isRound(ctx.footprint) && Math.abs(w - d) <= 1) plate.parts.push(cyl(w / 2, PLATE_MM, vec3(0, 0, 0)));
   else for (const outline of footprintOutlines(ctx.footprint)) plate.parts.push({ shape: "extrude", outline, h: PLATE_MM, at: vec3(0, 0, 0) });
-  return merge(plate, raise(flowerBuild(spec, Math.max(40, h - PLATE_MM), tag), PLATE_MM));
+  return merge(plate, raise(flowerBuild(spec, Math.max(40, h - PLATE_MM), tag, { dropMm: ctx.standMm === undefined ? undefined : ctx.standMm + PLATE_MM }), PLATE_MM));
 }
 
 // ponytail: self-check. Run: npx tsx lib/scene/items.ts
@@ -997,6 +1150,8 @@ if (isMain(import.meta.url)) {
   assert(cupArea > 0 && cupArea < 4000 * 60, `lines only stands as a thin wall (${Math.round(cupArea)} mm²)`);
   // Vessels by what their name says, else by their proportions.
   assert(vesselForm("אגרטל מרטיני זהב 80", 200, 200, 800) === "trumpet", "a martini vase stands on a stem");
+  assert(vesselForm("פודיום לבן 90", 450, 450, 900) === "plinth" && vesselForm("מעמד פרספקס", 300, 300, 1000) === "plinth", "a plinth is a stand the flowers are set on");
+  assert(vesselRimShare({ name: "פודיום לבן 90", dimensions: { widthMm: 450, depthMm: 450, heightMm: 900 } }) === 1 && vesselRimShare({ name: "אגרטל", dimensions: { diameterMm: 200, heightMm: 300 } }) === 0.9, "…at its very top; flowers in a vase start just under its rim");
   assert(vesselForm("צילינדר זכוכית מפוספס 50", 60, 60, 500) === "cylinder", "a cylinder is straight");
   assert(vesselForm("קערה אובלית על רגל 60", 600, 300, 200) === "pedestal" && vesselForm("קערה שטוחה", 400, 400, 120) === "bowl", "a bowl on a foot has a pedestal; a bowl does not");
   assert(vesselForm(undefined, 200, 200, 300) === "urn" && vesselForm(undefined, 60, 60, 500) === "cylinder" && vesselForm(undefined, 400, 400, 150) === "bowl", "…and nameless ones go by their proportions");
@@ -1004,10 +1159,69 @@ if (isMain(import.meta.url)) {
   // designer drew a bowl's profile is a lathe of that profile, not the vase recipe's guess from its
   // name; the same row without a profile is the recipe's.
   const drawnVase: Product = { id: "v", name: "אגרטל", category: "vases", layer: "table", dimensions: { diameterMm: 300, heightMm: 400 }, categoryFields: {}, styleTags: [], variants: [], appearance: { shape: "circle", content: "none", revolve: [{ r: 0.3, z: 0 }, { r: 1, z: 0.7 }, { r: 0.6, z: 1 }] } };
-  const own = itemBody("vase", ctxOf({ kind: "circle", diameterMm: 300 }, 400, { product: drawnVase }));
-  assert(own.parts.length === 1 && own.parts[0].shape === "lathe" && Math.abs(Math.max(...(own.parts[0] as { profile: { r: number }[] }).profile.map((q) => q.r)) - 150) < 1e-6 && top(own.parts[0]) === 400, "a vase with a drawn profile is that profile, turned");
+  const own = itemBody("vase", ctxOf({ kind: "circle", diameterMm: 300 }, 400, { product: drawnVase, profile: drawnVase.appearance!.revolve, tone: "#ffffff" }));
+  assert(own.parts.length === 2 && own.parts[0].shape === "lathe" && Math.abs(Math.max(...(own.parts[0] as { profile: { r: number }[] }).profile.map((q) => q.r)) - 150) < 1e-6 && top(own.parts[0]) === 400, "a vase with a drawn profile is that profile, turned — and hollow");
+  assert(own.material.kind === "glass", "…in the vessel's own glass, not a flat solid (2026-11-13)");
+  assert(vesselInside([[0.3, 0], [1, 0.7], [0.6, 1]])[0][0] < 0.6 && vesselInside([[0.2, 0], [1, 0.5], [0.02, 1]]).length === 0, "a vessel's inside is a wall in from its opening; a closed top has none");
   const { appearance: _a, ...plainVase } = drawnVase;
   const recipe = itemBody("vase", ctxOf({ kind: "circle", diameterMm: 300 }, 400, { product: { ...plainVase, appearance: { shape: "circle", content: "none" } } }));
   assert(recipe.parts.length !== own.parts.length || recipe.parts[0].shape !== "lathe" || JSON.stringify(recipe.parts[0]) !== JSON.stringify(own.parts[0]), "…and without one it is the recipe's vase");
+  // ── The profile is READ, never built beside the picture (2026-11-13, lib/catalog/body-profiles.ts) ──
+  const withProfile = (category: string, revolve: { r: number; z: number }[], d = 400, h = 600): Product => ({ id: "pp-" + category, name: "בדיקה", category, layer: "table", dimensions: { diameterMm: d, heightMm: h }, categoryFields: {}, styleTags: [], variants: [], appearance: { shape: "circle", content: "none", revolve } });
+  const cone = [{ r: 1, z: 0 }, { r: 0.1, z: 1 }];
+  // A lamp: the profile is its SHADE — still cloth, still lit; no stem under a shade that reaches the table.
+  const coneLamp = itemBody("lamp", ctxOf({ kind: "circle", diameterMm: 400 }, 600, { product: withProfile("lamps", cone), profile: cone, tone: DEFAULT_TONE.lamp }));
+  assert(coneLamp.emitters.length === 1 && coneLamp.material.kind !== "matte" && coneLamp.parts.filter((p) => p.shape === "lathe").length === 1, "a lamp whose profile has no neck is a lit shade standing on the table — not a matte solid with no light");
+  const wholeLamp = [{ r: 0.4, z: 0 }, { r: 0.08, z: 0.1 }, { r: 0.08, z: 0.5 }, { r: 1, z: 0.5 }, { r: 1, z: 1 }];
+  const drumProfile = itemBody("lamp", ctxOf({ kind: "circle", diameterMm: 400 }, 600, { product: withProfile("lamps", wholeLamp), profile: wholeLamp, tone: DEFAULT_TONE.lamp }));
+  const lathes = drumProfile.parts.filter((p) => p.shape === "lathe") as { profile: { r: number; z: number }[]; material?: MaterialRef }[];
+  assert(lathes.length === 2 && lathes[0].profile[0].z === 300 && lathes[0].profile.every((q) => q.r === 200) && lathes[1].material?.kind === "metal" && lathes[1].profile[0].r === 80, "a whole lamp's profile is split at its neck: a drum shade over the top half, its base turned in metal below");
+  // The plan's four lamp styles are built, each its own shade; the default is the lamp it always was.
+  const styled = (s: string) => itemBody("lamp", ctxOf({ kind: "circle", diameterMm: 300 }, 500, { tone: DEFAULT_TONE.lamp, drawStyle: s as ItemContext["drawStyle"] }));
+  const shadeOf = (b: ItemBuild) => (b.parts[0] as { profile: { r: number; z: number }[] }).profile;
+  assert(JSON.stringify(shadeOf(styled("empire"))) === JSON.stringify(shadeOf(lamp)) && shadeOf(styled("drum")).every((q) => q.r === 150), "an empire lamp is the default's shade; a drum's is straight");
+  assert(shadeOf(styled("mushroom")).length > 3 && styled("globe").material.kind === "glass" && shadeOf(styled("globe"))[shadeOf(styled("globe")).length - 1].r < 1, "a mushroom is a dome; a globe is a ball of glass closed at the top");
+  // A candlestick: its turned body in its metal, its candle on top.
+  const baluster = [{ r: 0.9, z: 0 }, { r: 0.2, z: 0.3 }, { r: 0.5, z: 0.8 }, { r: 0.3, z: 1 }];
+  const turnedStick = itemBody("candlestick", ctxOf({ kind: "circle", diameterMm: 120 }, 400, { product: withProfile("candlesticks", baluster, 120, 400), profile: baluster, count: 1 }));
+  assert(turnedStick.parts.filter((p) => p.shape === "lathe").length === 1 && waxCandles(turnedStick).length === 1 && turnedStick.emitters.length === 1 && turnedStick.emitters[0].at.z === 400, "a candlestick with a profile is that body turned, one candle burning at its top");
+  // A round chair: a pouf turned to it.
+  const turnedPouf = itemBody("chair", ctxOf({ kind: "circle", diameterMm: 500 }, 450, { product: withProfile("chairs", baluster, 500, 450), profile: baluster, tone: DEFAULT_TONE.chair }));
+  assert(turnedPouf.parts.length === 1 && turnedPouf.parts[0].shape === "lathe", "a round seat with a profile is a pouf turned to it — not a stool inside a solid");
+  // A kind that does not read the profile still combines: its picture on its true footprint + the lathe.
+  // (A screen on a round base with a profile — rare, and exactly what it was.)
+
+  // ── The picture stands in its FIRST SHAPE'S box (lib/catalog/picture-frame.ts) ──
+  const hexOutline = Array.from({ length: 6 }, (_, i) => ({ x: 200 * Math.cos((i * Math.PI) / 3), y: 200 * Math.sin((i * Math.PI) / 3) }));
+  const hexLamp: Product = { id: "hx", name: "מנורה משושה", category: "lamps", layer: "table", dimensions: { widthMm: 400, depthMm: 346, heightMm: 500 }, categoryFields: {}, styleTags: [], variants: [], appearance: { shape: "custom", content: "none", outline: hexOutline } };
+  const onHex = itemBody("lamp", { ...ctxOf({ kind: "custom", outline: hexOutline }, 500, { product: hexLamp, tone: DEFAULT_TONE.lamp }), widthMm: 400, depthMm: 346 });
+  assert(onHex.emitters.length === 1 && onHex.parts.some((p) => p.shape === "lathe"), "a lamp on a hexagon is still a lamp — its shade and its bulb, in the hexagon's box");
+
+  // ── FLOWERS FOLLOW THEIR SHAPES (./flower-cover.ts), from the row to the room ──
+  const flowerRow = (appearance: NonNullable<Product["appearance"]>, dimensions: Product["dimensions"]): Product => ({ id: "fl-" + JSON.stringify(dimensions), name: "זר", category: "flower-arrangements", layer: "table", dimensions, categoryFields: {}, styleTags: [], variants: [], appearance });
+  const flowered = (row: Product, extra: Partial<ItemContext> = {}) => {
+    const fp = resolveFootprint(row);
+    const kind = symbolOf(row, fp);
+    return { kind, build: itemBody(kind, { ...ctxOf(fp, row.dimensions.heightMm ?? 0, { product: row, flowers: flowerDrawSpecOf(row, fp, "#e8bcce"), ...extra }) }) };
+  };
+  const headsOf = (b: ItemBuild) => b.instanced.filter((r) => r.key.startsWith("flower:"));
+  // A ring: a wreath — heads on its band, nothing across its hole, nothing built as a solid.
+  const wreath = flowered(flowerRow({ shape: "circle", content: "none", hollow: { bandMm: 150 } }, { diameterMm: 1000, heightMm: 160 }));
+  assert(wreath.kind === "flowers", "an arrangement drawn as a ring is still drawn as flowers");
+  assert(headsOf(wreath.build).length > 80 && headsOf(wreath.build).every((r) => Math.hypot(r.at.at.x, r.at.at.y) > 320), `…a wreath: its heads on the band, none in the hole (${headsOf(wreath.build).length})`);
+  assert(!wreath.build.parts.some((p) => p.shape === "extrude" || p.shape === "lathe"), "…and no solid the shape of the ring");
+  // A shape drawn on the FRONT plane: a flower wall — its board, and heads in front of it.
+  const wallRow = flowered(flowerRow({ shape: "rect", content: "none", plane: "front" }, { widthMm: 3000, depthMm: 20, heightMm: 2400 }));
+  assert(wallRow.build.parts.some((p) => p.shape === "panel") && headsOf(wallRow.build).length > 400 && headsOf(wallRow.build).every((r) => r.at.at.y > 0 && r.at.at.z > 0 && r.at.at.z < 2400), `a front panel of flowers is a flower wall: heads over its face (${headsOf(wallRow.build).length})`);
+  // A plain circle keeps its dome; "by the spec" keeps the stems it lists.
+  const domeRow = flowered(flowerRow({ shape: "circle", content: "none" }, { diameterMm: 600, heightMm: 500 }));
+  const bareRow = flowered(flowerRow({ shape: "circle", content: "none", arrangement: { fullness: "spec" } }, { diameterMm: 600, heightMm: 500 }));
+  assert(domeRow.build.parts.some((p) => p.shape === "blob") && headsOf(domeRow.build).length > headsOf(bareRow.build).length * 1.5, `a plain round arrangement is its dome, FULL unless the row says "by the spec" (${headsOf(domeRow.build).length} vs ${headsOf(bareRow.build).length})`);
+  // A runner that falls off its table: to the floor under the table's top; nowhere near a table, shown afloat.
+  const fallRow = flowerRow({ shape: "rect", content: "none", arrangement: { fall: "end" } }, { widthMm: 1800, depthMm: 400, heightMm: 250 });
+  const onTable = headsOf(flowered(fallRow, { standMm: 760 }).build);
+  assert(Math.min(...onTable.map((r) => r.at.at.z)) < -700 && Math.min(...onTable.map((r) => r.at.at.z)) >= -760, "a runner's fall hangs from the table's top to the floor under it");
+  const afloat = headsOf(flowered(fallRow).build);
+  assert(Math.min(...afloat.map((r) => r.at.at.z)) >= 0 && Math.max(...afloat.map((r) => r.at.at.z)) > 750, "…and set down on its own it is shown at a table's height, the fall reaching the floor");
   console.log("scene items ok");
 }

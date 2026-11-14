@@ -30,6 +30,8 @@ export interface CsvCategory {
   builtIn?: true;
   /** A supplier's category (CategoryDef.supplierOnly — cut stems): a studio's import refuses rows in it. */
   supplierOnly?: true;
+  /** Names the category went by before (CategoryDef.aliases): a sheet exported then still files there. */
+  aliases?: readonly string[];
 }
 
 /** Split a CSV into rows of fields, per RFC 4180: a field may be quoted, and a quoted field may
@@ -97,7 +99,8 @@ export function parseCsvImport(
   const refused: string[] = [];
   if (rows.length < 2) return { products: [], refused };
   const header = rows[0].map((h) => COLS[h.trim().toLowerCase()] ?? "");
-  const byLabel = new Map(categories.map((c) => [c.label, c]));
+  // An old name first, the live labels over it: a label in use today always wins over a retired one.
+  const byLabel = new Map([...categories.flatMap((c) => (c.aliases ?? []).map((a) => [a, c] as const)), ...categories.map((c) => [c.label, c] as const)]);
   const byId = new Map(categories.map((c) => [c.id, c]));
   const out: Product[] = [];
   for (const [index, cells] of rows.slice(1).entries()) {
@@ -262,6 +265,15 @@ if (isMain(import.meta.url)) {
   assert(rows[0].dimensions.widthMm === 450 && rows[0].dimensions.heightMm === 920, "cm → mm");
   assert(rows[0].unitPrice === 30, "price parsed");
   assert(rows[1].unitPrice === undefined, "empty price stays undefined, not 0");
+  // A category renamed since the sheet was exported is still found by the name it had — and a live
+  // label always wins over a retired one ("פרחים" was the stems', is the arrangements' now).
+  const renamed: CsvCategory[] = [
+    { id: "flower-arrangements", label: "פרחים", defaultLayer: "table", aliases: ["סידורי פרחים"] },
+    { id: "stems", label: "פרחי קטיף", defaultLayer: "table", aliases: ["פרחים"] },
+  ];
+  const old = parseCsvProducts("שם,קטגוריה,גובה\nכיפת ורדים,סידורי פרחים,40\nקיר,פרחים,240\n", renamed, id);
+  assert(old[0].category === "flower-arrangements", "a category is found by a name it went by before");
+  assert(old[1].category === "flower-arrangements", "…and a label in use wins over another category's old name");
   const english = parseCsvProducts("name,category,height,price\nRunner,tablecloths,2,22\n", cats, id);
   assert(english[0].category === "tablecloths" && english[0].unitPrice === 22, "english header + category id");
 
