@@ -12,7 +12,8 @@
 // This module never reads a price: `Resolved.price`, `unitPrice`, the studio's cost and
 // `supplierId` are not read anywhere under lib/scene (`check:costs` scans the folder), and the
 // check proves the fixture's secret price never reaches the scene.
-import { resolve, aisleOf, chairBlockOf } from "@/lib/studio/catalog-resolver";
+import { resolve, aisleOf, chairBlockOf, withResolved } from "@/lib/studio/catalog-resolver";
+import { itemProductOf, itemVariantId } from "@/lib/venues/item";
 import { placementFootprint } from "@/components/footprint-shape";
 import { catalogBox, type Footprint } from "@/lib/studio/footprint";
 import { chairStyleOf, curtainStyleOf, symbolOf } from "@/lib/catalog/symbols";
@@ -92,6 +93,18 @@ export function buildScene(input: SceneInput): Scene {
     else if (p.perch) perched(input, out, p, elevation);
     else if (p.layer === "ceiling") ceilingPlacement(input, out, p, roofOf(p.position));
     else floorPlacement(input, out, p, elevation, roofOf(p.position));
+  }
+  // The venue's own catalog items (lib/venues/item.ts): each built from the copy it keeps, exactly as
+  // a placement of that row would be — the copy resolving over the catalog for this one call only.
+  for (const f of input.structure.features) {
+    if (f.kind !== "item") continue;
+    const product = itemProductOf(f);
+    if (!product) continue;
+    withResolved([product], () => {
+      const p: Placement = { id: f.id, variantId: itemVariantId(product), layer: product.layer, quantity: 1, position: { x: f.x, y: f.y }, rotation: f.rotationDeg ?? 0, scale: 1 };
+      if (p.layer === "ceiling") ceilingPlacement(input, out, p, roofOf(p.position));
+      else floorPlacement(input, out, p, elevation, roofOf(p.position));
+    });
   }
   return { nodes: out.nodes(), bounds: input.plan.bounds, roofedMm, stats: out.stats() };
 }

@@ -2,6 +2,7 @@
 
 import { memo } from "react";
 import type { Placement, Point } from "@/lib/design-document/types";
+import type { Product } from "@/lib/catalog/types";
 import type { Footprint } from "@/lib/studio/footprint";
 import { aisleOf, chairBlockOf, resolve, type AisleView } from "@/lib/studio/catalog-resolver";
 import { chairStyleOf, drawStyleOf, symbolCount, symbolOf } from "@/lib/catalog/symbols";
@@ -36,6 +37,7 @@ export function PlacedPiece({
   ink,
   print,
   detail = false,
+  product: productOver,
 }: {
   placement: Placement;
   at: Point;
@@ -48,15 +50,18 @@ export function PlacedPiece({
   print?: boolean;
   /** Its inner detail (a flower's petals) — off on a card, on where the plan zooms into it. */
   detail?: boolean;
+  /** The row itself, when it is not in this studio's catalog — a venue's copy of one (lib/venues/
+   *  item.ts), which another business opening the venue has no row for. */
+  product?: Product;
 }) {
-  const r = resolve(p.variantId);
-  const product = r?.product;
+  const r = productOver ? undefined : resolve(p.variantId);
+  const product = productOver ?? r?.product;
   const f = footprint ?? placementFootprint(p);
   const block = chairBlockOf(p);
   const aisle = block ? null : aisleOf(p);
   const symbol = block || aisle || p.stage ? null : symbolOf(product, f);
   const style = resolveStyle(productStyle(product), print ? "monochrome" : "screen", { fill: "var(--color-surface)", stroke: ink ?? "var(--color-border)", strokeWidth: 1.5 });
-  const tone = toneOver ?? r?.swatch ?? product?.appearance?.style?.fill;
+  const tone = toneOver ?? r?.swatch ?? (productOver ? productOver.variants[0]?.swatch : undefined) ?? product?.appearance?.style?.fill;
   const scale = p.scale || 1;
   // The vase an arrangement stands in, drawn with it (lib/catalog/vessel.ts) as the plan will.
   const vessel = symbol === "flowers" || symbol === "centerpiece" ? vesselOf(p, (id) => resolve(id)?.product) : undefined;

@@ -48,6 +48,7 @@ export function hangTargetsOf(doc: DesignDocumentContent, structure: VenueStruct
   for (const f of structure.features) {
     if (f.kind === "surface" || f.kind === "curtain") continue; // the ground is not furniture; a curtain is the wall
     if (f.kind === "led") continue; // …and a strip of light is the wall's (or the edge's) too
+    if (f.kind === "item" && f.item?.layer === "ceiling") continue; // a venue's own chandelier hangs; nothing hangs over it
     out.push(hangTarget(`feature:${f.id}`, featureFootprint(f), { x: f.x, y: f.y }, f.rotationDeg ?? 0));
   }
   return out;

@@ -287,7 +287,8 @@ export function clearanceSubjects(
   // Nor a curtain: it is the wall's own face, and a table may stand as near it as near the wall.
   // Nor the venue's LED strip, for the same reason as a hired one.
   // A venue's pergola, as a hired one: its posts alone.
-  if (visible.floor) for (const f of structure.features) if (f.kind !== "surface" && f.kind !== "curtain" && f.kind !== "pergola" && f.kind !== "led") add({ kind: "feature", id: f.id });
+  // Nor a catalog item the venue hangs (lib/venues/item.ts — its chandelier): it is overhead.
+  if (visible.floor) for (const f of structure.features) if (f.kind !== "surface" && f.kind !== "curtain" && f.kind !== "pergola" && f.kind !== "led" && !(f.kind === "item" && f.item?.layer === "ceiling")) add({ kind: "feature", id: f.id });
   if (visible.floor)
     for (const f of structure.features) {
       if (f.kind !== "pergola") continue;

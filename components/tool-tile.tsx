@@ -9,8 +9,11 @@ import type { LucideIcon } from "lucide-react";
 // dialog's "הוספה בתוך האזור" are the same tile (the "Studio + Halls" board), so there is one look
 // for "a thing you can put on the plan" in every place it is offered.
 
-export const toolTileClass = (on: boolean, disabled = false) =>
-  "flex h-[58px] min-w-0 flex-col items-center justify-center gap-0.5 rounded-sm border px-1 pb-[5px] pt-1 text-[11px] font-semibold leading-tight transition-colors " +
+export const toolTileClass = (on: boolean, disabled = false) => "h-[58px] " + tileLook(on, disabled);
+
+/** The tile without its height: ToolTile grows past 58px when a name needs a second line. */
+const tileLook = (on: boolean, disabled: boolean) =>
+  "flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-sm border px-1 pb-[5px] pt-1 text-[11px] font-semibold leading-tight transition-colors " +
   (disabled
     ? "cursor-not-allowed border-transparent bg-inset text-faint opacity-60"
     : on
@@ -60,7 +63,10 @@ export function ToolTile({
             }
           : undefined
       }
-      className={toolTileClass(armed, disabled)}
+      // At least 58px, and taller when the name takes two lines: a catalog row's name is what tells
+      // "במה 122×244" from "במה 122×80", and one line cut both to "במה 122…" (2026-11-19). A grid
+      // row stretches to its tallest tile, so the row stays even.
+      className={"min-h-[58px] " + tileLook(armed, disabled)}
     >
       {glyph ??
         (swatch ? (
@@ -68,7 +74,7 @@ export function ToolTile({
         ) : Icon ? (
           <Icon className="h-[18px] w-[18px] shrink-0 text-accent" strokeWidth={1.75} aria-hidden />
         ) : null)}
-      <span className="block w-full truncate text-center">{label}</span>
+      <span className="line-clamp-2 w-full text-center [overflow-wrap:anywhere]">{label}</span>
     </button>
   );
 }

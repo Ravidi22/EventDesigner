@@ -57,6 +57,7 @@ import {
   nearestWall,
   newFeature,
   newFeatureFromProduct,
+  newItemFeature,
   removeEntrance,
   removeFeature,
   removeNode,
@@ -89,6 +90,8 @@ import { regionShape, regionSource } from "@/lib/venues/zone";
 import { newPoolFeature } from "@/lib/venues/pool";
 import { OutlineBar } from "./outline-bar";
 import type { OutlinePart } from "@/components/venue-plan";
+import { PergolaPostHandles } from "@/components/pergola-post-handles";
+import { pergolaOf, pergolaPatch, type PergolaPostSpot } from "@/lib/venues/pergola";
 import { setWallHeight } from "@/lib/venues/structure";
 import { detectFaces, faceAt, pointInPolygon, type Face } from "@/lib/venues/faces";
 import {
@@ -602,6 +605,13 @@ export function HallsScreen() {
   // copy, and a row of palms is one palm and a few keystrokes. Walls, corners and doors are part of
   // the connected graph and are not copied; a mixed selection copies just its features.
   const featureSelection = selection.filter((r) => r.kind === "feature").map((r) => r.id);
+  // A pergola whose posts are put by hand (lib/venues/pergola.ts PergolaLegs "custom"), alone in the
+  // selection and free to edit: its posts get grips on the plan.
+  const postsPergola = (() => {
+    if (featureSelection.length !== 1) return null;
+    const f = structure.features.find((x) => x.id === featureSelection[0]);
+    return f && f.kind === "pergola" && !f.locked && pergolaOf(f).legs === "custom" ? f : null;
+  })();
   const duplicateSelection = useCallback(() => {
     const ids = selection.filter((r) => r.kind === "feature").map((r) => r.id);
     if (ids.length === 0) return;
@@ -1602,6 +1612,8 @@ export function HallsScreen() {
         ? newPoolFeature(tool.pool, p)
         : tool.kind === "seating"
         ? newSeatingFeature(p, tool.chair)
+        : tool.kind === "item" && tool.product
+        ? newItemFeature(tool.product, p)
         : tool.product
           ? newFeatureFromProduct(tool.kind, tool.product, p)
           : newFeature(tool.kind, p, tool.plant ?? tool.surface),
@@ -1992,6 +2004,22 @@ export function HallsScreen() {
                 {/* "וילון על מוט" being drawn, post by post (components/rod-draw-pane.tsx) — above
                     everything, so every click is a post. */}
                 {rodFrom && <RodDrawPane ctx={layer} start={rodFrom} maxPoints={ledRun ? 2 : undefined} onFinish={finishRod} onCancel={() => { setRodFrom(null); setLedRun(false); }} />}
+                {acts && !placing && !rodFrom && postsPergola && (
+                  <PergolaPostHandles
+                    feature={postsPergola}
+                    clientToMm={layer.clientToMm}
+                    mm={layer.mm}
+                    onPosts={(posts: PergolaPostSpot[], during) => {
+                      const write = (s: VenueStructure) => {
+                        const f = s.features.find((x) => x.id === postsPergola.id);
+                        return f ? updateFeature(s, f.id, pergolaPatch(f, { posts })) : s;
+                      };
+                      if (during === "drag") dragStructure(write);
+                      else editStructure(write);
+                    }}
+                    onCommit={endGesture}
+                  />
+                )}
                 {acts && !placing && !rodFrom ? (
                   <FeatureRotateHandles
                     structure={structure}

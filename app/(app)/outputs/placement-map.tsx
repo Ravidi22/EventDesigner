@@ -1,3 +1,4 @@
+import { VenueItemGlyph, itemHasPicture } from "@/components/venue-item";
 import { BackToStudio } from "./back-to-studio";
 import { Fragment } from "react";
 import { chandelierDrawOf } from "@/lib/catalog/chandelier";
@@ -1595,6 +1596,10 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
             ) : f.kind === "fountain" ? (
               // A fountain as the catalog's prints: white basin, ink lines.
               <ItemSymbol kind="fountain" footprint={fp} count={1} print ink={INK} tone="#ffffff" />
+            ) : f.kind === "item" ? (
+              // A catalog item the venue keeps (lib/venues/item.ts): its row's picture in the items'
+              // grey, as a hired one prints.
+              <VenueItemGlyph feature={f} tone={MONO.item} ink={INK} print />
             ) : f.kind === "pergola" ? (
               // A pergola (lib/venues/pergola.ts): its posts in the elements' grey, its outline, slats
               // and lattice in ink — no name, the drawing says what it is.
@@ -1620,7 +1625,7 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
             )}
           </g>
         </g>
-        {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && f.kind !== "pergola" && !isClimb(f.kind) && f.label && (
+        {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && f.kind !== "pergola" && !(f.kind === "item" && itemHasPicture(f)) && !isClimb(f.kind) && f.label && (
           <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={2.6 * den} fontFamily="Assistant, sans-serif" fill={INK_SOFT} stroke="#ffffff" strokeWidth={0.5 * den} strokeLinejoin="round" paintOrder="stroke">
             {f.label}
           </text>
@@ -1671,6 +1676,8 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
             <ColumnGlyph f={f} fill={style.fill} fillOpacity={style.fillOpacity} stroke={style.stroke} strokeWidth={style.strokeWidth} />
           ) : f.kind === "fountain" ? (
             <ItemSymbol kind="fountain" footprint={featureFootprint(f)} count={1} tone={f.style?.fill} ink={INK_SOFT} />
+          ) : f.kind === "item" ? (
+            <VenueItemGlyph feature={f} ink={INK_SOFT} />
           ) : f.kind === "curtain" ? (
             <CurtainCloth
               pieces={pieces ?? []}
@@ -1696,7 +1703,7 @@ function ColourFeature({ f, den, mono = false, pieces }: { f: StructureFeature; 
         </g>
       </g>
       {/* Upright, outside the turn — a name drawn at the feature's angle reads as a mark. */}
-      {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && f.kind !== "pergola" && !isClimb(f.kind) && f.label && (
+      {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && f.kind !== "pergola" && !(f.kind === "item" && itemHasPicture(f)) && !isClimb(f.kind) && f.label && (
         <text x={f.x} y={f.y} textAnchor="middle" dominantBaseline="central" fontSize={2.6 * den} fontFamily="Assistant, sans-serif" fill={INK_SOFT}>
           {f.label}
         </text>

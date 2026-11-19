@@ -11,6 +11,10 @@ import { isMain } from "../self-check";
 import { buildScene, wallCurtainTop } from "./build";
 import { fixtureInput, SECRET_PRICE } from "./fixture";
 import { DOOR_HEIGHT_MM, KERB_MM, type BodyNode } from "./types";
+import type { Product } from "@/lib/catalog/types";
+import { resolve } from "@/lib/studio/catalog-resolver";
+import { itemProductId } from "@/lib/venues/item";
+import { newItemFeature } from "@/lib/venues/structure";
 
 if (isMain(import.meta.url)) {
   const assert = (ok: boolean, msg: string) => {
@@ -199,6 +203,28 @@ if (isMain(import.meta.url)) {
   }
   const client = buildScene(fixtureInput(false));
   assert(!client.nodes.some((n) => n.kind === "label"), "a client sees no labels");
+
+  // ── the venue's own catalog items (lib/venues/item.ts) ──────────────────────────────────────────
+  // A sofa and a chandelier put down at /halls: each built from the copy the feature keeps, as a
+  // placement of its row would be — the chandelier hung with its bulbs — with no price anywhere and
+  // the copy resolving for the build alone.
+  const sofaRow: Product = { id: "row-sofa", name: "ספת קטיפה", category: "sofas", layer: "floor", dimensions: { widthMm: 2200, depthMm: 900, heightMm: 800 }, categoryFields: {}, styleTags: [], variants: [{ id: "v-sofa", name: "ירוק", swatch: "#2f5d50" }], unitPrice: SECRET_PRICE };
+  const chandRow: Product = { id: "row-chand", name: "נברשת המקום", category: "chandeliers", layer: "ceiling", dimensions: { diameterMm: 1000, heightMm: 700 }, categoryFields: { arms: 6, hangHeightMm: 3000 }, styleTags: [], variants: [{ id: "v-c", name: "זהב", swatch: "#c9a24a" }], unitPrice: SECRET_PRICE };
+  const base = fixtureInput(true);
+  const withItems = buildScene({
+    ...base,
+    structure: {
+      ...base.structure,
+      features: [...base.structure.features, { id: "vi-sofa", ...newItemFeature(sofaRow, { x: 3000, y: 3000 }) }, { id: "vi-chand", ...newItemFeature(chandRow, { x: 9000, y: 3000 }) }],
+    },
+  });
+  const itemBodies = withItems.nodes.filter((n): n is BodyNode => n.kind === "body");
+  assert(itemBodies.some((b) => b.tag.id === "vi-sofa"), "the venue's sofa is built in the room");
+  const venueChand = itemBodies.filter((b) => b.tag.id === "vi-chand");
+  assert(venueChand.length > 0 && venueChand.flatMap((b) => b.instances).every((t) => t.at.z > 1500), "…and its chandelier hangs, high up");
+  assert(withItems.nodes.filter((n) => n.kind === "emitter").length === scene.nodes.filter((n) => n.kind === "emitter").length + 6, "…its six bulbs glowing");
+  assert(!JSON.stringify(withItems).includes(String(SECRET_PRICE)), "…and no price came with either");
+  assert(resolve(itemProductId("vi-sofa")) === undefined && resolve("venue-item:vi-sofa:shade") === undefined, "the copies resolved for the build alone");
 
   console.log(`scene ok: ${scene.stats.bodies} bodies, ${scene.stats.instances} instances, ${scene.stats.emitters} emitters`);
 }

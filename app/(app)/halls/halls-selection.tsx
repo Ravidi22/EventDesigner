@@ -46,6 +46,9 @@ import { Segmented } from "@/components/segmented";
 import { VENUE_EDGE_KINDS, VENUE_EDGE_LABEL, edgeRows, edgesMatter, featureGaps, takesEdgeItems, type VenueEdgeKind } from "@/lib/venues/stage-edges";
 import { BUILDING_HEIGHT_MM, featureWorldOutline, followsWalls } from "@/lib/venues/face-surfaces";
 import { canEditOutline } from "@/lib/venues/face-surfaces";
+import { itemProductOf } from "@/lib/venues/item";
+import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
+import { ProductImage } from "../catalog/product-image";
 import { SurfaceTiles } from "@/components/surface-tiles";
 import type { DoorOpening, WallDistance } from "@/lib/design-document/stage";
 import { Bar, BarButton, ModeVerb, Note, PanelRow, QuickLead, QuickNumber, QuickSep, QuickTail, QuickTurn, QuickUnit, ltr } from "@/components/inspector-bar";
@@ -123,7 +126,7 @@ import { rimPatch, rimSpecOf, takesRim } from "@/lib/venues/rim";
 import { RotateCw } from "lucide-react";
 import { TagToggle } from "@/components/tag-toggle";
 import { PergolaGlyph } from "@/components/pergola-glyph";
-import { NEW_PERGOLA, PERGOLA_ROOFS, PERGOLA_ROOF_HINT, PERGOLA_ROOF_LABEL, pergolaGeometry, pergolaOf, pergolaPatch, pergolaSides, type Pergola } from "@/lib/venues/pergola";
+import { NEW_PERGOLA, PERGOLA_LEGS, PERGOLA_LEGS_LABEL, PERGOLA_ROOFS, PERGOLA_ROOF_HINT, PERGOLA_ROOF_LABEL, legsPatch, pergolaGeometry, pergolaOf, pergolaPatch, pergolaSides, type Pergola } from "@/lib/venues/pergola";
 import { featureFootprint } from "@/lib/venues/structure";
 import type { Footprint } from "@/lib/studio/footprint";
 
@@ -1008,7 +1011,7 @@ export function HallsSelection({
     bound ? `ממלא שטח סגור · ${Math.round(polygonAreaMm2(featureWorldOutline(feature)) / 1_000_000)} מ״ר` : size,
     band !== null && feature.kind === "bar" ? `דלפק ${cmOf(band)} ס״מ` : null,
     column ? `עמוד ⌀ ${cmOf(column.shaftMm)} ס״מ` : null,
-    feature.kind === "pergola" ? `${PERGOLA_ROOF_LABEL[pergolaOf(feature).roof]} · עמוד ${cmOf(pergolaOf(feature).postMm)} ס״מ` : null,
+    feature.kind === "pergola" ? `${PERGOLA_ROOF_LABEL[pergolaOf(feature).roof]} · ${pergolaPostsWord(pergolaOf(feature))}` : null,
     !climb && !surface && !seating && feature.heightMm > 0 ? `גובה ${m(feature.heightMm)} מ׳` : null,
     feature.locked ? "נעול" : null,
   ]
@@ -1208,7 +1211,8 @@ export function HallsSelection({
           <Note>החלפת הסוג מביאה איתה את הגודל המקורב שלו, כמו הנחה מחדש.</Note>
         </>,
       );
-    if (climb || seating || bound || isCurtain || isLed) return null;
+    // A catalog item's shape is its row's (lib/venues/item.ts) — its picture is drawn from it.
+    if (climb || seating || bound || isCurtain || isLed || feature.kind === "item") return null;
     return G(
       "shape",
       Shapes,
@@ -1398,7 +1402,35 @@ export function HallsSelection({
     );
   if (feature.kind === "pergola") {
     const spec = pergolaOf(feature);
-    kindGroups.push(G("pergola", FEATURE_ICON.pergola, "פרגולה", `${PERGOLA_ROOF_LABEL[spec.roof]} · ${cmOf(spec.postMm)} ס״מ`, <PergolaPopover bare feature={feature} onPatch={patch} />));
+    kindGroups.push(G("pergola", FEATURE_ICON.pergola, "פרגולה", `${PERGOLA_ROOF_LABEL[spec.roof]} · ${pergolaPostsWord(spec)}`, <PergolaPopover bare feature={feature} onPatch={patch} />));
+  }
+  // A catalog item the venue keeps (lib/venues/item.ts): what it was copied from, and what that means.
+  if (feature.kind === "item" && feature.item) {
+    const it = feature.item;
+    const product = itemProductOf(feature);
+    const category = CATEGORY_BY_ID[it.category]?.label ?? it.category;
+    kindGroups.push(
+      G(
+        "item",
+        FEATURE_ICON.item,
+        "מהקטלוג",
+        it.shade ? `${category} · ${it.shade.name}` : category,
+        <>
+          <div className="flex items-center gap-2.5 py-1">
+            {product && (
+              <span className="h-12 w-12 shrink-0 overflow-hidden rounded-sm border border-border-soft">
+                <ProductImage product={product} />
+              </span>
+            )}
+            <span className="min-w-0 text-[13px] leading-snug">
+              <span className="block font-semibold text-ink">{category}</span>
+              {it.shade && <span className="block text-muted">גוון: {it.shade.name}</span>}
+            </span>
+          </div>
+          <Note>עותק של הפריט מהקטלוג, שנשמר עם המקום ומצויר כמו בקטלוג. בלי מחיר — לא נספר ולא מתומחר באירועים. שינוי בקטלוג לא משנה אותו.</Note>
+        </>,
+      ),
+    );
   }
   // A pool's שפה, a surface's edging (lib/venues/rim.ts): a band INSIDE the outline.
   if (takesRim(feature)) {
@@ -1612,6 +1644,7 @@ function PergolaPopover({ bare = false, feature, onPatch }: { bare?: boolean; fe
   const closed = (spec.closedSides ?? []).filter((i) => i < sides.length);
   const set = (p: Partial<Pergola>) => onPatch(pergolaPatch(feature, p));
   const slatDeg = Math.round(geometry?.slatDeg ?? spec.slatDirectionDeg ?? 0);
+  const legs = spec.legs ?? "auto";
   const body = (
     <>
       <PanelRow label="גג" stack>
@@ -1648,9 +1681,26 @@ function PergolaPopover({ bare = false, feature, onPatch }: { bare?: boolean; fe
           <NumberField id="pergola-spacing" decimals={0} min={5} step={5} commitOnBlur value={cmOf(geometry?.spacingMm ?? spec.slatSpacingMm ?? 300)} onChange={(cm) => set({ slatSpacingMm: cm * 10 })} className="w-20" />
         </PanelRow>
       )}
-      <PanelRow label="עובי עמוד (ס״מ)" htmlFor="pergola-post">
-        <NumberField id="pergola-post" decimals={0} min={5} max={60} step={1} commitOnBlur value={cmOf(spec.postMm)} onChange={(cm) => set({ postMm: cm * 10 })} className="w-20" />
-      </PanelRow>
+      {/* Where the posts stand (lib/venues/pergola.ts PergolaLegs): by themselves at the corners, none
+          at all (fixed to a building, or hung), or put by hand on the beam line, on the plan. */}
+      <div className="py-1">
+        <Segmented
+          label="עמודים"
+          value={legs}
+          options={PERGOLA_LEGS.map((l) => [l, PERGOLA_LEGS_LABEL[l]] as const)}
+          onChange={(l) => set(legsPatch(footprint, spec, l))}
+        />
+      </div>
+      {legs === "custom" && (
+        <Note>
+          {spec.posts?.length ?? 0} עמודים. על התוכנית: לחיצה על קו הקורה מוסיפה עמוד, גרירה מזיזה אותו לאורך הקורה, ולחיצה כפולה (או Delete אחרי לחיצה) מסירה.
+        </Note>
+      )}
+      {legs !== "none" && (
+        <PanelRow label="עובי עמוד (ס״מ)" htmlFor="pergola-post">
+          <NumberField id="pergola-post" decimals={0} min={5} max={60} step={1} commitOnBlur value={cmOf(spec.postMm)} onChange={(cm) => set({ postMm: cm * 10 })} className="w-20" />
+        </PanelRow>
+      )}
       {sides.length > 0 && (
         <PanelRow label="צדדים סגורים (סבכה)" stack>
           <div className="flex flex-wrap gap-1">
@@ -1666,15 +1716,24 @@ function PergolaPopover({ bare = false, feature, onPatch }: { bare?: boolean; fe
           </div>
         </PanelRow>
       )}
-      <Note>העמודים עומדים בפינות הקו (ולאורך קשת — כל כ־3 מ׳), והרפפות שומרות על המרווח כשמשנים את הגודל. שולחנות עומדים מתחתיה — רק העמודים נחשבים למכשול. לצורה אחרת: ״עריכת הקווים״.</Note>
+      <Note>
+        {legs === "auto" ? "העמודים עומדים בפינות הקו (ולאורך קשת — כל כ־3 מ׳). " : ""}הרפפות שומרות על המרווח כשמשנים את הגודל. שולחנות עומדים מתחתיה — רק העמודים נחשבים למכשול. לצורה אחרת: ״עריכת הקווים״.
+      </Note>
     </>
   );
   if (bare) return body;
   return (
-    <Popover label="פרגולה" icon={FEATURE_ICON.pergola} value={`${PERGOLA_ROOF_LABEL[spec.roof]} · ${cmOf(spec.postMm)} ס״מ`} panelClassName="w-80">
+    <Popover label="פרגולה" icon={FEATURE_ICON.pergola} value={`${PERGOLA_ROOF_LABEL[spec.roof]} · ${pergolaPostsWord(spec)}`} panelClassName="w-80">
       {body}
     </Popover>
   );
+}
+
+/** What the posts are, in a summary: their size, how many were put by hand, or none. */
+function pergolaPostsWord(spec: Pergola): string {
+  if (spec.legs === "none") return "ללא עמודים";
+  if (spec.legs === "custom") return `${spec.posts?.length ?? 0} עמודים · ${cmOf(spec.postMm)} ס״מ`;
+  return `עמוד ${cmOf(spec.postMm)} ס״מ`;
 }
 
 /** The roof tiles' drawing: a small pergola, the same for each roof. */

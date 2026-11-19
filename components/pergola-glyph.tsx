@@ -97,8 +97,13 @@ function samePergola(a: Pergola, b: Pergola): boolean {
   if (a === b) return true;
   const ca = a.closedSides ?? [];
   const cb = b.closedSides ?? [];
+  const pa = a.posts ?? [];
+  const pb = b.posts ?? [];
   return (
     a.postMm === b.postMm &&
+    (a.legs ?? "auto") === (b.legs ?? "auto") &&
+    pa.length === pb.length &&
+    pa.every((q, i) => q.side === pb[i].side && q.t === pb[i].t) &&
     a.roof === b.roof &&
     a.slatDirectionDeg === b.slatDirectionDeg &&
     a.slatSpacingMm === b.slatSpacingMm &&

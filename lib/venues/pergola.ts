@@ -56,9 +56,34 @@ export const PERGOLA_ROOF_HINT: Record<PergolaRoof, string> = {
   none: "העמודים והקורות בלבד, בלי גג",
 };
 
+/** Where the posts stand (2026-11-19, the user: "custom legs — none or custom"): at the outline's
+ *  corners and along it, as every pergola always stood (`auto`); nowhere — the beams and the roof
+ *  alone, fixed to a building or hung (`none`); or where the designer put them (`custom`). */
+export type PergolaLegs = "auto" | "none" | "custom";
+
+export const PERGOLA_LEGS: readonly PergolaLegs[] = ["auto", "none", "custom"];
+
+export const PERGOLA_LEGS_LABEL: Record<PergolaLegs, string> = {
+  auto: "אוטומטי",
+  none: "ללא עמודים",
+  custom: "מותאם",
+};
+
+/** A post the designer put: on side `side` of the outline (an edge index, as `closedSides`), `t` of
+ *  the way along that side's beam line (0 = the corner it starts at, 1 = the next). A fraction, not
+ *  millimetres, so a post put at a side's middle stays at its middle when the pergola is resized. */
+export interface PergolaPostSpot {
+  side: number;
+  t: number;
+}
+
 export interface Pergola {
   /** A post's square, mm. */
   postMm: number;
+  /** Where the posts stand. Absent = `auto`. */
+  legs?: PergolaLegs;
+  /** iff `legs === "custom"`: every post, where it was put. */
+  posts?: PergolaPostSpot[];
   roof: PergolaRoof;
   /** Which way the slats run, degrees in the pergola's own frame (0 = along its width, +x). Absent
    *  = across the long side. */
@@ -104,6 +129,19 @@ export function pergolaSpec(p: Partial<Pergola> | undefined): Pergola {
   if (Number.isFinite(p?.slatSpacingMm) && p!.slatSpacingMm! > 0) out.slatSpacingMm = Math.round(Math.max(SPACING_MIN_MM, p!.slatSpacingMm!));
   const closed = [...new Set((p?.closedSides ?? []).filter((i) => Number.isInteger(i) && i >= 0))].sort((a, b) => a - b);
   if (closed.length) out.closedSides = closed;
+  if (p?.legs === "none") out.legs = "none";
+  else if (p?.legs === "custom") {
+    out.legs = "custom";
+    const seen = new Set<string>();
+    out.posts = (p.posts ?? []).flatMap((q) => {
+      if (!q || !Number.isInteger(q.side) || q.side < 0 || !Number.isFinite(q.t)) return [];
+      const spot = { side: q.side, t: Math.round(clamp(q.t, 0, 1) * 10000) / 10000 };
+      const key = `${spot.side}:${spot.t}`;
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return [spot];
+    });
+  }
   return out;
 }
 
@@ -149,6 +187,8 @@ export interface PergolaPost {
   at: Point;
   /** Its square's turn: the side it stands on. */
   deg: number;
+  /** A post the designer put: its index in `spec.posts` — what the canvas grips move and remove. */
+  spot?: number;
 }
 
 export interface PergolaSide {
@@ -312,72 +352,86 @@ export function pergolaGeometry(footprint: Footprint, spec: Pergola): PergolaGeo
   const curved = P.map((_, i) => !!base.edgeCurves?.[i]);
 
   const posts: PergolaPost[] = [];
-  const put = (p: Point, deg: number) => {
+  const put = (p: Point, deg: number, spot?: number) => {
     if (posts.some((q) => Math.hypot(q.at.x - p.x, q.at.y - p.y) < postMm)) return;
-    posts.push({ at: { x: p.x, y: p.y }, deg });
+    posts.push({ at: { x: p.x, y: p.y }, deg, ...(spot === undefined ? {} : { spot }) });
   };
-  // Every corner.
-  P.forEach((_, i) => {
-    if (sharp[i]) put(ring[start[i]], headingDeg(outline[start[i]], outline[(start[i] + 1) % N]));
-  });
-  // A long straight side: posts between its corners.
-  P.forEach((_, i) => {
-    if (curved[i]) return;
-    const path = sides[i].inner;
-    const L = pathLength(path);
-    const between = Math.ceil(L / MAX_SPAN_MM) - 1;
-    for (let k = 1; k <= between; k++) {
-      const at = alongPath(path, (L * k) / (between + 1));
-      put(at.p, at.deg);
-    }
-  });
-  // Curves: runs of curved sides joined smoothly, posts about every CURVE_POST_SPACING_MM.
-  const runs: { from: number; to: number }[] = [];
-  for (let i = 0; i < n; i++) {
-    if (!curved[i]) continue;
-    const prev = (i - 1 + n) % n;
-    if (curved[prev] && !sharp[i]) continue; // inside a run
-    let j = i;
-    while (curved[(j + 1) % n] && !sharp[(j + 1) % n] && (j + 1) % n !== i) j = (j + 1) % n;
-    runs.push({ from: i, to: j });
+  const legs = spec.legs ?? "auto";
+  // Put by hand: each where it was put along its side's beam line. A side the outline no longer has
+  // (a corner removed since) takes its posts with it.
+  if (legs === "custom") {
+    (spec.posts ?? []).forEach((s, k) => {
+      const side = sides[s.side];
+      if (!side) return;
+      const at = alongPath(side.inner, s.t * pathLength(side.inner));
+      put(at.p, at.deg, k);
+    });
   }
-  const loop = runs.length === 0 && curved.every(Boolean);
-  if (loop) {
-    // A round pergola (or one whose every side is curved and joined smoothly): round its rim.
-    const path = [...ring, ring[0]];
-    const L = pathLength(path);
-    const count = Math.max(4, Math.round(L / CURVE_POST_SPACING_MM));
-    for (let k = 0; k < count; k++) {
-      const at = alongPath(path, (L * k) / count);
-      put(at.p, at.deg);
-    }
-  }
-  for (const run of runs) {
-    const path: Point[] = [];
-    for (let i = run.from; ; i = (i + 1) % n) {
-      const part = sides[i].inner;
-      path.push(...(path.length ? part.slice(1) : part));
-      if (i === run.to) break;
-    }
-    const L = pathLength(path);
-    const fromSharp = sharp[run.from];
-    const toSharp = sharp[(run.to + 1) % n];
-    if (fromSharp && toSharp) {
-      // Between two corners (a bowed side): the corners carry its ends.
-      const between = Math.ceil(L / CURVE_POST_SPACING_MM) - 1;
+  if (legs === "auto") {
+    // Every corner.
+    P.forEach((_, i) => {
+      if (sharp[i]) put(ring[start[i]], headingDeg(outline[start[i]], outline[(start[i] + 1) % N]));
+    });
+    // A long straight side: posts between its corners.
+    P.forEach((_, i) => {
+      if (curved[i]) return;
+      const path = sides[i].inner;
+      const L = pathLength(path);
+      const between = Math.ceil(L / MAX_SPAN_MM) - 1;
       for (let k = 1; k <= between; k++) {
         const at = alongPath(path, (L * k) / (between + 1));
         put(at.p, at.deg);
       }
-    } else {
-      // A rounded corner, or a curve that runs on smoothly into a straight side: at least one, on
-      // its middle.
-      const count = Math.max(1, Math.round(L / CURVE_POST_SPACING_MM));
+    });
+    // Curves: runs of curved sides joined smoothly, posts about every CURVE_POST_SPACING_MM.
+    const runs: { from: number; to: number }[] = [];
+    for (let i = 0; i < n; i++) {
+      if (!curved[i]) continue;
+      const prev = (i - 1 + n) % n;
+      if (curved[prev] && !sharp[i]) continue; // inside a run
+      let j = i;
+      while (curved[(j + 1) % n] && !sharp[(j + 1) % n] && (j + 1) % n !== i) j = (j + 1) % n;
+      runs.push({ from: i, to: j });
+    }
+    const loop = runs.length === 0 && curved.every(Boolean);
+    if (loop) {
+      // A round pergola (or one whose every side is curved and joined smoothly): round its rim.
+      const path = [...ring, ring[0]];
+      const L = pathLength(path);
+      const count = Math.max(4, Math.round(L / CURVE_POST_SPACING_MM));
       for (let k = 0; k < count; k++) {
-        const at = alongPath(path, (L * (k + 0.5)) / count);
+        const at = alongPath(path, (L * k) / count);
         put(at.p, at.deg);
       }
     }
+    for (const run of runs) {
+      const path: Point[] = [];
+      for (let i = run.from; ; i = (i + 1) % n) {
+        const part = sides[i].inner;
+        path.push(...(path.length ? part.slice(1) : part));
+        if (i === run.to) break;
+      }
+      const L = pathLength(path);
+      const fromSharp = sharp[run.from];
+      const toSharp = sharp[(run.to + 1) % n];
+      if (fromSharp && toSharp) {
+        // Between two corners (a bowed side): the corners carry its ends.
+        const between = Math.ceil(L / CURVE_POST_SPACING_MM) - 1;
+        for (let k = 1; k <= between; k++) {
+          const at = alongPath(path, (L * k) / (between + 1));
+          put(at.p, at.deg);
+        }
+      } else {
+        // A rounded corner, or a curve that runs on smoothly into a straight side: at least one, on
+        // its middle.
+        const count = Math.max(1, Math.round(L / CURVE_POST_SPACING_MM));
+        for (let k = 0; k < count; k++) {
+          const at = alongPath(path, (L * (k + 0.5)) / count);
+          put(at.p, at.deg);
+        }
+      }
+    }
+
   }
 
   const slatDeg = spec.slatDirectionDeg ?? (box.w >= box.h ? 90 : 0);
@@ -394,6 +448,55 @@ export function pergolaGeometry(footprint: Footprint, spec: Pergola): PergolaGeo
     depthMm: box.h,
   };
 }
+
+// ── posts put by hand ─────────────────────────────────────────────────────────────────────────────
+
+/** The beam line's nearest point to `p` (the footprint's own frame): the side, how far along it, and
+ *  how far `p` is from it — where a click puts a post, and where a dragged one slides to. */
+export function beamSpotAt(g: PergolaGeometry, p: Point): { spot: PergolaPostSpot; at: Point; distanceMm: number } | null {
+  let best: { spot: PergolaPostSpot; at: Point; distanceMm: number } | null = null;
+  for (const side of g.sides) {
+    const path = side.inner;
+    const L = pathLength(path);
+    if (L < 1) continue;
+    let run = 0;
+    for (let k = 1; k < path.length; k++) {
+      const a = path[k - 1];
+      const b = path[k];
+      const d = sub(b, a);
+      const l2 = d.x * d.x + d.y * d.y;
+      const l = Math.sqrt(l2);
+      const u = l2 > 0 ? clamp(((p.x - a.x) * d.x + (p.y - a.y) * d.y) / l2, 0, 1) : 0;
+      const at = { x: a.x + d.x * u, y: a.y + d.y * u };
+      const dist = len(sub(p, at));
+      if (!best || dist < best.distanceMm - 0.01) best = { spot: { side: side.index, t: Math.round(clamp((run + u * l) / L, 0, 1) * 10000) / 10000 }, at, distanceMm: dist };
+      run += l;
+    }
+  }
+  return best;
+}
+
+/** The posts a pergola would stand on by itself, as spots — where "מותאם" starts from. */
+export function autoPostSpots(footprint: Footprint, spec: Pergola): PergolaPostSpot[] {
+  const g = pergolaGeometry(footprint, { ...spec, legs: undefined, posts: undefined });
+  if (!g) return [];
+  return g.posts.flatMap((post) => {
+    const hit = beamSpotAt(g, post.at);
+    return hit ? [hit.spot] : [];
+  });
+}
+
+/** What choosing how the posts stand writes (merged by pergolaPatch). "מותאם" begins at the posts it
+ *  stood on a moment ago; "אוטומטי" forgets the hand-put ones. */
+export function legsPatch(footprint: Footprint, spec: Pergola, legs: PergolaLegs): Partial<Pergola> {
+  if (legs !== "custom") return { legs, posts: undefined };
+  return { legs, posts: spec.legs === "custom" ? spec.posts ?? [] : autoPostSpots(footprint, spec) };
+}
+
+/** A post put at `spot`, moved to it, or taken away — each the whole list again. */
+export const postsAdded = (spec: Pergola, spot: PergolaPostSpot): PergolaPostSpot[] => [...(spec.posts ?? []), spot];
+export const postsMoved = (spec: Pergola, index: number, spot: PergolaPostSpot): PergolaPostSpot[] => (spec.posts ?? []).map((q, i) => (i === index ? spot : q));
+export const postsRemoved = (spec: Pergola, index: number): PergolaPostSpot[] => (spec.posts ?? []).filter((_, i) => i !== index);
 
 /** Parallel lines `deg` in the pergola's frame, `spacingMm` apart on centres struck from the middle,
  *  each clipped to the beam line — the slats, a solid roof's hatch, a cloth's diagonals. A line
@@ -619,6 +722,31 @@ if (isMain(import.meta.url)) {
   assert(pergolaOfProduct(row).postMm === 200 && pergolaOfProduct(row).roof === "fabric", "a row's post is its categoryFields.postMm, its roof its drawing style");
   assert(pergolaPostOf({ category: "chuppahs", categoryFields: {} }) === undefined, "…and a row that is not a pergola has no post");
   assert(pergolaOfProduct({ category: PERGOLA_CATEGORY, categoryFields: {} }).roof === "slats", "a row with no style has slats");
+
+  // Legs (2026-11-19): none, or put by hand on the beam line.
+  const rect = { kind: "rect" as const, widthMm: 4000, depthMm: 3000 };
+  assert(pergolaGeometry(rect, { ...NEW_PERGOLA, legs: "none" })!.posts.length === 0, "no legs: beams and roof, no posts");
+  assert(pergolaRoofLines(pergolaGeometry(rect, { ...NEW_PERGOLA, legs: "none" })!).length > 0, "…its roof still across them");
+  const auto = autoPostSpots(rect, NEW_PERGOLA);
+  assert(auto.length === 4, `custom starts from the four automatic posts (got ${auto.length})`);
+  const fromAuto = pergolaGeometry(rect, { ...NEW_PERGOLA, legs: "custom", posts: auto })!;
+  const autoG = pergolaGeometry(rect, NEW_PERGOLA)!;
+  assert(fromAuto.posts.length === 4 && fromAuto.posts.every((p) => autoG.posts.some((q) => near(p.at.x, q.at.x) && near(p.at.y, q.at.y))), "…standing exactly where the automatic ones stood");
+  assert(fromAuto.posts.every((p, i) => p.spot === i), "…each knowing which spot it is");
+  const mid = beamSpotAt(autoG, { x: 0, y: -1700 })!;
+  assert(mid.spot.side === 0 && near(mid.spot.t, 0.5, 0.001) && near(mid.at.y, -1425), `a click near the top side's middle lands on its beam line, half way (side ${mid.spot.side}, t ${mid.spot.t})`);
+  const five = pergolaSpec({ ...NEW_PERGOLA, legs: "custom", posts: postsAdded({ ...NEW_PERGOLA, posts: auto }, mid.spot) });
+  assert(pergolaGeometry(rect, five)!.posts.length === 5, "a post put there is a fifth post");
+  const wider = pergolaGeometry({ kind: "rect", widthMm: 8000, depthMm: 3000 }, five)!;
+  assert(wider.posts.some((p) => near(p.at.x, 0) && near(p.at.y, -1425)), "…and it stays at its side's middle when the pergola is stretched");
+  const moved = pergolaSpec({ ...five, posts: postsMoved(five, 4, { side: 0, t: 0.25 }) });
+  assert(pergolaGeometry(rect, moved)!.posts.some((p) => p.spot === 4 && near(p.at.x, -963, 2)), "a post slid a quarter along its side");
+  assert(pergolaGeometry(rect, pergolaSpec({ ...five, posts: postsRemoved(five, 0) }))!.posts.length === 4, "…and one taken away");
+  assert(pergolaGeometry(rect, pergolaSpec({ ...NEW_PERGOLA, legs: "custom", posts: [{ side: 9, t: 0.5 }] }))!.posts.length === 0, "a post on a side the outline no longer has goes with it");
+  assert(pergolaSpec({ legs: "custom", posts: [{ side: 1, t: 2 }, { side: 1, t: 1 }, { side: -1, t: 0 }] }).posts!.length === 1, "spots held to their side, unique, real");
+  assert(pergolaSpec({ legs: "auto", posts: auto }).legs === undefined && pergolaSpec({ legs: "auto", posts: auto }).posts === undefined, "automatic is stored as nothing, and keeps no hand-put posts");
+  const back = legsPatch(rect, five, "custom");
+  assert(back.posts!.length === 5, "choosing מותאם again keeps the posts already put");
 
   // In the room: turned 90° about its place.
   const room = pergolaPostsInRoom(sq, { x: 10000, y: 5000 }, 90);

@@ -12,6 +12,7 @@ import { TextField } from "@/components/text-field";
 import { ADD_TOOL_ICON, addToolIconKey } from "@/components/venue-inspector";
 import { railSections, type AddTool } from "@/lib/venues/add-tools";
 import { ToolTile } from "@/components/tool-tile";
+import { ToolGlyph, hasToolGlyph } from "./tool-glyph";
 import { SURFACE_BASE } from "@/components/surface-fill";
 import { formatDimensions } from "@/lib/catalog/format";
 import { ZONE_KIND_LABEL, detachedNote, type Zone, type ZoneKind } from "@/lib/venues/zone";
@@ -268,6 +269,7 @@ export function ZoneDialog({
                           {r.tools.map((tool) => (
                             <ToolTile
                               key={tool.id}
+                              glyph={hasToolGlyph(tool) ? <ToolGlyph tool={tool} /> : undefined}
                               icon={ADD_TOOL_ICON[addToolIconKey(tool)]}
                               swatch={tool.surface ? SURFACE_BASE[tool.surface] : undefined}
                               label={tool.label}

@@ -68,6 +68,7 @@
     "check:led": "tsx lib/venues/led.ts",
     "check:scene-led": "tsx lib/scene/led.ts",
     "check:pergola": "tsx lib/venues/pergola.ts",
+    "check:venue-item": "tsx lib/venues/item.ts",
     "check:roofs": "tsx lib/venues/roofs.ts",
     "check:curtain": "tsx lib/venues/curtain.ts",
     "check:rail": "tsx lib/studio/rail.ts",

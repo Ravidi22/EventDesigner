@@ -37,6 +37,7 @@ import type { FeatureClimb } from "./climb";
 import type { FeatureCurtain } from "./curtain";
 import type { FeatureLed } from "./led";
 import { NEW_PERGOLA, pergolaOfProduct, type Pergola } from "./pergola";
+import { itemSnapshot, type FeatureItem } from "./item";
 import { isMain } from "../self-check";
 
 export interface StructureNode {
@@ -212,7 +213,7 @@ export function doorDistanceFrom(e: Pick<StructureEntrance, "widthMm" | "measure
 // A pergola (2026-11-07, spec §5): posts at its outline's corners, beams along its sides, a roof of
 // slats, a deck, a cloth or nothing across them (./pergola.ts) — the one definition a hired pergola
 // in the catalog shares. Tables stand under it, so only its posts are in anyone's way.
-export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "column" | "other" | "plant" | "surface" | "stairs" | "ramp" | "seating" | "fountain" | "curtain" | "pergola" | "led" | "screen";
+export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "column" | "other" | "plant" | "surface" | "stairs" | "ramp" | "seating" | "fountain" | "curtain" | "pergola" | "led" | "screen" | "item";
 
 /** A `column` feature's parts (./column.ts). Its footprint — width × depth, square or round — is the
  *  PLINTH it stands on; the shaft rises from it `shaftMm` across, with a base moulding `baseMm`
@@ -350,6 +351,9 @@ export interface StructureFeature {
   /** iff `kind === "pergola"`: its posts, roof, slats and lattice sides (./pergola.ts). Absent reads
    *  as a new pergola's. */
   pergola?: Pergola;
+  /** iff `kind === "item"`: the copy of the catalog row it was put down from (./item.ts) — what it
+   *  is drawn and built as. No price, no stock, no link back. */
+  item?: FeatureItem;
   /** iff `kind === "curtain"`: the wall stretch it hangs on and which side (./curtain.ts). The box
    *  is derived from it and written with it; a curtain with no span keeps the box it has. */
   curtain?: FeatureCurtain;
@@ -385,12 +389,15 @@ export interface StructureFeature {
  *  things a venue rolls about between events, a column, a door's surround, the pool, the planting
  *  and the floor itself are not. A feature that is not movable is drawn in the sketch but takes no
  *  clicks — it is the room, like a wall. */
-export function featureMovable(f: Pick<StructureFeature, "kind" | "movable">): boolean {
+export function featureMovable(f: Pick<StructureFeature, "kind" | "movable"> & { item?: Pick<FeatureItem, "layer"> }): boolean {
   // Chairs in rows too: an event sets the ceremony where its חופה is tonight. A curtain is "movable"
   // so a sketch may take it DOWN for its event (the drawing pins it to its wall either way).
   // The venue's LED strip likewise (spec 2026-11-07 §7.3): pinned to its rail, taken down for one
   // event. Its screen is the room's, like a column.
   if (f.movable === undefined && f.kind === "led") return true;
+  // A catalog item standing on the floor (a sofa, a tree in a pot) is set out per event like a bar;
+  // what hangs (a chandelier) is the room's.
+  if (f.movable === undefined && f.kind === "item") return f.item?.layer !== "ceiling";
   return f.movable ??(f.kind === "bar" || f.kind === "stage" || f.kind === "seating" || f.kind === "curtain");
 }
 
@@ -431,6 +438,7 @@ export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
   led: "פס לד",
   screen: "מסך לד",
   pergola: "פרגולה",
+  item: "פריט מהקטלוג",
 };
 
 export interface VenueStructure {
@@ -900,6 +908,8 @@ const FEATURE_DEFAULTS: Record<FeatureKind, Pick<StructureFeature, "widthMm" | "
   screen: { widthMm: 4000, depthMm: 100, heightMm: 2500, shape: "rect" },
   // A 4 × 4 pergola, 2.6 m to the top of its slats (./pergola.ts).
   pergola: { widthMm: 4000, depthMm: 4000, heightMm: 2600, shape: "rect" },
+  // Never placed bare — a catalog item is always put down from its row (newItemFeature).
+  item: { widthMm: 1000, depthMm: 1000, heightMm: 1000, shape: "rect" },
 };
 
 // A plant's rough size is the species', not the kind's: a palm's crown is metres across and a pot
@@ -985,6 +995,13 @@ export function newFeatureFromProduct(kind: FeatureKind, product: Product, at: P
     // A hired pergola set down as the venue's own: its post and roof come across (./pergola.ts).
     ...(kind === "pergola" ? { pergola: pergolaOfProduct(product) } : {}),
   };
+}
+
+/** A catalog row put down on the venue as ITSELF (./item.ts): the outline it lands as is the row's
+ *  base shape, as for a bar, and the feature keeps a price-free copy of the row to be drawn from. */
+export function newItemFeature(product: Product, at: Point, variantId?: string): Omit<StructureFeature, "id"> {
+  const f = newFeatureFromProduct("item", product, at);
+  return { ...f, item: itemSnapshot(product, { w: f.widthMm, h: f.depthMm }, variantId) };
 }
 
 /** What a feature is drawn as — one footprint, shared by the editor, the printed placement map and

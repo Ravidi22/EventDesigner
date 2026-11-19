@@ -32,9 +32,10 @@ import {
 import { CLIMB_BY_CATEGORY } from "./climb";
 import { POOL_PRESETS, POOL_PRESET_LABEL, type PoolPreset } from "./pool";
 import { PERGOLA_CATEGORY } from "./pergola";
+import { venueItemOffered } from "./item";
 import { isMain } from "../self-check";
 
-export type AddToolSection = "structure" | "pool" | "ground" | "plants" | "bars" | "stages" | "seating";
+export type AddToolSection = "structure" | "pool" | "ground" | "plants" | "bars" | "stages" | "seating" | "catalog";
 
 export interface AddTool {
   /** Stable within one list, and the entire payload of a drag onto the canvas. */
@@ -66,6 +67,7 @@ export const ADD_TOOL_SECTION_LABEL: Record<AddToolSection, string> = {
   bars: "ברים ומזנונים",
   stages: "במות",
   seating: "ישיבה",
+  catalog: "מהקטלוג",
 };
 
 // The features a designer places by drawing them, because no catalog has an opinion about them.
@@ -152,7 +154,18 @@ export function addTools(products: Product[] = []): AddTool[] {
   // The ceremony seating in front of a חופה — the venue's own chairs, five rows of five to start.
   const chair = products.find((p) => !p.archived && p.category === "chairs");
   tools.push({ id: "seating", label: FEATURE_KIND_LABEL.seating, section: "seating", kind: "seating", ...(chair ? { chair } : {}) });
+  // Everything else the studio's catalog holds that has a place of its own (./item.ts) — the venue's
+  // own chandelier or sofa, drawn as itself. Its own section, kept OUT of ADD_TOOL_SECTIONS: the rail
+  // shows it on a tab of its own, apart from what the venue is built of.
+  for (const product of products.filter(venueItemOffered).sort((a, b) => a.name.localeCompare(b.name, "he"))) {
+    tools.push({ id: `item:${product.id}`, label: product.name, section: "catalog", kind: "item", product });
+  }
   return tools;
+}
+
+/** The catalog tab's tools (the rail's "מהקטלוג"). */
+export function catalogTools(tools: readonly AddTool[]): AddTool[] {
+  return tools.filter((t) => t.section === "catalog");
 }
 
 /** The tool a drag or an armed button is referring to. Undefined for an id from some other list
@@ -211,6 +224,7 @@ if (isMain(import.meta.url)) {
   }
 
   const tools = addTools([
+    product("c1", "נברשת קריסטל", "chandeliers"),
     product("b2", "בר ישר 200×60", "bars"),
     product("b1", "בר בצורת ח 360×180", "bars"),
     product("b3", "בר ישן", "bars", true),
@@ -229,6 +243,9 @@ if (isMain(import.meta.url)) {
   assert(tools.filter((t) => t.section === "stages").length === 2, "the stage department is catalog-backed too");
   assert(findAddTool(tools, "product:r1")?.kind === "ramp" && findAddTool(tools, "product:s1")?.kind === "stage", "…and a ramp in it lands as the venue's ramp, a stage as a stage");
   assert(new Set(tools.map((t) => t.id)).size === tools.length, "ids are unique — a drag has to name exactly one tool");
+  const fromCatalog = catalogTools(tools);
+  assert(fromCatalog.length === 1 && fromCatalog[0].kind === "item" && fromCatalog[0].id === "item:c1", "the catalog tab holds the chandelier as an item — not the bars, the stage, the table or the pergola");
+  assert(!railSections(tools).some((r) => r.tools.some((t) => t.section === "catalog")), "…and the build tab never shows it"); 
 
   assert(findAddTool(tools, "product:b1")?.product?.id === "b1", "a drag payload finds its row");
   assert(findAddTool(tools, "entrance")?.kind === null, "the door is a tool with no feature kind");
