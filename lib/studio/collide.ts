@@ -40,6 +40,105 @@ const away = (aCentre: number, bCentre: number) => (aCentre < bCentre ? -1 : 1);
 /** How far a pair (`id`) may be ignored: pairs already overlapping when the gesture began. */
 export type Ignore = (moverIndex: number, obstacleIndex: number) => boolean;
 
+/** Overlap this shallow between two TRUE shapes is touching: a turned thing's position is whole
+ *  millimetres, so flush at an angle is never exact. */
+const SHAPE_EPS_MM = 1;
+
+/** Does the box stand for something other than itself — a circle, or a rectangle at an angle that is
+ *  not a whole quarter turn (one stood on end is exactly the box it takes up)? */
+const turned = (b: SolidBox): boolean => {
+  if (!b.shape) return false;
+  if (b.shape.round) return true;
+  const q = (((b.shape.rotation % 90) + 90) % 90) / 90;
+  return Math.min(q, 1 - q) > 1e-6;
+};
+
+type Convex = { round: true; c: Point; r: number } | { round: false; c: Point; corners: Point[]; axes: Point[] };
+
+/** A box's true outline, centred at (x, y). */
+function convexOf(b: SolidBox, x: number, y: number): Convex {
+  const c = { x, y };
+  if (b.shape?.round) return { round: true, c, r: b.shape.widthMm / 2 };
+  const t = ((b.shape?.rotation ?? 0) * Math.PI) / 180;
+  const ux = { x: Math.cos(t), y: Math.sin(t) };
+  const uy = { x: -Math.sin(t), y: Math.cos(t) };
+  const w = (b.shape ? b.shape.widthMm : b.widthMm) / 2;
+  const d = (b.shape ? b.shape.depthMm : b.depthMm) / 2;
+  const corners = [
+    [-w, -d],
+    [w, -d],
+    [w, d],
+    [-w, d],
+  ].map(([i, k]) => ({ x: x + i * ux.x + k * uy.x, y: y + i * ux.y + k * uy.y }));
+  return { round: false, c, corners, axes: [ux, uy] };
+}
+
+const project = (s: Convex, n: Point): [number, number] => {
+  if (s.round) {
+    const m = s.c.x * n.x + s.c.y * n.y;
+    return [m - s.r, m + s.r];
+  }
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const q of s.corners) {
+    const m = q.x * n.x + q.y * n.y;
+    lo = Math.min(lo, m);
+    hi = Math.max(hi, m);
+  }
+  return [lo, hi];
+};
+
+/**
+ * The least move that takes `a`, standing at (ax, ay), out of `b` — with how deep they overlap — or
+ * null when they do not. Two plain boxes: out along the SHORTER axis, as this rule has always done.
+ * Anything turned or round (SnapBox.shape) by its TRUE outline — separating axes, a circle as a
+ * circle — so two 30° decks a few centimetres apart are not held off by the boxes they take up, and
+ * two rounds on a diagonal touch at their rims, not ~750mm short of them.
+ */
+function separation(a: SolidBox, ax: number, ay: number, b: SolidBox): { x: number; y: number; depth: number } | null {
+  const px = penetration(ax, a.widthMm, b.x, b.widthMm);
+  const py = penetration(ay, a.depthMm, b.y, b.depthMm);
+  // Touching exactly (penetration 0) is legal and is in fact the answer the snap was aiming for —
+  // flush. Only a real overlap on BOTH axes is a collision. Whatever the shapes, they are inside
+  // these boxes: clear of each other's box, clear of each other.
+  if (px <= 0 || py <= 0) return null;
+  if (!turned(a) && !turned(b)) {
+    // Out along the SHORTER axis: the smallest move that makes it legal, and the one that leaves the
+    // item where the designer was pushing it rather than throwing it round the obstacle.
+    return px <= py ? { x: away(ax, b.x) * px, y: 0, depth: px } : { x: 0, y: away(ay, b.y) * py, depth: py };
+  }
+  const A = convexOf(a, ax, ay);
+  const B = convexOf(b, b.x, b.y);
+  const axes: Point[] = [];
+  if (A.round && B.round) {
+    const v = { x: A.c.x - B.c.x, y: A.c.y - B.c.y };
+    const L = Math.hypot(v.x, v.y);
+    axes.push(L > 1e-9 ? { x: v.x / L, y: v.y / L } : { x: 1, y: 0 });
+  } else {
+    for (const s of [A, B]) if (!s.round) axes.push(...s.axes);
+    // A circle against a rectangle: also the line from the circle's centre to the nearest corner.
+    const circle = A.round ? A : B.round ? B : null;
+    const box = !A.round ? A : !B.round ? B : null;
+    if (circle && box) {
+      const corner = box.corners.reduce((n, q) => (Math.hypot(q.x - circle.c.x, q.y - circle.c.y) < Math.hypot(n.x - circle.c.x, n.y - circle.c.y) ? q : n));
+      const v = { x: circle.c.x - corner.x, y: circle.c.y - corner.y };
+      const L = Math.hypot(v.x, v.y);
+      if (L > 1e-9) axes.push({ x: v.x / L, y: v.y / L });
+    }
+  }
+  let best: { x: number; y: number; depth: number } | null = null;
+  for (const n of axes) {
+    const [a0, a1] = project(A, n);
+    const [b0, b1] = project(B, n);
+    const forward = b1 - a0; // a moved along +n by this clears b
+    const backward = a1 - b0; // …along −n by this
+    if (forward <= SHAPE_EPS_MM || backward <= SHAPE_EPS_MM) return null;
+    const [sign, depth] = forward <= backward ? [1, forward] : [-1, backward];
+    if (!best || depth < best.depth) best = { x: n.x * sign * depth, y: n.y * sign * depth, depth };
+  }
+  return best;
+}
+
 /**
  * The delta that takes `movers` — one dragged item, or a whole selection moving as one — out of
  * every `obstacles` box of its own kind. `{ x: 0, y: 0 }` when there is nothing to resolve, which
@@ -53,29 +152,20 @@ export function pushApart(movers: SolidBox[], obstacles: SolidBox[], ignore?: Ig
   let dx = 0;
   let dy = 0;
   for (let pass = 0; pass < maxPasses; pass++) {
-    let worst: { px: number; py: number; sx: number; sy: number; depth: number } | null = null;
+    let worst: { x: number; y: number; depth: number } | null = null;
     for (let i = 0; i < movers.length; i++) {
       const m = movers[i];
       for (let j = 0; j < obstacles.length; j++) {
         const o = obstacles[j];
         if (m.solid !== o.solid) continue;
         if (ignore?.(i, j)) continue;
-        const px = penetration(m.x + dx, m.widthMm, o.x, o.widthMm);
-        const py = penetration(m.y + dy, m.depthMm, o.y, o.depthMm);
-        // Touching exactly (penetration 0) is legal and is in fact the answer the snap was aiming
-        // for — flush. Only a real overlap on BOTH axes is a collision.
-        if (px <= 0 || py <= 0) continue;
-        const depth = Math.min(px, py);
-        if (!worst || depth > worst.depth) {
-          worst = { px, py, sx: away(m.x + dx, o.x), sy: away(m.y + dy, o.y), depth };
-        }
+        const out = separation(m, m.x + dx, m.y + dy, o);
+        if (out && (!worst || out.depth > worst.depth)) worst = out;
       }
     }
     if (!worst) break;
-    // Out along the SHORTER axis: the smallest move that makes it legal, and the one that leaves
-    // the item where the designer was pushing it rather than throwing it round the obstacle.
-    if (worst.px <= worst.py) dx += worst.sx * worst.px;
-    else dy += worst.sy * worst.py;
+    dx += worst.x;
+    dy += worst.y;
   }
   return { x: Math.round(dx), y: Math.round(dy) };
 }
@@ -116,8 +206,7 @@ export interface StartOverlaps extends Ignore {
  *  again even after it had been dragged clear across the room. */
 export function overlappingAtStart(movers: SolidBox[], obstacles: SolidBox[]): StartOverlaps {
   const pairs = new Set<string>();
-  const overlapping = (m: SolidBox, o: SolidBox) =>
-    m.solid === o.solid && penetration(m.x, m.widthMm, o.x, o.widthMm) > 0 && penetration(m.y, m.depthMm, o.y, o.depthMm) > 0;
+  const overlapping = (m: SolidBox, o: SolidBox) => m.solid === o.solid && separation(m, m.x, m.y, o) !== null;
   movers.forEach((m, i) =>
     obstacles.forEach((o, j) => {
       if (overlapping(m, o)) pairs.add(`${i}:${j}`);
@@ -204,6 +293,33 @@ if (isMain(import.meta.url)) {
   // A pile it cannot untangle: it keeps whatever it managed and stops, rather than looping.
   const pile = pushApart([deck(0, 0)], [deck(0, 0), deck(10, 0), deck(-10, 0)], undefined, 3);
   assert(Number.isFinite(pile.x) && Number.isFinite(pile.y), "an impossible pile still returns an answer");
+
+  // ── TRUE SHAPES (QA MG-4/MG-9). A turned thing is held by its outline, never by the room its
+  // turned box takes — two 30° decks a few centimetres apart have boxes overlapping by hundreds of
+  // millimetres; two rounds on a diagonal, by ~750.
+  const turnedBox = (x: number, y: number, rotation: number, w = 4000, d = 2000, solid = "stage"): SolidBox => {
+    const t = (rotation * Math.PI) / 180;
+    const c = Math.abs(Math.cos(t));
+    const s = Math.abs(Math.sin(t));
+    return { x, y, widthMm: w * c + d * s, depthMm: w * s + d * c, solid, shape: { rotation, widthMm: w, depthMm: d } };
+  };
+  const along30 = (k: number) => ({ x: k * Math.cos(Math.PI / 6), y: k * Math.sin(Math.PI / 6) });
+  const at30 = (k: number) => turnedBox(along30(k).x, along30(k).y, 30);
+  assert(pushApart([at30(4100)], [turnedBox(0, 0, 30)]).x === 0 && pushApart([at30(4100)], [turnedBox(0, 0, 30)]).y === 0, "two 30° decks 100mm apart are clear, though their turned boxes overlap");
+  const into30 = pushApart([at30(3950)], [turnedBox(0, 0, 30)]);
+  assert(Math.abs(Math.hypot(into30.x, into30.y) - 50) <= 1 && Math.abs(into30.x - along30(50).x) <= 1, "one pushed 50mm into another is put back flush ALONG their own frame");
+  assert(!overlappingAtStart([at30(4000)], [turnedBox(0, 0, 30)])(0, 0), "two 30° decks flush are not an overlap the drag began with");
+  assert(nudgeApart([at30(3990)], [turnedBox(0, 0, 30)], 150).x !== 0, "…and dragged 1cm into each other, the magnet holds them flush");
+  const disc = (x: number, y: number, dia = 1800): SolidBox => ({ x, y, widthMm: dia, depthMm: dia, solid: "table", shape: { round: true, rotation: 0, widthMm: dia, depthMm: dia } });
+  const diag = (1800 + 300) / Math.SQRT2;
+  assert(pushApart([disc(diag, diag)], [disc(0, 0)]).x === 0, "two ⌀1.8 rounds on a diagonal with 30cm between the rims are clear");
+  const pressed = pushApart([disc(1700 / Math.SQRT2, 1700 / Math.SQRT2)], [disc(0, 0)]);
+  assert(Math.abs(pressed.x - 100 / Math.SQRT2) <= 1 && Math.abs(pressed.y - 100 / Math.SQRT2) <= 1, "…pressed 10cm into each other, pushed back out along the line between their centres");
+  const t45 = (k: number) => turnedBox((k * Math.SQRT2) / 2, (k * Math.SQRT2) / 2, 45, 2000, 1000, "table");
+  const air = pushApart([t45(2300)], [t45(0)]);
+  assert(air.x === 0 && air.y === 0, "two 45° tables with 30cm of real air are left alone — not pushed 1.5m apart on a drop");
+  const square = pushApart([turnedBox(3500, 0, 90, 2000, 4000)], [deck(0, 0)]);
+  assert(square.x === 500 && square.y === 0, "a deck stood on end is still its own box");
 
   // The magnet: a shallow overlap is held flush, a deep one is let through.
   const touching = nudgeApart([deck(3900, 0)], [deck(0, 0)], 150);

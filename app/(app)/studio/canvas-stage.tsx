@@ -94,7 +94,7 @@ import { signedArea } from "@/lib/studio/stage-fill";
 import { MIRROR_TRANSFORM, uprightTransform } from "@/lib/design-document/mirror";
 import { polysBox, type ClearanceIssue, type ClearanceSubject } from "@/lib/studio/proximity";
 import { itemGeometry } from "./plan-geometry";
-import { constrainAngleDeg, type SnapBox } from "@/lib/studio/snap";
+import { constrainAngleDeg, snapTurned, type BoxShape, type SnapBox } from "@/lib/studio/snap";
 import type { AlignGuide } from "@/lib/studio/align";
 import { carriedItem, carriedOf, type CarriedItem } from "@/lib/studio/drag-payload";
 import type { Product } from "@/lib/catalog/types";
@@ -1380,15 +1380,26 @@ export function CanvasStage({
   // indeed shear the group apart, so nothing was snapped and a block of four stages could not be
   // put against a wall or in line with anything. Snapping the BOX cannot shear anything — it yields
   // one delta, every member takes it, and the arrangement inside the box is untouched.
-  const groupDrag = useRef<{ start: Point; box: SnapBox; snapshot: { ref: SelectionRef; origin: Point }[] } | null>(null);
+  const groupDrag = useRef<{
+    start: Point;
+    box: SnapBox;
+    turned?: { x: number; y: number; shape: BoxShape };
+    solid?: string;
+    snapshot: { ref: SelectionRef; origin: Point }[];
+  } | null>(null);
 
   /** What a drag of `cargo` lines up WITH: everything on screen but the cargo itself — and nothing
    *  OVERHEAD unless overhead things are being carried. A chandelier is not on the floor: a table has
    *  no business squaring up to one, and the one hung over the table being dragged is carried to the
    *  table's new place every frame (the reducer's settleHung), so as a reference it stood exactly
    *  where the table had just been and held it there — the table moved in 6px jumps and landed short
-   *  of where it was let go. A pendant over a table in the cargo is never a reference either. */
-  const snapBoxesFor = (cargo: readonly SelectionRef[]): SnapBox[] => {
+   *  of where it was let go. A pendant over a table in the cargo is never a reference either.
+   *
+   *  `solid` is the cargo's own kind (collide.ts): a box of that kind is marked `flush`, and meeting
+   *  it edge to edge is claimed before any other line within reach (snap.ts snapPoint) — a stage
+   *  dragged a few centimetres short of the stage beside it no longer snaps to a table's edge
+   *  across the room instead, leaving the gap. */
+  const snapBoxesFor = (cargo: readonly SelectionRef[], solid?: string): SnapBox[] => {
     const inCargo = (r: SelectionRef) => cargo.some((x) => sameRef(x, r));
     const overheadCargo = cargo.some((r) => r.kind === "placement" && placementById.get(r.id)?.layer === "ceiling");
     const cargoTables = new Set(cargo.filter((r) => r.kind === "table").map((r) => r.id));
@@ -1405,7 +1416,23 @@ export function CanvasStage({
         if (p?.layer !== "ceiling") return true;
         return overheadCargo && !(p.over && cargoTables.has(p.over));
       })
-      .map((m) => m.box);
+      .map((m) => (solid && m.solid === solid ? { ...m.box, flush: true } : m.box));
+  };
+
+  /** The canvas's snap for a box being dragged — or, for a thing standing AT AN ANGLE among things
+   *  at the same angle, the snap in their common frame on their true sizes (snap.ts snapTurned): by
+   *  its turned box, a 30° stage snapped "flush" stood 232mm off the 30° stage beside it. No guide
+   *  lines for that one — the canvas draws them along the room's axes. */
+  const snapBox = (ctx: CanvasLayerContext, p: Point, self: SnapBox | undefined, boxes: SnapBox[]): Point => {
+    const turned = self?.shape;
+    if (!freeDrag.current && turned && !turned.round) {
+      const at = snapTurned(p, turned, boxes, ctx.mm(SNAP_TOL_PX));
+      if (at) {
+        ctx.endSnap();
+        return at;
+      }
+    }
+    return snapUnlessFree(ctx, p, { boxes, self: self && { widthMm: self.widthMm, depthMm: self.depthMm } });
   };
 
   /** Whether this gesture has travelled far enough to be a deliberate move: until then nothing
@@ -1538,9 +1565,13 @@ export function CanvasStage({
       groupDrag.current ??= {
         start: pressed ? { x: pressed.x, y: pressed.y } : p,
         box: unionBox(picked.map((m) => m.box)),
+        // …and, every member standing at one angle, the box they take up in THEIR frame (snapTurned).
+        turned: commonFrameBox(picked.map((m) => m.box)),
+        // The one solid kind they are (collide.ts) — what they go flush against first.
+        solid: new Set(picked.map((m) => m.solid)).size === 1 ? picked[0]?.solid : undefined,
         snapshot: picked.map((m) => ({ ref: m.ref, origin: { x: m.box.x, y: m.box.y } })),
       };
-      const { start, box, snapshot } = groupDrag.current;
+      const { start, box, turned, solid, snapshot } = groupDrag.current;
       solids.current ??= beginSolids(snapshot.map((sn) => sn.ref), { x: box.x, y: box.y });
       draggingRefs.current = snapshot.map((sn) => sn.ref);
       // ONE BOX, SNAPPED ONCE, and the delta it comes back with is handed to every member. That is
@@ -1550,12 +1581,21 @@ export function CanvasStage({
       // align to itself and never move at all.
       const moved = { x: box.x + (p.x - start.x), y: box.y + (p.y - start.y) };
       if (!travelled.current && Math.hypot(p.x - start.x, p.y - start.y) >= ctx.mm(TRAVEL_PX)) travelled.current = true;
-      const snapped = travelled.current
-        ? snapUnlessFree(ctx, moved, {
-            boxes: snapBoxesFor(snapshot.map((sn) => sn.ref)),
-            self: { widthMm: box.widthMm, depthMm: box.depthMm },
-          })
-        : (ctx.endSnap(), { x: Math.round(moved.x), y: Math.round(moved.y) });
+      let snapped: Point;
+      if (!travelled.current) {
+        ctx.endSnap();
+        snapped = { x: Math.round(moved.x), y: Math.round(moved.y) };
+      } else {
+        const boxes = snapBoxesFor(snapshot.map((sn) => sn.ref), solid);
+        // A block standing at an angle is snapped as the box it is in its OWN frame (snapTurned), the
+        // delta carried onto the room's box; anything else as the room's box.
+        const at = turned && !freeDrag.current ? { x: turned.x + (p.x - start.x), y: turned.y + (p.y - start.y) } : null;
+        const inFrame = at && turned ? snapTurned(at, turned.shape, boxes, ctx.mm(SNAP_TOL_PX)) : null;
+        if (at && inFrame) {
+          ctx.endSnap();
+          snapped = { x: Math.round(moved.x + inFrame.x - at.x), y: Math.round(moved.y + inFrame.y - at.y) };
+        } else snapped = snapUnlessFree(ctx, moved, { boxes, self: { widthMm: box.widthMm, depthMm: box.depthMm } });
+      }
       // …and then held flush against anything solid it has only just touched. The snap already
       // offers flush; this keeps it there for the last few pixels without trapping the drag.
       const clear = clearOf(snapped, ctx.mm(NUDGE_REACH_PX));
@@ -1573,7 +1613,8 @@ export function CanvasStage({
     // Aligned against the walls (PlanCanvas's own references) and every OTHER item on the plan —
     // itself excluded, or it would align to where it already is and could never be pulled off. Its
     // own extent goes along too: that is what lets the gap either side of it be measured.
-    const self = alignTo.find((m) => sameRef(m.ref, ref))?.box;
+    const own = alignTo.find((m) => sameRef(m.ref, ref));
+    const self = own?.box;
     // Two of a kind touching are held FLUSH rather than one sliding a pixel into the other — but
     // only within a few pixels (nudgeApart): push on and the item follows the pointer, overlap and
     // all. Same-kind only, and an overlap that was already there when the drag began is left alone
@@ -1586,12 +1627,7 @@ export function CanvasStage({
     const from = solids.current.origin;
     if (!travelled.current && (!self || Math.hypot(p.x - from.x, p.y - from.y) >= ctx.mm(TRAVEL_PX))) travelled.current = true;
     const early = !travelled.current;
-    const snapped = early
-      ? (ctx.endSnap(), { x: Math.round(p.x), y: Math.round(p.y) })
-      : snapUnlessFree(ctx, p, {
-          boxes: snapBoxesFor([ref]),
-          self: self && { widthMm: self.widthMm, depthMm: self.depthMm },
-        });
+    const snapped = early ? (ctx.endSnap(), { x: Math.round(p.x), y: Math.round(p.y) }) : snapBox(ctx, p, self, snapBoxesFor([ref], own?.solid));
     const clear = early ? { x: 0, y: 0 } : clearOf(snapped, ctx.mm(NUDGE_REACH_PX));
     let at = { x: snapped.x + clear.x, y: snapped.y + clear.y };
     draggingRefs.current = [ref];
@@ -2014,7 +2050,7 @@ export function CanvasStage({
         // Snapped, a candlestick let go by a table's edge was pulled onto the next table's line.
         if (carried && carried.landing !== "free") return null;
         return {
-          boxes: snapBoxesFor([]),
+          boxes: snapBoxesFor([], carried?.solid),
           self: carried ? { widthMm: carried.widthMm, depthMm: carried.depthMm } : undefined,
         };
       }}
@@ -2679,7 +2715,7 @@ export function CanvasStage({
               // keeps — against the same references (snapBoxesFor): only a FREE item is snapped
               // here, which stands on the floor, and it has no business squaring up to a chandelier.
               snapOptions={(item) => ({
-                boxes: snapBoxesFor([]),
+                boxes: snapBoxesFor([], item.solid),
                 self: { widthMm: item.widthMm, depthMm: item.depthMm },
               })}
               clear={clearedDrop}
@@ -3704,6 +3740,44 @@ function unionBox(boxes: SnapBox[]): SnapBox {
   return { x: (minX + maxX) / 2, y: (minY + maxY) / 2, widthMm: maxX - minX, depthMm: maxY - minY };
 }
 
+/** The box a set of things standing at ONE ANGLE (a quarter turn apart at most, and not a whole
+ *  quarter turn from the room) take up in THEIR frame — its centre in the room and its shape — or
+ *  undefined when they do not. What a group of turned stages is snapped as (snapTurned), as a group
+ *  of square ones is snapped as the room's box round them (unionBox). */
+function commonFrameBox(boxes: SnapBox[]): { x: number; y: number; shape: BoxShape } | undefined {
+  const first = boxes[0]?.shape;
+  if (!first || first.round) return undefined;
+  const r = first.rotation;
+  const off = (deg: number) => {
+    const d = (((deg % 90) + 90) % 90) / 90;
+    return Math.min(d, 1 - d) * 90;
+  };
+  if (off(r) < 0.5) return undefined;
+  const t = (r * Math.PI) / 180;
+  const c = Math.cos(t);
+  const s = Math.sin(t);
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const b of boxes) {
+    const sh = b.shape;
+    if (!sh || sh.round || off(sh.rotation - r) >= 0.5) return undefined;
+    const across = Math.round((((sh.rotation - r) % 360) + 360) % 360 / 90) % 2 === 1;
+    const w = (across ? sh.depthMm : sh.widthMm) / 2;
+    const d = (across ? sh.widthMm : sh.depthMm) / 2;
+    const fx = b.x * c + b.y * s;
+    const fy = -b.x * s + b.y * c;
+    minX = Math.min(minX, fx - w);
+    maxX = Math.max(maxX, fx + w);
+    minY = Math.min(minY, fy - d);
+    maxY = Math.max(maxY, fy + d);
+  }
+  const fx = (minX + maxX) / 2;
+  const fy = (minY + maxY) / 2;
+  return { x: fx * c - fy * s, y: fx * s + fy * c, shape: { rotation: r, widthMm: maxX - minX, depthMm: maxY - minY } };
+}
+
 /** The axis-aligned room a shape takes up once it has been TURNED — what every box on this canvas
  *  is measured with.
  *
@@ -3711,23 +3785,32 @@ function unionBox(boxes: SnapBox[]): SnapBox {
  *  must not grow. It would have, by 41% at 45°, and round tables carry an angle all the time — a
  *  group rotate writes one onto every member — so a hall of 1.80m rounds would each have started
  *  claiming 2.55m of floor for snapping and for the no-overlap rule. Everything else is measured as
- *  the rectangle enclosing it, which is exact at a right angle and generous in between. */
-function turnedExtent(footprint: Footprint, rotationDeg: number, scale = 1): { widthMm: number; depthMm: number } {
+ *  the rectangle enclosing it, which is exact at a right angle and generous in between — so the
+ *  box carries the true SHAPE along (SnapBox.shape: the circle, or the rectangle at its angle), and
+ *  the magnet (lib/studio/collide.ts) and the snap between things at one angle (snapTurned) read
+ *  that instead: two 30° decks held apart by their enclosing boxes stood 232mm short of flush. */
+function turnedExtent(footprint: Footprint, rotationDeg: number, scale = 1): { widthMm: number; depthMm: number; shape?: BoxShape } {
   const b = footprintBounds(footprint);
   const w = b.w * scale;
   const d = b.h * scale;
-  return footprint.kind === "circle" ? { widthMm: w, depthMm: d } : rotatedExtent(w, d, rotationDeg);
+  if (footprint.kind === "circle") return { widthMm: w, depthMm: d, shape: { round: true, rotation: 0, widthMm: w, depthMm: d } };
+  return withShape(w, d, rotationDeg);
+}
+
+/** A w×d rectangle turned `rotationDeg`: the room it takes up, and — turned at all — itself. */
+function withShape(w: number, d: number, rotationDeg: number): { widthMm: number; depthMm: number; shape?: BoxShape } {
+  return { ...rotatedExtent(w, d, rotationDeg), ...(rotationDeg % 360 ? { shape: { rotation: rotationDeg, widthMm: w, depthMm: d } } : {}) };
 }
 
 /** How much room a placed item takes on the plan — its drawn footprint at whatever scale and angle
  *  it was given. A carpet answers with the size it was stretched to rather than the catalog's,
  *  because that is the rectangle actually lying on the floor. */
-function placementExtent(p: Placement): { widthMm: number; depthMm: number } {
+function placementExtent(p: Placement): { widthMm: number; depthMm: number; shape?: BoxShape } {
   const r = resolve(p.variantId);
   const turn = p.rotation ?? 0;
   if (r?.sizing === "stretch") {
     const s = p.sizeMm ?? fallbackSize(r);
-    return rotatedExtent(s.widthMm, s.depthMm, turn);
+    return withShape(s.widthMm, s.depthMm, turn);
   }
   return turnedExtent(placementFootprint(p), turn, p.scale || 1);
 }
@@ -3761,6 +3844,9 @@ export interface DragProps {
  *  against it — past this it lets go and follows the pointer (collide.ts nudgeApart). A little more
  *  than the snap's own 6px pull, so a flush snap and the hold that keeps it agree. */
 const NUDGE_REACH_PX = 8;
+/** PlanCanvas's own snap pull (its SNAP_TOL_PX), for the snap this canvas works out itself — at an
+ *  angle, in the frame of the things it is lined up with (snapTurned). */
+const SNAP_TOL_PX = 6;
 
 // A node's drag: the press takes the gesture (lib/studio/gesture.ts — window listeners, so the node
 // may be re-ordered to paint on top, re-rendered or re-keyed mid-drag and the drag goes on), and

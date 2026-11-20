@@ -628,9 +628,11 @@ export function fromLocalFrame(p: Point, center: Point, rotationDeg: number): Po
  *  A 4×2 deck turned 90° occupies 2×4 of floor, and boxing it as 4×2 anyway is not a rounding error:
  *  it is the plan claiming two metres of room that the deck is not in, and two more that it is.
  *  At a right angle this is exact, which covers nearly every stage anyone lays. At 45° it is the
- *  enclosing box and therefore generous — the deck is somewhere inside it — so a snap is a little
- *  shy and two decks stop a little apart. Generous is the safe direction for a rule about whether
- *  two things fit in the same room. */
+ *  enclosing box and therefore generous — the deck is somewhere inside it. Right for a marquee and
+ *  for the room's own snap lines; wrong for whether two things TOUCH — by this box two 30° decks
+ *  stopped 232mm apart — so the studio carries the true shape beside it (SnapBox.shape), and the
+ *  no-overlap rule (lib/studio/collide.ts) and the snap between two things at one angle
+ *  (lib/studio/snap.ts snapTurned) read that instead. */
 export function rotatedExtent(widthMm: number, depthMm: number, rotationDeg: number): { widthMm: number; depthMm: number } {
   if (!rotationDeg) return { widthMm, depthMm };
   const rad = (rotationDeg * Math.PI) / 180;

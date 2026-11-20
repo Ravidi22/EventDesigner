@@ -54,6 +54,24 @@ export interface SnapBox {
   y: number;
   widthMm: number;
   depthMm: number;
+  /** What the box is the room OF, when that is not the box itself — a turned rectangle or a circle.
+   *  The box above stays the axis-aligned room the thing takes up (what a marquee and the room's own
+   *  lines read); the no-overlap rule (collide.ts) and the snap between things standing at one angle
+   *  (snapTurned) read this. Absent = the box is the outline: an unturned rectangle. */
+  shape?: BoxShape;
+  /** A neighbour of the moving thing's OWN kind (collide.ts's solid key): meeting it edge to edge —
+   *  flush — is claimed before any other line within reach (snapPoint). */
+  flush?: boolean;
+}
+
+/** A thing's true outline about its box's centre: a circle as wide as `widthMm` (`round`), else a
+ *  rectangle of its own `widthMm` × `depthMm`, turned `rotation`° (clockwise on screen, as every
+ *  rotation on the plan). */
+export interface BoxShape {
+  round?: boolean;
+  rotation: number;
+  widthMm: number;
+  depthMm: number;
 }
 
 /** One run of equal air, for drawing. `segments` are the matched gaps: `from`/`to` along `axis`,
@@ -311,8 +329,37 @@ export function snapPoint(p: Point, ctx: SnapContext): SnapResult {
     return best;
   };
 
-  const ax = align("x", p.x, xs);
-  const ay = align("y", p.y, ys);
+  /** FLUSH FIRST: against a box of its own kind (SnapBox.flush) standing BESIDE it — overlapping it
+   *  on the other axis, so the two would really meet — the thing's edge goes onto that box's edge
+   *  before any other line within reach is considered. The nearest line used to win outright: a
+   *  deck dragged 4cm short of the deck beside it snapped to a table's edge 1cm away across the
+   *  room, and the 4cm stayed. */
+  const flushOn = (axis: Axis, at: number): { value: number; guide: number } | null => {
+    if (!ctx.self) return null;
+    const self = ctx.self;
+    const cross = crossOf(axis);
+    let best: { value: number; guide: number } | null = null;
+    let err = tol;
+    for (const b of ctx.boxes ?? []) {
+      if (!b.flush || Math.abs(b[cross] - p[cross]) >= (sizeOn(b, cross) + sizeOn(self, cross)) / 2 - 1) continue;
+      const lo = b[axis] - sizeOn(b, axis) / 2;
+      const hi = b[axis] + sizeOn(b, axis) / 2;
+      for (const [value, guide] of [
+        [hi + halfOn(axis), hi],
+        [lo - halfOn(axis), lo],
+      ]) {
+        const d = Math.abs(at - value);
+        if (d < err) {
+          err = d;
+          best = { value, guide };
+        }
+      }
+    }
+    return best;
+  };
+
+  const ax = flushOn("x", p.x) ?? align("x", p.x, xs);
+  const ay = flushOn("y", p.y) ?? align("y", p.y, ys);
   let sx = ax ? ax.value : p.x;
   const gx: number | null = ax ? ax.guide : null;
   let sy = ay ? ay.value : p.y;
@@ -344,6 +391,52 @@ export function snapPoint(p: Point, ctx: SnapContext): SnapResult {
     ...(gaps.length ? { gaps } : {}),
     angleLocked: false,
   };
+}
+
+/** How many quarter turns take rotation `a` onto rotation `b` — null unless a whole number of them
+ *  does (within half a degree). */
+function quarterTurns(a: number, b: number): number | null {
+  const d = norm360(b - a);
+  const k = Math.round(d / 90);
+  return Math.abs(d - k * 90) < 0.5 ? k % 4 : null;
+}
+
+/**
+ * The snap for a thing standing AT AN ANGLE — `self.rotation` not a whole quarter turn — among things
+ * standing at the same angle (or a quarter turn from it): worked in their common frame on their TRUE
+ * sizes (SnapBox.shape) — edges flush, flush-first, edges and centres in line, equal air — and turned
+ * back into the room. The room's own snap measures a turned thing by the box it takes up, which is
+ * bigger than it on every side: two 4×2 stages along a 30° wall snapped "flush" stood 232mm apart
+ * (1000mm at 45°), and Ctrl+G then would not merge them.
+ *
+ * Null when nothing at its angle is within reach — the caller snaps as it always did. No guide lines
+ * come back: the canvas draws its guides along the room's axes, and these are not.
+ */
+export function snapTurned(
+  p: Point,
+  self: { widthMm: number; depthMm: number; rotation: number },
+  boxes: readonly SnapBox[],
+  toleranceMm: number,
+): Point | null {
+  if (quarterTurns(0, self.rotation) !== null) return null;
+  const t = (self.rotation * Math.PI) / 180;
+  const c = Math.cos(t);
+  const s = Math.sin(t);
+  const toFrame = (q: Point): Point => ({ x: q.x * c + q.y * s, y: -q.x * s + q.y * c });
+  const local: SnapBox[] = [];
+  for (const b of boxes) {
+    if (!b.shape || b.shape.round) continue;
+    const k = quarterTurns(self.rotation, b.shape.rotation);
+    if (k === null) continue;
+    const q = toFrame(b);
+    const [w, d] = k % 2 ? [b.shape.depthMm, b.shape.widthMm] : [b.shape.widthMm, b.shape.depthMm];
+    local.push({ x: q.x, y: q.y, widthMm: w, depthMm: d, ...(b.flush ? { flush: true } : {}) });
+  }
+  if (!local.length) return null;
+  // No outline, no fixtures, and a 1mm "grid": in this frame the room's corners and grid mean nothing.
+  const r = snapPoint(toFrame(p), { toleranceMm, outline: [], fixtures: [], gridMm: 1, self: { widthMm: self.widthMm, depthMm: self.depthMm }, boxes: local });
+  if (r.guides.x === null && r.guides.y === null && !r.gaps) return null;
+  return roundPt({ x: r.point.x * c - r.point.y * s, y: r.point.x * s + r.point.y * c });
 }
 
 // ponytail: self-check. Run: node --experimental-strip-types lib/studio/snap.ts
@@ -501,6 +594,37 @@ if (isMain(import.meta.url)) {
     const below = snapPoint({ x: 6040, y: 4000 }, { ...ctx, boxes: [above] });
     assert(below.point.x === 6000, "a deck under another lines up with it");
     assert(below.guides.x === 6000, "…on the centre line, not on whichever edge was reached first");
+
+    // FLUSH FIRST (QA MG-5). A deck dragged 4cm short of the deck beside it, while a table's edge
+    // across the room lines up 1cm away: the nearest line used to win, and the 4cm gap stayed.
+    // Meeting a box of its own kind edge to edge outranks every other line within reach.
+    const near = { ...ctx, toleranceMm: 60 };
+    const sameKind: SnapBox = { x: 0, y: 0, widthMm: 4000, depthMm: 2000, flush: true }; // right edge at 2000
+    const table: SnapBox = { x: 6550, y: 6000, widthMm: 1000, depthMm: 1000 }; // left edge at 6050
+    const butt = snapPoint({ x: 4040, y: 0 }, { ...near, boxes: [sameKind, table] });
+    assert(butt.point.x === 4000 && butt.guides.x === 2000, "a deck goes flush against its own kind before lining up with an unrelated edge");
+    const otherRow = snapPoint({ x: 4040, y: 0 }, { ...near, boxes: [{ ...sameKind, y: 9000 }, table] });
+    assert(otherRow.point.x === 4050, "…one in another row is no neighbour to be flush with — the nearest line wins as before");
+  }
+
+  // ── AT AN ANGLE (QA MG-4): two 4×2 stages along a 30° wall are snapped in their own frame, on
+  // their true sizes. The world-axis snap measured each by the box it takes up turned, which is
+  // bigger on every side: snapped "flush", they stood 232mm apart (1000mm at 45°).
+  {
+    const along = (k: number, across = 0) => ({ x: k * Math.cos(Math.PI / 6) - across * Math.sin(Math.PI / 6), y: k * Math.sin(Math.PI / 6) + across * Math.cos(Math.PI / 6) });
+    const turnedBox = (c: Point, rotation: number, w = 4000, d = 2000): SnapBox => {
+      const t = (rotation * Math.PI) / 180;
+      const cs = Math.abs(Math.cos(t));
+      const sn = Math.abs(Math.sin(t));
+      return { ...c, widthMm: w * cs + d * sn, depthMm: w * sn + d * cs, shape: { rotation, widthMm: w, depthMm: d } };
+    };
+    const self = { widthMm: 4000, depthMm: 2000, rotation: 30 };
+    const flushAt = snapTurned(along(4040, 25), self, [turnedBox(along(0), 30)], 60);
+    const want = along(4000);
+    assert(!!flushAt && Math.hypot(flushAt.x - want.x, flushAt.y - want.y) <= 1, "a 30° stage goes flush against the 30° stage beside it, and in line with it");
+    assert(!!snapTurned(along(4040, 25), self, [turnedBox(along(0), 120, 2000, 4000)], 60), "…a neighbour turned a quarter more is at the same angle too");
+    assert(snapTurned(along(4040, 25), self, [{ x: 0, y: 0, widthMm: 4000, depthMm: 2000 }], 60) === null, "nothing at its angle: no claim — the room's own snap is asked");
+    assert(snapTurned(along(4040, 25), { ...self, rotation: 90 }, [turnedBox(along(0), 90)], 60) === null, "a quarter turn is the room's own axes, snapped as before");
   }
 
   console.log("snap self-check passed");
