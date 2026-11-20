@@ -5265,6 +5265,8 @@ function JoinedRuns({ runs, active }: { runs: JoinedRun[]; active?: string | nul
             ))}
             {/* One walking line up the whole run (stairs carry no slope, so nothing is written). */}
             {r.arrow && <WalkingLine arrow={r.arrow} ink={on ? "var(--color-accent)" : "var(--color-ink-soft)"} lineWidth={1} fill="var(--color-surface)" textFill="var(--color-ink-soft)" alertFill="var(--color-alert-ink)" />}
+            {/* A banquette run's sofa sides — each stage's own cushions, over the run (QA BQ-7). */}
+            {r.kind === "bench" && <SofaCushions cushions={r.cushions} backs={r.backs} />}
           </g>
         );
       })}

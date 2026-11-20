@@ -1099,6 +1099,8 @@ function JoinedRunGlyph({ run }: { run: JoinedRun }) {
           vectorEffect="non-scaling-stroke"
         />
       )}
+      {/* Its sofa sides, as each stage prints its own (QA BQ-7). */}
+      {run.kind === "bench" && <SofaCushions cushions={run.cushions} backs={run.backs} ink={INK} print />}
     </g>
   );
 }

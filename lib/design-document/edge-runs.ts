@@ -41,6 +41,10 @@ export interface JoinedRun {
   arrow?: ClimbArrow;
   /** Down its middle, end to end. */
   midline: Point[];
+  /** A banquette run's sofa sides — every member's own cushions and backrest lines, in room
+   *  coordinates (QA BQ-7: they vanished where the run was drawn as one). */
+  cushions: Point[][];
+  backs: [Point, Point][];
   members: { stageId: string; itemId: string }[];
 }
 
@@ -128,6 +132,8 @@ export function joinEdgeRuns(items: readonly EdgeRunMember[]): JoinedRun[] {
       treads: offsets.map((o) => [at(lo, o / depth), at(hi, o / depth)] as [Point, Point]),
       ...(ref.m.shape.kind === "stairs" ? { arrow: walkingLine(foot, top, hi - lo) } : {}),
       midline: [at(lo, 0.5), at(hi, 0.5)],
+      cushions: group.flatMap((l) => l.m.shape.cushions),
+      backs: group.flatMap((l) => l.m.shape.backs),
       members: group.map((l) => ({ stageId: l.m.stageId, itemId: l.m.itemId })),
     });
   }
@@ -220,6 +226,16 @@ if (isMain(import.meta.url)) {
   const rails = joinEdgeRuns([flight("A", "r1", { x: 0, y: 0 }, 2000, 0, 60, "barrier"), flight("B", "r2", { x: 2000, y: 0 }, 2000, 0, 60, "barrier")]);
   assert(rails.length === 1 && rails[0].treads.length === 0 && rails[0].kind === "barrier" && !rails[0].arrow, "two barriers end to end are one rail, with no walking line");
   assert(joinEdgeRuns([flight("A", "p1", { x: 0, y: 0 }, 1200, 0, 7200, "ramp"), flight("B", "p2", { x: 1200, y: 0 }, 1200, 0, 7200, "ramp")]).length === 0, "ramps are never joined");
+  // QA BQ-7: banquettes of two flush stages drawn as one run keep their sofa cushions and backrests.
+  const sofaBench = (stageId: string, itemId: string, x: number): EdgeRunMember => {
+    const m = flight(stageId, itemId, { x, y: 0 }, 2400, 0, 600, "bench");
+    const quad = (k: number): Point[] => [{ x: x + k * 600, y: 380 }, { x: x + (k + 1) * 600, y: 380 }, { x: x + (k + 1) * 600, y: 600 }, { x: x + k * 600, y: 600 }];
+    return { ...m, shape: { ...m.shape, cushions: [0, 1, 2, 3].map(quad), backs: [[{ x, y: 380 }, { x: x + 2400, y: 380 }]] } };
+  };
+  const seatRun = joinEdgeRuns([sofaBench("A", "sa", 0), sofaBench("B", "sb", 2400)]);
+  assert(seatRun.length === 1 && seatRun[0].cushions.length === 8 && seatRun[0].backs.length === 2, "two flush banquettes drawn as one run keep every cushion and backrest of both");
+  assert(one[0].cushions.length === 0 && one[0].backs.length === 0, "…a run of stairs has none");
+
   // Items standing through each other (a stage dragged over another) are not one run either.
   assert(joinEdgeRuns([left, flight("B", "b8", { x: 1000, y: 0 }, 2440, 0)]).length === 0, "two flights overlapping along the line are not a run");
   console.log("edge-runs self-check passed");

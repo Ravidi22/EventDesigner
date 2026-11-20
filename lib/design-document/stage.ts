@@ -1465,6 +1465,10 @@ export function edgeItemInRoom(p: StagePlacement, shape: EdgeItemShape): EdgeIte
     midline: shape.midline.map(r),
     angleDeg: (Math.atan2(ahead.y - base.y, ahead.x - base.x) * 180) / Math.PI,
     chairs: [],
+    // A banquette's sofa side and its blocks come too (QA BQ-7: a run across two stages drew none).
+    cushions: shape.cushions.map((q) => q.map(r)),
+    backs: shape.backs.map(([u, v]) => [r(u), r(v)] as [Point, Point]),
+    ...(shape.blocks ? { blocks: shape.blocks.map((b) => ({ ...b, ...(b.outline ? { outline: b.outline.map(r) } : {}) })) } : {}),
   };
 }
 
@@ -3260,6 +3264,10 @@ if (isMain(import.meta.url)) {
   const loungeSide: StageStair = { ...benches[0], bench: { back: { kind: "chairs", seats: 6 }, front: { kind: "sofa", seats: 4, notSeating: true } } };
   assert(benchSeats([{ ...down, stage: { ...down.stage, stairs: [loungeSide] } }], deckOf) === 6, "a stage banquette's sofa side that is not seating is out of the seating count");
   assert(edgeItemShape(down.stage, loungeSide, deckOf)!.seats === 10, "…its sitters still seated there");
+  // QA BQ-7: carried into the room (for a run across two stages) its cushions and backrest go too.
+  const movedDown = { ...down, position: { x: down.position.x + 5000, y: down.position.y } } as StagePlacement;
+  const sofaInRoom = edgeItemInRoom(movedDown, twoSided);
+  assert(sofaInRoom.cushions.length === twoSided.cushions.length && Math.abs(sofaInRoom.cushions[0][0].x - toRoom(movedDown, twoSided.cushions[0][0]).x) < 1e-6 && Math.abs(sofaInRoom.backs[0][0].y - toRoom(movedDown, twoSided.backs[0][0]).y) < 1e-6, "an edge item carried into the room carries its cushions and backrest with it");
   const frontChairs = edgeItemShape(down.stage, { ...benches[0], bench: { back: { kind: "none" }, front: { kind: "chairs", seats: 3 } } }, deckOf)!;
   assert(frontChairs.chairs.length === 3 && frontChairs.chairs.every((c) => c.y < -2000 - BENCH_TABLE_DEPTH_MM && Math.abs(Math.abs(c.facingDeg) - 90) < 1), "chairs on the room side stand in the room, facing the banquette");
   // The legacy form still reads: an old item's `seats` is its stage side's count, nothing in front.
