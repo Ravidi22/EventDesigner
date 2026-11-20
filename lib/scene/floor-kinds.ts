@@ -39,7 +39,7 @@ import { type FlowerDrawSpec, type FlowerForm, defaultMix, seedOf } from "@/lib/
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { BOTTLE_PITCH_MM, type Strip, barDrawing, bottleRadiusMm, counterShelfMm, counterTopMm } from "@/lib/catalog/bar-draw";
 import { DEFAULT_TONE } from "@/components/item-symbol";
-import { type BenchLayout, SOFA_BACK_MM, benchLayout } from "@/lib/design-document/bench";
+import { type BenchBlock, type BenchLayout, benchLayout, benchLayoutFor } from "@/lib/design-document/bench";
 import { FALLBACK_CHAIR, chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { sofaArmMm, sofaCushionCount } from "@/lib/catalog/sofa";
 import { type ClimbHost, climbRisers, climbTreads, riserHeightMm, treadDepthMm } from "@/lib/venues/climb";
@@ -412,52 +412,56 @@ function sofaBody(ctx: ItemContext): ItemBuild {
  *  60 thick with its TOP at the layout's heightMm (750 — table height, bench.ts BENCH_TOP_MM) on
  *  four legs; a chairs side's chairs at `BenchLayout.chairs`, each facing the strip, the tables'
  *  quiet chair (item-symbol.tsx:217) — instanced with every other chair of that style; a sofa
- *  side's cushions as the plan's quads lifted to sofaHeightMm (460, SOFA_SEAT_MM) on a base, its
- *  backrest the band toward the strip's centre line (bench.ts SOFA_BACK_MM), rising 400 above the
- *  seat. Where a side is a sofa the strip gives that half to the cushions and keeps the band. */
+ *  side's cushions as the plan's quads lifted to sofaHeightMm (460, SOFA_SEAT_MM). The strip is
+ *  raised BLOCK BY BLOCK, each side at its own height (bench.ts benchBlocks — QA BQ-4/BQ-5): the
+ *  chairs' table a slab on legs, a sofa's seat under its cushions over ITS run and depth, its
+ *  backrest right behind them rising 400 above the seat, and the strip behind a sofa nobody eats at
+ *  its solid back — never a 75 cm slab (QA BQ-10). */
 function benchBody(ctx: ItemContext): ItemBuild {
   const { widthMm: w, depthMm: d, tone } = ctx;
   const lay = ctx.bench ?? benchLayout(w, d);
   const body = matte(tone);
   const frame = matte(darkened(tone));
   const b = make(body);
-  const half = d / 2;
-  const band = Math.max(0, Math.min(SOFA_BACK_MM, half - 100));
-  const y0 = lay.back.kind === "sofa" ? -band : -half;
-  const y1 = lay.front.kind === "sofa" ? band : half;
   const top = lay.heightMm;
+  const sofaZ = lay.sofaHeightMm;
+  const cushion = Math.min(SOFA_CUSHION_MM, sofaZ * 0.4);
+  const topOf = (k: BenchBlock["kind"]) => (k === "table" ? top : k === "seat" ? Math.max(1, sofaZ - cushion) : sofaZ + SOFA_BACKREST_MM);
   if (lay.shaped) {
-    // A banquette laid along its SHAPE (benchLayoutFor — a crescent, a ח): its top is the outline
-    // extruded to table height, its chairs where the layout stood them round the band, and a
-    // sofa's cushions as the quads the plan draws, raised to the seat. No straight-frame slab.
-    for (const outline of footprintOutlines(ctx.footprint)) b.parts.push({ shape: "extrude", outline, h: Math.max(10, top), at: vec3(0, 0, 0) });
+    // A banquette laid along its SHAPE (benchLayoutFor — a crescent, a ח): its outline extruded —
+    // to table height, or, where a side is a sofa, only to the seat under the cushions, with the
+    // table and the backrests raised over it along the spine (the blocks' outlines) — its chairs
+    // where the layout stood them round the band, and a sofa's cushions as the quads the plan draws.
+    const seated = lay.blocks.some((x) => x.kind === "seat");
+    for (const outline of footprintOutlines(ctx.footprint)) b.parts.push({ shape: "extrude", outline, h: Math.max(10, seated ? topOf("seat") : top), at: vec3(0, 0, 0) });
+    if (seated)
+      for (const x of lay.blocks) if (x.kind !== "seat" && (x.outline?.length ?? 0) >= 3) b.parts.push({ shape: "extrude", outline: { outline: x.outline! }, h: Math.max(10, topOf(x.kind)), at: vec3(0, 0, 0) });
     const tagS = tagOf(ctx, "chair");
     const styleS = ctx.chairStyle ?? "dining";
     for (const s of lay.chairs) b.instanced.push(chairRequest(styleS, BENCH_CHAIR.widthMm, BENCH_CHAIR.depthMm, BENCH_CHAIR.heightMm, BENCH_CHAIR_TONE, transform(vec3(s.x, s.y, 0), s.facingDeg - 90), tagS));
-    const sofaZS = lay.sofaHeightMm;
-    const cushionS = Math.min(SOFA_CUSHION_MM, sofaZS * 0.4);
-    for (const q of lay.cushions) b.parts.push({ shape: "extrude", outline: { outline: q }, h: cushionS, at: vec3(0, 0, Math.max(0, sofaZS - cushionS)) });
+    for (const q of lay.cushions) b.parts.push({ shape: "extrude", outline: { outline: q }, h: cushion, at: vec3(0, 0, Math.max(0, sofaZ - cushion)) });
     return b;
   }
-  if (y1 - y0 > 1) {
-    b.parts.push(box(w, y1 - y0, BENCH_SLAB_MM, vec3(0, (y0 + y1) / 2, top - BENCH_SLAB_MM), body));
-    const legY = y1 - y0 > BENCH_LEG_MM * 2 ? [y0 + BENCH_LEG_MM / 2, y1 - BENCH_LEG_MM / 2] : [(y0 + y1) / 2];
-    for (const sx of [-1, 1]) for (const y of legY) b.parts.push(box(BENCH_LEG_MM, BENCH_LEG_MM, Math.max(1, top - BENCH_SLAB_MM), vec3(sx * (w / 2 - BENCH_LEG_MM), y, 0), frame));
+  for (const x of lay.blocks) {
+    const bw = x.x1 - x.x0;
+    const bd = x.y1 - x.y0;
+    if (bw < 1 || bd < 1) continue;
+    const cx = (x.x0 + x.x1) / 2;
+    const cy = (x.y0 + x.y1) / 2;
+    if (x.kind === "table") {
+      // A table: a slab the chairs tuck under — on four legs under the core.
+      b.parts.push(box(bw, bd, BENCH_SLAB_MM, vec3(cx, cy, top - BENCH_SLAB_MM), body));
+      if (x.core) {
+        const legY = bd > BENCH_LEG_MM * 2 ? [x.y0 + BENCH_LEG_MM / 2, x.y1 - BENCH_LEG_MM / 2] : [cy];
+        for (const sx of [-1, 1]) for (const y of legY) b.parts.push(box(BENCH_LEG_MM, BENCH_LEG_MM, Math.max(1, top - BENCH_SLAB_MM), vec3(sx * (w / 2 - BENCH_LEG_MM), y, 0), frame));
+      }
+    } else b.parts.push(box(bw, bd, topOf(x.kind), vec3(cx, cy, 0), x.kind === "seat" ? frame : body));
   }
   const tag = tagOf(ctx, "chair");
   const style = ctx.chairStyle ?? "dining";
   for (const s of lay.chairs) {
     // A Seat faces the strip along facingDeg (0 = +x); a chair body's front is +y (frame.ts seatTransform).
     b.instanced.push(chairRequest(style, BENCH_CHAIR.widthMm, BENCH_CHAIR.depthMm, BENCH_CHAIR.heightMm, BENCH_CHAIR_TONE, transform(vec3(s.x, s.y, 0), s.facingDeg - 90), tag));
-  }
-  const sofaZ = lay.sofaHeightMm;
-  const cushion = Math.min(SOFA_CUSHION_MM, sofaZ * 0.4);
-  for (const [side, sign] of [[lay.back, -1], [lay.front, 1]] as const) {
-    if (side.kind !== "sofa" || side.seats <= 0) continue;
-    // The base the cushions rest on: the sofa's half of the strip, up to the cushions' underside.
-    b.parts.push(box(w, Math.max(1, half - band), Math.max(1, sofaZ - cushion), vec3(0, sign * ((half + band) / 2), 0), frame));
-    const bd = Math.min(60, Math.max(band, 20));
-    b.parts.push(box(w, bd, SOFA_BACKREST_MM, vec3(0, sign * (band - bd / 2), sofaZ), body));
   }
   for (const q of lay.cushions) {
     const xs = q.map((p) => p.x);
@@ -1417,6 +1421,30 @@ if (isMain(import.meta.url)) {
   const sofaBench = floorKindBody("bench", ctxOf({ kind: "rect", widthMm: 3000, depthMm: 600 }, 750, DEFAULT_TONE.bench, { bench: benchLayout(3000, 600, { front: { kind: "sofa" } }) }));
   assert(boxes(sofaBench).filter((p) => near(top(p), 460) && p.at.y > 0).length === 5, "bench: a sofa front is five cushions at 460 on the +y half");
   assert(bench.parts.every((p) => top(p) <= 750 + 1e-9), "bench: nothing above its top but the chairs");
+  // QA BQ-4: a typed sofa run (2.4 m) and seat (20 cm) on a 6 m banquette with chairs behind — the
+  // backrest at the seat's inner line along the run, no table slab or leg over the cushions.
+  const typedLay = benchLayout(6000, 600, { back: { kind: "chairs" }, front: { kind: "sofa", widthMm: 2400, depthMm: 200 } });
+  const typed = floorKindBody("bench", ctxOf({ kind: "rect", widthMm: 6000, depthMm: 600 }, 750, DEFAULT_TONE.bench, { bench: typedLay }));
+  const cushionBoxes = boxes(typed).filter((p) => near(top(p), 460));
+  assert(cushionBoxes.length === 4 && cushionBoxes.every((p) => p.at.y - p.d / 2 >= 100 - 1 && Math.abs(p.at.x) <= 1200), `bench: four cushions on the typed run and seat (${cushionBoxes.length})`);
+  const overCushions = boxes(typed).filter((p) => top(p) > 460 + 1 && p.at.y + p.d / 2 > 100 + 1 && Math.abs(p.at.x) - p.w / 2 < 1200 - 1);
+  assert(overCushions.length === 0, `bench: nothing rises over the cushions (${overCushions.map((p) => `${p.w}×${p.d}@${p.at.y}`).join(" ")})`);
+  const backrest = boxes(typed).find((p) => near(top(p), 460 + 400));
+  assert(!!backrest && near(backrest.at.y + backrest.d / 2, 100) && near(backrest.w, 2400), "bench: the backrest stands right behind the seat's inner line, along the run");
+  // QA BQ-10: a sofa nobody eats at has no 75 cm slab — its back is solid.
+  const lone = floorKindBody("bench", ctxOf({ kind: "rect", widthMm: 3000, depthMm: 450 }, 750, DEFAULT_TONE.bench, { bench: benchLayout(3000, 450, { back: { kind: "sofa" } }) }));
+  assert(!boxes(lone).some((p) => near(top(p), 750)), "bench: a sofa alone gets no table slab");
+  // QA BQ-5: a SHAPED banquette (a crescent) with a sofa side — its outline only to the seat under
+  // the cushions, the chairs' table and the backrest raised along its spine; never one 75 cm solid.
+  const arcPts: Point[] = [];
+  for (let k = 0; k <= 24; k++) arcPts.push({ x: 3000 * Math.cos(Math.PI - (Math.PI * k) / 24), y: -3000 * Math.sin(Math.PI - (Math.PI * k) / 24) });
+  for (let k = 24; k >= 0; k--) arcPts.push({ x: 2400 * Math.cos(Math.PI - (Math.PI * k) / 24), y: -2400 * Math.sin(Math.PI - (Math.PI * k) / 24) });
+  const crescentFp: Footprint = { kind: "custom", outline: arcPts };
+  const crescentLay = benchLayoutFor(crescentFp, { back: { kind: "chairs" }, front: { kind: "sofa" } });
+  const crescentBody = floorKindBody("bench", ctxOf(crescentFp, 750, DEFAULT_TONE.bench, { bench: crescentLay }));
+  const extrudes = crescentBody.parts.filter((p) => p.shape === "extrude");
+  assert(extrudes.some((p) => near(top(p), 460 - 120)) && !extrudes.some((p) => p.shape === "extrude" && p.outline.outline.length === arcPts.length && near(top(p), 750)), "bench: a crescent with a sofa stands to the seat under its cushions, not one solid at 75 cm");
+  assert(extrudes.some((p) => near(top(p), 750)) && extrudes.some((p) => near(top(p), 460 + 400)), "…its chairs' table and its backrest raised along the band");
 
   // A column ⌀500 × 3000: the shaft 0.74 R, sixteen flutes, the capital reaching 3000.
   const column = floorKindBody("column", ctxOf({ kind: "circle", diameterMm: 500 }, 3000, DEFAULT_TONE.column));

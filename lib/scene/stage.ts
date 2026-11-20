@@ -45,7 +45,8 @@ import { wallDistanceOf } from "@/lib/venues/stage-edges";
 import { emptyStructure, featurePlacement, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
 import type { ChairStyle } from "@/lib/catalog/symbols";
 import { primeCatalog } from "@/lib/catalog/storage";
-import { mergeStages, rectOutline, roundOutline, skirtMm } from "@/lib/design-document/stage";
+import { SOFA_SEAT_MM, mergeStages, rectOutline, roundOutline, skirtMm } from "@/lib/design-document/stage";
+import type { BenchBlock } from "@/lib/design-document/bench";
 import { isMain } from "../self-check";
 import { SceneCollector } from "./collect";
 import { applyTransform, headingDeg, roomTransform, turn } from "./frame";
@@ -354,39 +355,36 @@ export function rampParts(shape: EdgeItemShape, floorZ: number): { slab: Part[];
 
 // --- bench -----------------------------------------------------------------------------------
 
-/** A banquette on an edge: the strip as a solid block up to its top, a sofa side's cushions and
- *  backrest, and where each chair stands (as transforms in the stage's frame, to be instanced).
- *  `floorZ` is the floor outside the stage, `deckZ` the deck inside it. The bench's own layout
- *  (`shape.bench`, in its frame: back = the stage side at −y) says which side each chair and
- *  cushion belongs to — `shape.chairs`/`cushions` are the same lists carried onto the edge. */
-export function benchParts(shape: EdgeItemShape, floorZ: number, deckZ: number): { parts: Part[]; chairs: Transform[] } {
+/** A banquette on an edge: the strip block by block, each side at ITS height (EdgeItemShape.blocks,
+ *  bench.ts benchBlocks — QA BQ-5: it was one solid to the chairs' table round a sofa's cushions), a
+ *  sofa side's cushions on its seat, and where each chair stands (as transforms in the stage's frame,
+ *  to be instanced). `floorZ` is the floor outside the stage, `deckZ` the deck inside it. The bench's
+ *  own layout (`shape.bench`, in its frame: back = the stage side at −y) says which side each chair
+ *  and cushion belongs to — `shape.chairs`/`cushions` are the same lists carried onto the edge.
+ *  `topMm` is its core's top (the chairs' table, or a sofa's solid back) — what a corner piece meets. */
+export function benchParts(shape: EdgeItemShape, floorZ: number, deckZ: number): { parts: Part[]; chairs: Transform[]; topMm: number } {
   const lay = shape.bench;
-  if (!lay) return { parts: [], chairs: [] };
+  if (!lay) return { parts: [], chairs: [], topMm: floorZ + BENCH_TOP_MM };
   // The surface each side's people stand or rest their feet on: the stage side is the deck; the
   // room side is the floor for a banquette outside the edge, the deck for one standing on it.
   const backFloor = deckZ;
   const frontFloor = shape.inner ? deckZ : floorZ;
   const standsOn = shape.inner ? deckZ : floorZ;
-  const seatZ = (side: "back" | "front") => (side === "back" ? backFloor : frontFloor) + lay.sofaHeightMm;
-  let top: number;
-  if (lay.back.kind === "chairs") top = backFloor + lay.heightMm;
-  else if (lay.front.kind === "chairs") top = frontFloor + lay.heightMm;
-  else if (lay.back.kind === "sofa" || lay.front.kind === "sofa") top = Math.max(lay.back.kind === "sofa" ? seatZ("back") : 0, lay.front.kind === "sofa" ? seatZ("front") : 0) - CUSHION_MM;
-  else top = standsOn + BENCH_TOP_MM;
-  top = Math.max(standsOn + CUSHION_MM, top);
-  const parts: Part[] = [{ shape: "extrude", outline: { outline: shape.polygon }, h: top - standsOn, at: vec3(0, 0, standsOn) }];
+  const floorOf = (side: BenchBlock["side"]) => (side === "back" ? backFloor : side === "front" ? frontFloor : Math.max(backFloor, frontFloor));
+  const seatZ = (side: "back" | "front") => floorOf(side) + lay.sofaHeightMm;
+  const topOf = (b: BenchBlock) =>
+    Math.max(standsOn + 1, b.kind === "table" ? floorOf(b.side) + lay.heightMm : b.kind === "seat" ? floorOf(b.side) + lay.sofaHeightMm - CUSHION_MM : floorOf(b.side) + lay.sofaHeightMm + SOFA_BACK_HEIGHT_MM);
+  const blocks = (shape.blocks ?? []).filter((b) => (b.outline?.length ?? 0) >= 3);
+  const parts: Part[] = blocks.map((b) => ({ shape: "extrude", outline: { outline: b.outline! }, h: topOf(b) - standsOn, at: vec3(0, 0, standsOn) }));
+  const core = blocks.find((b) => b.core);
+  const topMm = core ? topOf(core) : blocks.length ? Math.max(...blocks.map(topOf)) : standsOn + BENCH_TOP_MM;
 
-  // Sofa cushions and backrests: the back side's first, then the front's (bench.ts lays them so).
+  // Sofa cushions on their seats: the back side's first, then the front's (bench.ts lays them so).
+  // The backrests are the `back` blocks above.
   const backCushions = lay.back.kind === "sofa" ? lay.back.seats : 0;
   shape.cushions.forEach((quad, i) => {
     const side = i < backCushions ? "back" : "front";
     parts.push({ shape: "extrude", outline: { outline: quad }, h: CUSHION_MM, at: vec3(0, 0, seatZ(side) - CUSHION_MM) });
-  });
-  const backIsSofa = lay.back.kind === "sofa";
-  shape.backs.forEach(([a, b], i) => {
-    const side = backIsSofa && i === 0 ? "back" : "front";
-    const z = seatZ(side);
-    parts.push({ shape: "box", w: Math.hypot(b.x - a.x, b.y - a.y), d: SOFA_BACK_THICK_MM, h: SOFA_BACK_HEIGHT_MM, at: vec3((a.x + b.x) / 2, (a.y + b.y) / 2, z), rotDeg: headingDeg(a, b) });
   });
 
   // Chairs: the stage side's stand on the deck, the room side's on their floor; each faces the strip
@@ -396,7 +394,7 @@ export function benchParts(shape: EdgeItemShape, floorZ: number, deckZ: number):
     const z = own && own.y < 0 ? backFloor : frontFloor;
     return transform(vec3(seat.x, seat.y, z), seat.facingDeg - 90);
   });
-  return { parts, chairs };
+  return { parts, chairs, topMm };
 }
 
 // --- corners ---------------------------------------------------------------------------------
@@ -412,8 +410,8 @@ export function cornerPieceParts(c: CornerPiece, shapes: readonly { item: StageS
   const pt = (k1: number, k2: number): Point => ({ x: corner.x + n1.x * k1 + n2.x * k2, y: corner.y + n1.y * k1 + n2.y * k2 });
   const neighbour = shapes.find((s) => s.shape.kind === c.kind && (s.item.level ?? undefined) === (c.level ?? undefined) && !s.shape.inner && Math.abs(s.shape.depthMm - d) < 1)?.shape;
   if (c.kind === "bench") {
-    const top = neighbour ? benchParts(neighbour, floorZ, deckZ).parts[0] : undefined;
-    const h = top && top.shape === "extrude" ? top.h : BENCH_TOP_MM + (deckZ - floorZ);
+    // At the height of the banquettes' core (their table, or a sofa's solid back).
+    const h = neighbour ? benchParts(neighbour, floorZ, deckZ).topMm - floorZ : BENCH_TOP_MM + (deckZ - floorZ);
     return [{ shape: "extrude", outline: { outline: c.polygon }, h, at: vec3(0, 0, floorZ) }];
   }
   // In the stage's own tread (CornerPiece.treadMm — the crew's module), like the runs it joins.
@@ -557,6 +555,25 @@ if (isMain(import.meta.url)) {
     }
     const strip = bench.parts[0];
     assert(strip.shape === "extrude" && strip.at.z === 0 && near(topOf(strip), 600 + BENCH_TOP_MM), "the strip stands on the floor outside the stage, its top table-height above the deck its chairs stand on");
+    // QA BQ-5: chairs on the stage side and a sofa on the room side — each side at its own height:
+    // the room side's cushions sit on a seat at 46 cm from the floor, never inside a block to deck+75.
+    const inPoly = (q: Point, poly: Point[]) => {
+      let c = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++)
+        if (poly[i].y > q.y !== poly[j].y > q.y && q.x < ((poly[j].x - poly[i].x) * (q.y - poly[i].y)) / (poly[j].y - poly[i].y) + poly[i].x) c = !c;
+      return c;
+    };
+    const mixedItem: StageStair = { ...stage.stairs![1], bench: { back: { kind: "chairs" }, front: { kind: "sofa", widthMm: 3000 } } };
+    const ms = edgeItemShape({ ...stage, stairs: [mixedItem] }, mixedItem, deckOf)!;
+    const mp = benchParts(ms, 0, 600);
+    assert(ms.cushions.length > 0, "the room side has cushions");
+    for (const q of ms.cushions) {
+      const mid = { x: q.reduce((t, p) => t + p.x, 0) / q.length, y: q.reduce((t, p) => t + p.y, 0) / q.length };
+      const over = mp.parts.filter((pt) => pt.shape === "extrude" && inPoly(mid, pt.outline.outline) && pt.outline.outline !== q);
+      assert(over.every((pt) => topOf(pt) <= SOFA_SEAT_MM + 1), `…nothing but the seat under a cushion, and the cushion on top at 46 cm (${over.map(topOf).join(",")})`);
+    }
+    assert(mp.parts.some((pt) => near(topOf(pt), 600 + BENCH_TOP_MM)), "…while the chairs' half keeps its table height above the deck");
+    assert(mp.parts.some((pt) => near(topOf(pt), SOFA_SEAT_MM + SOFA_BACK_HEIGHT_MM)), "…and the sofa has its backrest");
 
     // The barrier stands on the deck, to its default height.
     const barrier = bodies.find((b) => b.tag.type === "edge" && b.tag.id === "br")!;

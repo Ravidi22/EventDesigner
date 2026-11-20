@@ -36,7 +36,7 @@ import { pieceName, type PieceInfo } from "../studio/stage-rim";
 import { flattenEdge, footprintBounds, footprintOutlines, resolveFootprint, sizedFootprint, type BuiltOutline, type Footprint } from "../studio/footprint";
 import { cleanOutline, halfRoundArea, pushSide, shapeRect, splitSide, STICK_ALIGN_MM, stickBoxes, unionOutline, unionShapes, type RectShape, type RoundedAt } from "../studio/stage-draw";
 import { CHAIR_OFFSET_MM, CHAIR_W_MM, type Seat } from "../studio/seating";
-import { BENCH_DEPTH_MM, BENCH_TABLE_DEPTH_MM, BENCH_TOP_MM, SEAT_WIDTH_MM, SOFA_SEAT_MM, benchDefaultDepth, benchLayout, benchSpecOf, type BenchLayout } from "./bench";
+import { BENCH_DEPTH_MM, BENCH_TABLE_DEPTH_MM, BENCH_TOP_MM, SEAT_WIDTH_MM, SOFA_SEAT_MM, benchDefaultDepth, benchLayout, benchSpecOf, type BenchBlock, type BenchLayout } from "./bench";
 import { slopeOn, walkingLine, walkingPadMm, type ClimbMark } from "../venues/climb";
 import { isMain } from "../self-check";
 
@@ -1058,6 +1058,9 @@ export interface EdgeItemShape {
   backs: [Point, Point][];
   /** The banquette as laid in its own frame — which side is what. Only on a bench. */
   bench?: BenchLayout;
+  /** …and its blocks as the room raises them (./bench.ts benchBlocks), carried onto the edge — each
+   *  with its `outline` in the stage's frame, following a curved side. Only on a bench. */
+  blocks?: BenchBlock[];
 }
 export type StairShape = EdgeItemShape;
 
@@ -1293,6 +1296,7 @@ function shapeCore(stage: StageBuild, item: StageStair, deckOf: DeckLookup, join
     cushions?: Point[][];
     backs?: [Point, Point][];
     bench?: BenchLayout;
+    blocks?: BenchBlock[];
   }): EdgeItemShape => {
     // A mitred end cuts each line across the item where its neighbour's crosses it; the outline is
     // then the edge line out and the far line back, as it always was (strip).
@@ -1327,6 +1331,7 @@ function shapeCore(stage: StageBuild, item: StageStair, deckOf: DeckLookup, join
     cushions: s.cushions ?? [],
     backs: s.backs ?? [],
     bench: s.bench,
+    ...(s.blocks ? { blocks: s.blocks } : {}),
     };
   };
   if (kind === "barrier" || kind === "backdrop") {
@@ -1374,6 +1379,11 @@ function shapeCore(stage: StageBuild, item: StageStair, deckOf: DeckLookup, join
       cushions: lay.cushions.map((q) => q.map(carry)),
       backs: lay.backs.map(([a, b]) => [carry(a), carry(b)] as [Point, Point]),
       bench: lay,
+      // Each block carried onto the edge, sampled at the side's own stops so it bends with a curve.
+      blocks: lay.blocks.map((b) => {
+        const stops = [b.x0, ...xs.filter((x) => x > b.x0 + 1 && x < b.x1 - 1), b.x1];
+        return { ...b, outline: [...stops.map((x) => carry({ x, y: b.y0 })), ...[...stops].reverse().map((x) => carry({ x, y: b.y1 }))] };
+      }),
     });
   }
   // The walking line up a flight or a ramp, from its foot on the floor to where it reaches the deck,

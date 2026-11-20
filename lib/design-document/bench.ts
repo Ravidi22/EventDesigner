@@ -167,6 +167,77 @@ export interface BenchLayout {
    *  unless it is not seating (BenchSide.notSeating). The numbering and the occupancy go by `seats`
    *  — a banquette people sit on keeps its number whether they are counted or not. */
   countedSeats: number;
+  /** The strip as the room raises it, side by side (benchBlocks) — in this layout's frame; carried
+   *  along the spine (`outline`) for a shaped banquette. */
+  blocks: BenchBlock[];
+}
+
+/** A block of a banquette as the room raises it (lib/scene): along the strip x0…x1, across it y0…y1
+ *  (the banquette's own frame, −y the back). `kind`: "table" — the top chairs eat at (or a bare
+ *  strip's top), at BenchLayout.heightMm; "seat" — a sofa side's seat under its cushions; "back" — a
+ *  sofa's backrest, or the strip behind a sofa nobody eats at (its solid back). `side`: whose floor
+ *  its top stands above ("both" = the higher). `core`: the strip between the two sides, end to end. */
+export interface BenchBlock {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+  kind: "table" | "seat" | "back";
+  side: "back" | "front" | "both";
+  core?: true;
+  /** Its outline where the strip is not straight — a shaped banquette's spine, a stage's curve. */
+  outline?: Point[];
+}
+
+/** A sofa's backrest is this thick behind its cushions (or what the strip leaves). */
+export const BACKREST_THICK_MM = 60;
+
+/** The strip cut by who is at each side, each part at ITS height (QA BQ-4/BQ-5: the room used to
+ *  raise one solid to table height round a sofa's cushions, or re-derive the sofa from defaults): a
+ *  sofa side's SEAT over its run from its edge to its seat's inner line, its BACKREST right behind,
+ *  the strip between the sides the chairs' TABLE — or, with no chairs at it, the sofa's solid BACK
+ *  (never a 75 cm slab nobody eats at — QA BQ-10) — and the strip beyond a short sofa run the same
+ *  as that core. */
+export function benchBlocks(lay: Pick<BenchLayout, "widthMm" | "depthMm" | "back" | "front">): BenchBlock[] {
+  const w = lay.widthMm;
+  const d = lay.depthMm;
+  const h = d / 2;
+  if (!(w > 0) || !(d > 0)) return [];
+  const sofa = (s: BenchSideLayout) => s.kind === "sofa" && s.seats > 0;
+  const sb = sofa(lay.back) ? Math.min(d, lay.back.depthMm ?? 0) : 0;
+  const sf = sofa(lay.front) ? Math.min(d - sb, lay.front.depthMm ?? 0) : 0;
+  const gap = Math.max(0, d - sb - sf);
+  const both = sofa(lay.back) && sofa(lay.front);
+  const thick = (on: boolean) => (on ? Math.min(BACKREST_THICK_MM, both ? gap / 2 : gap) : 0);
+  const tb = thick(sofa(lay.back));
+  const tf = thick(sofa(lay.front));
+  const chairs = lay.back.kind === "chairs" ? "back" : lay.front.kind === "chairs" ? "front" : null;
+  const coreKind: BenchBlock["kind"] = chairs || !(sofa(lay.back) || sofa(lay.front)) ? "table" : "back";
+  const coreSide: BenchBlock["side"] = chairs ?? (both ? "both" : sofa(lay.back) ? "back" : "front");
+  const out: BenchBlock[] = [];
+  const y0 = -h + sb + tb;
+  const y1 = h - sf - tf;
+  if (y1 - y0 > 0.5) out.push({ x0: -w / 2, x1: w / 2, y0, y1, kind: coreKind, side: coreSide, core: true });
+  const span = (a: number, b: number) => ({ y0: Math.min(a, b), y1: Math.max(a, b) });
+  const sofaBlocks = (s: BenchSideLayout, key: "back" | "front", seat: number, t: number) => {
+    if (!sofa(s)) return;
+    const r = Math.min(w, s.widthMm ?? w);
+    const sign = key === "back" ? -1 : 1;
+    const edge = sign * h;
+    const inner = sign * (h - seat);
+    const behind = sign * (h - seat - t);
+    out.push({ x0: -r / 2, x1: r / 2, ...span(edge, inner), kind: "seat", side: key });
+    if (t > 0.5) out.push({ x0: -r / 2, x1: r / 2, ...span(inner, behind), kind: "back", side: key });
+    if (r < w - 1)
+      for (const [x0, x1] of [
+        [-w / 2, -r / 2],
+        [r / 2, w / 2],
+      ])
+        out.push({ x0, x1, ...span(edge, behind), kind: coreKind, side: coreSide });
+  };
+  sofaBlocks(lay.back, "back", sb, tb);
+  sofaBlocks(lay.front, "front", sf, tf);
+  return out;
 }
 
 /** Lay a banquette `widthMm` long and `depthMm` deep out of its spec. */
@@ -270,6 +341,7 @@ export function benchLayout(widthMm: number, depthMm: number, spec?: BenchSpec):
     chairSeats,
     sofaSeats,
     countedSeats: counted(back) + counted(front),
+    blocks: benchBlocks({ widthMm: w, depthMm: d, back, front }),
   };
 }
 
@@ -341,7 +413,13 @@ export function benchLayoutFor(footprint: Footprint, spec?: BenchSpec): BenchLay
     const inner = q.slice(2, 4);
     backs.push([carry(inner[1].x, inner[1].y), carry(inner[0].x, inner[0].y)]);
   }
-  return { ...straight, widthMm: Math.round(L), depthMm: d, chairs, cushions, backs, shaped: true };
+  // The room's blocks, each carried along the spine as an outline (sampled every ~15 cm).
+  const blocks = straight.blocks.map((b) => {
+    const n = Math.max(1, Math.ceil((b.x1 - b.x0) / 150));
+    const xs = Array.from({ length: n + 1 }, (_, k) => b.x0 + ((b.x1 - b.x0) * k) / n);
+    return { ...b, outline: [...xs.map((x) => carry(x, b.y0)), ...[...xs].reverse().map((x) => carry(x, b.y1))] };
+  });
+  return { ...straight, widthMm: Math.round(L), depthMm: d, chairs, cushions, backs, blocks, shaped: true };
 }
 
 // ── Standalone banquettes ─────────────────────────────────────────────────────────────────────
@@ -608,6 +686,22 @@ if (isMain(import.meta.url)) {
   assert(crescent.chairs.every((c) => Math.abs(((((c.facingDeg - (Math.atan2(C.y - c.y, C.x - c.x) * 180) / Math.PI) % 360) + 540) % 360) - 180) < 8), "…each facing in toward the centre, square at the band");
   assert(crescent.cushions.length === 3 && crescent.cushions.every((q) => q.every((p) => rad(p) < 2720)), "…and the sofa's cushions on the inner half of the band");
   assert(crescent.backs.length === 3, "…its backrest in segments that follow the curve");
+
+  // ── The room's blocks, each side at its own height (QA BQ-4/BQ-5/BQ-10).
+  const tableOnly = benchLayout(3000, 600).blocks;
+  assert(tableOnly.length === 1 && tableOnly[0].kind === "table" && !!tableOnly[0].core && tableOnly[0].y0 === -300 && tableOnly[0].y1 === 300, "chairs alone: the whole strip is their table");
+  const mixed = benchLayout(6000, 600, { back: { kind: "chairs" }, front: { kind: "sofa", widthMm: 2400, depthMm: 200 } }).blocks;
+  const seatBlock = mixed.find((b) => b.kind === "seat")!;
+  const backBlock = mixed.find((b) => b.kind === "back")!;
+  const coreBlock = mixed.find((b) => b.core)!;
+  assert(seatBlock.side === "front" && seatBlock.x0 === -1200 && seatBlock.x1 === 1200 && seatBlock.y0 === 100 && seatBlock.y1 === 300, "a sofa's seat is raised over ITS run, from the edge to its typed depth");
+  assert(backBlock.y1 === 100 && backBlock.y0 === 100 - BACKREST_THICK_MM && backBlock.x1 === 1200, "…its backrest right behind the seat, along the run");
+  assert(coreBlock.kind === "table" && coreBlock.side === "back" && coreBlock.y1 === backBlock.y0, "…the chairs' table from the backrest to their edge, never over the cushions");
+  assert(mixed.filter((b) => !b.core && b.kind === "table").length === 2, "…and the strip beyond a short run is table too");
+  const sofaAlone = benchLayout(3000, 450, { back: { kind: "sofa" } }).blocks;
+  assert(!sofaAlone.some((b) => b.kind === "table") && sofaAlone.find((b) => b.core)?.kind === "back", "a sofa nobody eats at has a solid back, no table slab");
+  const crescentBlocks = benchLayoutFor({ kind: "custom", outline: arc }, { back: { kind: "chairs" }, front: { kind: "sofa" } }).blocks;
+  assert(crescentBlocks.length >= 3 && crescentBlocks.every((b) => (b.outline?.length ?? 0) >= 4), "a shaped banquette's blocks are carried along its spine as outlines");
 
   // ── A sofa side may be left out of the seating readout (U6, QA BQ-3) — the COUNT only.
   const lounge: BenchSpec = { back: { kind: "chairs", seats: 4 }, front: { kind: "sofa", seats: 3, notSeating: true } };
