@@ -4005,8 +4005,8 @@ export function StudioScreen({
       return [{ kind: "placement" as const, id: q.id, position }];
     });
     const left = [
-      angled.length ? `${angled.length === 1 ? "במה אחת" : `${angled.length} במות`} בזווית שונה מהשאר — לא הוזזו` : null,
-      far.length ? `${far.length === 1 ? "במה אחת רחוקה" : `${far.length} במות רחוקות`} יותר ממטר מכל במה אחרת — לא הוזזו` : null,
+      angled.length ? (angled.length === 1 ? "במה אחת בזווית שונה מהשאר — לא הוזזה" : `${angled.length} במות בזווית שונה מהשאר — לא הוזזו`) : null,
+      far.length ? (far.length === 1 ? "במה אחת רחוקה יותר ממטר מכל במה אחרת — לא הוזזה" : `${far.length} במות רחוקות יותר ממטר מכל במה אחרת — לא הוזזו`) : null,
     ].filter(Boolean);
     if (moves.length === 0) {
       showHint(left.length ? left.join(" · ") : "הבמות כבר צמודות");
