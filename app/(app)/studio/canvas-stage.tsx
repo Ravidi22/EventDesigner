@@ -1477,14 +1477,12 @@ export function CanvasStage({
     if (!s || s.movers.length === 0 || freeDrag.current) return { x: 0, y: 0 };
     const dx = target.x - s.origin.x;
     const dy = target.y - s.origin.y;
+    const moved = s.movers.map((m) => ({ ...m, x: m.x + dx, y: m.y + dy }));
+    // A pair that overlapped when the drag began is exempt only until the drag takes it clear.
+    s.ignore.release(moved, s.obstacles);
     // A MAGNET, not a wall (collide.ts nudgeApart): held flush only while the overlap is a few
     // pixels deep, so a drag is never trapped behind the thing it brushed past.
-    return nudgeApart(
-      s.movers.map((m) => ({ ...m, x: m.x + dx, y: m.y + dy })),
-      s.obstacles,
-      reachMm,
-      s.ignore,
-    );
+    return nudgeApart(moved, s.obstacles, reachMm, s.ignore);
   };
 
   /** Alt held during a drag: no snap, no magnet — the item goes exactly where the pointer is. Read

@@ -99,21 +99,38 @@ export function nudgeApart(movers: SolidBox[], obstacles: SolidBox[], reachMm: n
   return Math.hypot(push.x, push.y) <= reachMm ? push : { x: 0, y: 0 };
 }
 
+/** overlappingAtStart's answer: an Ignore that can also be told where the movers have got to. */
+export interface StartOverlaps extends Ignore {
+  /** Forget every remembered pair that stands CLEAR with the movers where they are now: from then on
+   *  it is held like any other pair. Cheap — it looks only at the pairs still remembered, which is
+   *  nearly always none. */
+  release(movers: SolidBox[], obstacles: SolidBox[]): void;
+}
+
 /** The pairs that were ALREADY overlapping — a gesture must not resolve those. You may leave a bad
  *  arrangement, and you may not enter one: a plan drawn before this rule existed (or one a designer
  *  built deliberately) can still be picked up and dragged without the first pixel of movement
- *  teleporting it somewhere legal. Computed once, when the drag begins. */
-export function overlappingAtStart(movers: SolidBox[], obstacles: SolidBox[]): Ignore {
+ *  teleporting it somewhere legal. Computed once, when the drag begins — and each pair is let go
+ *  of (`release`, every frame of the drag) the first time it is dragged clear: once out, it cannot
+ *  go back in. Remembered for the whole gesture, a pair that started overlapped was never held
+ *  again even after it had been dragged clear across the room. */
+export function overlappingAtStart(movers: SolidBox[], obstacles: SolidBox[]): StartOverlaps {
   const pairs = new Set<string>();
+  const overlapping = (m: SolidBox, o: SolidBox) =>
+    m.solid === o.solid && penetration(m.x, m.widthMm, o.x, o.widthMm) > 0 && penetration(m.y, m.depthMm, o.y, o.depthMm) > 0;
   movers.forEach((m, i) =>
     obstacles.forEach((o, j) => {
-      if (m.solid !== o.solid) return;
-      if (penetration(m.x, m.widthMm, o.x, o.widthMm) > 0 && penetration(m.y, m.depthMm, o.y, o.depthMm) > 0) {
-        pairs.add(`${i}:${j}`);
-      }
+      if (overlapping(m, o)) pairs.add(`${i}:${j}`);
     }),
   );
-  return (i, j) => pairs.has(`${i}:${j}`);
+  const ignore = ((i: number, j: number) => pairs.has(`${i}:${j}`)) as StartOverlaps;
+  ignore.release = (now, obs) => {
+    for (const key of pairs) {
+      const [i, j] = key.split(":").map(Number);
+      if (now[i] && obs[j] && !overlapping(now[i], obs[j])) pairs.delete(key);
+    }
+  };
+  return ignore;
 }
 
 // ponytail: self-check. Run: node --experimental-strip-types lib/studio/collide.ts
@@ -174,6 +191,15 @@ if (isMain(import.meta.url)) {
   // Out along y: 3000 deep on x and only 2000 on y, and the rule is always the shorter way out.
   assert(forced.x === 0 && forced.y === 2000, "…while the same pair without that memory is put right");
   assert(!overlappingAtStart([deck(9000, 0)], obstacle)(0, 0), "a pair that starts clear is not");
+  // …and once it HAS been dragged out the memory is let go: pushed back in, it is held like any
+  // other pair. It used to stay exempt for the whole gesture, dragged clear or not.
+  const exempt = overlappingAtStart([deck(1000, 0)], [deck(0, 0)]);
+  exempt.release([deck(2500, 0)], [deck(0, 0)]);
+  assert(exempt(0, 0), "a pair still overlapping stays exempt");
+  exempt.release([deck(4100, 0)], [deck(0, 0)]);
+  assert(!exempt(0, 0), "a pair dragged clear is exempt no longer");
+  const heldAgain = nudgeApart([deck(3900, 0)], [deck(0, 0)], 150, exempt);
+  assert(heldAgain.x === 100 && heldAgain.y === 0, "…pushed back against it, it is held flush like any other pair");
 
   // A pile it cannot untangle: it keeps whatever it managed and stops, rather than looping.
   const pile = pushApart([deck(0, 0)], [deck(0, 0), deck(10, 0), deck(-10, 0)], undefined, 3);
