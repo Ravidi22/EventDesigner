@@ -1760,7 +1760,7 @@ export function HallsScreen() {
     const facts = [
       ZONE_KIND_LABEL[r.zone.kind],
       `${Math.round(zoneAreaM2(r))} מ״ר`,
-      isOpenAir(r.zone) ? "פתוח לשמיים" : `תקרה ${(r.zone.ceilingHeightMm / 1000).toFixed(1)} מ׳`,
+      isOpenAir(r.zone) ? "פתוח לשמיים" : `תקרה ${Math.round(r.zone.ceilingHeightMm / 10)} ס״מ`,
       r.zone.capacity?.seated ? `${r.zone.capacity.seated} מושבים` : null,
     ]
       .filter(Boolean)

@@ -161,12 +161,13 @@ export function ZoneDialog({
                   {/* 0 is not a missing value here — it is the stored meaning of "open to the sky",
                       which is why a canopy or a lawn legitimately sits at zero rather than blank. */}
                   <NumberField
-                    label="תקרה (מ׳)"
-                    decimals={1}
+                    label="תקרה (ס״מ)"
+                    decimals={0}
                     min={0}
-                    step={0.5}
-                    value={zone.ceilingHeightMm / 1000}
-                    onChange={(m) => onChange({ ceilingHeightMm: Math.round(m * 1000) })}
+                    step={10}
+                    commitOnBlur
+                    value={Math.round(zone.ceilingHeightMm / 10)}
+                    onChange={(cm) => onChange({ ceilingHeightMm: Math.round(cm * 10) })}
                   />
                 </div>
                 <SurfaceTiles value={zone.surface} onChange={(surface) => onChange({ surface })} none="ללא" />

@@ -1972,7 +1972,7 @@ export function Inspector({
       overTable ? `מעל ${tableLabel(doc, overTable)}` : null,
       railWhere,
       // A swag's headroom: its lowest point from the floor.
-      clothKind && drape?.type === "run" && cloth?.[0] ? `נקודה נמוכה ${(runLowestMm(cloth[0]) / 1000).toFixed(2)} מ׳` : null,
+      clothKind && drape?.type === "run" && cloth?.[0] ? `נקודה נמוכה ${Math.round(runLowestMm(cloth[0]) / 10)} ס״מ` : null,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -4082,8 +4082,8 @@ function DrapeRailFields({
           <PanelRow label="עובי המוט (מ״מ)" htmlFor="rod-thick">
             <NumberField id="rod-thick" decimals={0} min={ROD_THICK_MIN_MM} max={ROD_THICK_MAX_MM} commitOnBlur value={rodThickMm(rail)} onChange={(v) => onRail(rodWithThick(rail, v))} className="w-24" />
           </PanelRow>
-          <PanelRow label="גובה המוט (מ׳)" htmlFor="rod-height">
-            <NumberField id="rod-height" decimals={2} min={0.5} max={8} step={0.1} commitOnBlur value={rail.heightMm / 1000} onChange={(m) => onRail({ ...rail, heightMm: Math.round(m * 1000) })} className="w-24" />
+          <PanelRow label="גובה המוט (ס״מ)" htmlFor="rod-height">
+            <NumberField id="rod-height" decimals={0} min={50} max={800} step={10} commitOnBlur value={Math.round(rail.heightMm / 10)} onChange={(cm) => onRail({ ...rail, heightMm: Math.round(cm * 10) })} className="w-24" />
           </PanelRow>
           <SwitchRow
             checked={rail.cantilever === "end"}
@@ -4149,10 +4149,10 @@ function HangFields({ own, fallback, underRoof, onHang }: { own?: number; fallba
       </PanelRow>
       {own !== undefined && (
         <Button size="sm" variant="outline" className="w-full" onClick={() => onHang(null)}>
-          {fallback ? `חזרה לגובה מהקטלוג (${(fallback / 1000).toFixed(2)} מ׳)` : "ניקוי הגובה"}
+          {fallback ? `חזרה לגובה מהקטלוג (${Math.round(fallback / 10)} ס״מ)` : "ניקוי הגובה"}
         </Button>
       )}
-      <Note>{own === undefined && fallback ? "הגובה מהקטלוג. " : ""}{roofed ? `בלי גובה — בתלת־ממד נתלה בגובה ${(roofed / 1000).toFixed(2)} מ׳, מתחת למה שמעליו. ` : ""}מודפס ליד הפריט בתוכנית התקרה — לא משפיע על המחיר או על רשימת הציוד.</Note>
+      <Note>{own === undefined && fallback ? "הגובה מהקטלוג. " : ""}{roofed ? `בלי גובה — בתלת־ממד נתלה בגובה ${Math.round(roofed / 10)} ס״מ, מתחת למה שמעליו. ` : ""}מודפס ליד הפריט בתוכנית התקרה — לא משפיע על המחיר או על רשימת הציוד.</Note>
     </>
   );
 }

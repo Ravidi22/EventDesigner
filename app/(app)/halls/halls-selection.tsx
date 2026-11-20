@@ -158,13 +158,13 @@ const EDGE_ICON: Record<VenueEdgeKind, LucideIcon> = { stairs: Footprints, ramp:
 
 /** The "מבנה" chip's panel: the height a closed shape is built to, and the one button that builds it. */
 function BuildingDraft({ onBuild, note }: { onBuild: (heightMm: number) => void; note: string }) {
-  const [heightM, setHeightM] = useState(BUILDING_HEIGHT_MM / 1000);
+  const [heightCm, setHeightCm] = useState(BUILDING_HEIGHT_MM / 10);
   return (
     <>
-      <PanelRow label="גובה המבנה (מ׳)" htmlFor="building-height">
-        <NumberField id="building-height" decimals={1} min={0.5} max={30} step={0.5} commitOnBlur value={heightM} onChange={setHeightM} className="w-24" />
+      <PanelRow label="גובה המבנה (ס״מ)" htmlFor="building-height">
+        <NumberField id="building-height" decimals={0} min={50} max={3000} step={10} commitOnBlur value={heightCm} onChange={setHeightCm} className="w-24" />
       </PanelRow>
-      <Button size="sm" className="mt-2 w-full" onClick={() => onBuild(Math.round(heightM * 1000))}>
+      <Button size="sm" className="mt-2 w-full" onClick={() => onBuild(Math.round(heightCm * 10))}>
         מבנה סגור עם תקרה
       </Button>
       <Note>{note}</Note>
@@ -1012,7 +1012,7 @@ export function HallsSelection({
     band !== null && feature.kind === "bar" ? `דלפק ${cmOf(band)} ס״מ` : null,
     column ? `עמוד ⌀ ${cmOf(column.shaftMm)} ס״מ` : null,
     feature.kind === "pergola" ? `${PERGOLA_ROOF_LABEL[pergolaOf(feature).roof]} · ${pergolaPostsWord(pergolaOf(feature))}` : null,
-    !climb && !surface && !seating && feature.heightMm > 0 ? `גובה ${m(feature.heightMm)} מ׳` : null,
+    !climb && !surface && !seating && feature.heightMm > 0 ? `גובה ${cmOf(feature.heightMm)} ס״מ` : null,
     feature.locked ? "נעול" : null,
   ]
     .filter(Boolean)
@@ -1282,8 +1282,8 @@ export function HallsSelection({
         )}
         {/* The ground has no height — the field only ever showed a 0 nothing read. */}
         {!surface && (
-          <PanelRow label="גובה (מ׳)" htmlFor="feature-h">
-            <NumberField id="feature-h" decimals={2} min={0} step={0.1} value={feature.heightMm / 1000} onChange={(v) => patch({ heightMm: Math.round(v * 1000) })} className="w-20" />
+          <PanelRow label="גובה (ס״מ)" htmlFor="feature-h">
+            <NumberField id="feature-h" decimals={0} min={0} step={10} commitOnBlur value={cmOf(feature.heightMm)} onChange={(cm) => patch({ heightMm: Math.round(cm * 10) })} className="w-20" />
           </PanelRow>
         )}
         {/* A ח's counter (and a curved bar's band) is a depth of its own. */}
@@ -1359,8 +1359,8 @@ export function HallsSelection({
                   לצד השני
                 </Button>
               </div>
-              <PanelRow label="גובה (מ׳, 0 = עד התקרה)" htmlFor="curtain-h">
-                <NumberField id="curtain-h" decimals={2} min={0} step={0.1} commitOnBlur value={feature.heightMm / 1000} onChange={(v) => patch({ heightMm: Math.round(v * 1000) })} className="w-20" />
+              <PanelRow label="גובה (ס״מ, 0 = עד התקרה)" htmlFor="curtain-h">
+                <NumberField id="curtain-h" decimals={0} min={0} step={10} commitOnBlur value={cmOf(feature.heightMm)} onChange={(cm) => patch({ heightMm: Math.round(cm * 10) })} className="w-20" />
               </PanelRow>
               <Note>הווילון תלוי על הקיר וזז איתו. בסקיצה אפשר להסיר אותו לאירוע אחד או להחליף אותו בווילון מהקטלוג — המתחם עצמו לא משתנה.</Note>
             </>
@@ -1588,15 +1588,15 @@ function VenueRailFields({ feature, line, apply }: { feature: StructureFeature; 
             {rail.out === 1 ? "לצד הפנימי" : "לצד החיצוני"}
           </Button>
         </div>
-        <Note>{`תלוי על צד של האלמנט מגובהו (${((line.topMm ?? 0) / 1000).toFixed(2)} מ׳) וזז איתו.`}</Note>
+        <Note>{`תלוי על צד של האלמנט מגובהו (${cmOf(line.topMm ?? 0)} ס״מ) וזז איתו.`}</Note>
       </>
     );
   }
   if (rail?.type === "rod") {
     return (
       <>
-        <PanelRow label="גובה המוט (מ׳)" htmlFor="curtain-rod-h">
-          <NumberField id="curtain-rod-h" decimals={2} min={0.5} max={8} step={0.1} commitOnBlur value={rail.heightMm / 1000} onChange={(m) => re((s, f) => curtainRailPatch(s, f, { ...rail, heightMm: Math.round(m * 1000) }))} className="w-24" />
+        <PanelRow label="גובה המוט (ס״מ)" htmlFor="curtain-rod-h">
+          <NumberField id="curtain-rod-h" decimals={0} min={50} max={800} step={10} commitOnBlur value={cmOf(rail.heightMm)} onChange={(cm) => re((s, f) => curtainRailPatch(s, f, { ...rail, heightMm: Math.round(cm * 10) }))} className="w-24" />
         </PanelRow>
         <label className="flex items-center justify-between gap-3 py-1 text-sm text-ink">
           <span>ללא עמוד בקצה (ר)</span>

@@ -737,7 +737,7 @@ export function CompositionEditor({ composition, selfId, internal = true, onSave
                         <Rotation value={solePlacement.rotation} onChange={(deg) => act({ type: "rotatePlacement", id: solePlacement.id, rotation: deg })} />
                       )}
                       {soleHang && (
-                        <Popover label="גובה תלייה" icon={ArrowDownToLine} value={soleHang.shown ? ltr(`${(soleHang.shown / 1000).toFixed(2)} מ׳`) : "לא צוין"}>
+                        <Popover label="גובה תלייה" icon={ArrowDownToLine} value={soleHang.shown ? ltr(`${Math.round(soleHang.shown / 10)} ס״מ`) : "לא צוין"}>
                           <PanelRow label="תחתית הפריט מהרצפה (ס״מ)" htmlFor="ce-hang">
                             <NumberField
                               id="ce-hang"
