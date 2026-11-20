@@ -39,7 +39,7 @@ export function CatalogScreen({
 }) {
   // The catalog comes from page.tsx's server-side read; the hook primes the studio's synchronous
   // cache with it and hands back the list plus the three write paths.
-  const { products, ready, error, save, remove, importMany, reload } = useCatalog(initialProducts);
+  const { products, ready, error, save, saveExplained, remove, importMany, reload } = useCatalog(initialProducts);
   // A supplier sells LED strips and stage skirts; a studio has one built-in of each (lib/catalog/built-in.ts).
   const supplierOrg = useIsSupplier();
   const [filters, setFilters] = useState<FilterState>(() => ({ ...EMPTY_FILTERS, sourcing: initialSourcing }));
@@ -67,7 +67,6 @@ export function CatalogScreen({
     [visible, filters, search],
   );
 
-  const saveProduct = (p: Product) => void save(p);
   const deleteProduct = async (id: string) => {
     const { archived } = await remove(id);
     setNotice(archived ? "המוצר משובץ באירועים או בפריט מורכב ולכן הועבר לארכיון — ההצבות נשמרו." : null);
@@ -75,20 +74,29 @@ export function CatalogScreen({
   const confirmDelete = () => {
     // Closed first, and the delete is not awaited: the row is gone from the list the moment the
     // hook's optimistic state updates, and a dialog still sitting over it while that happens reads
-    // as a question that was not answered.
+    // as a question that was not answered. The drawer it was asked from (still open behind the
+    // question) goes with it — the row it shows is the one being deleted.
     const target = deleting;
     setDeleting(null);
-    if (target) void deleteProduct(target.id);
+    if (!target) return;
+    if (editing?.id === target.id) setEditing(null);
+    void deleteProduct(target.id);
   };
   // Fresh id for the product AND every variant — a duplicate must never alias the original's
   // variant ids, or isPlacedAnywhere (lib/catalog/actions.ts) would treat it as already placed
-  // just because the original happens to be.
+  // just because the original happens to be. And a copy is a NEW row of the studio's own (QA PR-14):
+  // private until published (a supplier's copy used to go public at once), not a marketplace copy (no
+  // source to offer a price from), not counted on the shelf (the count was the original's).
   const duplicateProduct = (p: Product) => {
     const copy: Product = {
       ...p,
       id: crypto.randomUUID(),
       name: `${p.name} (עותק)`,
       variants: p.variants.map((v) => ({ ...v, id: crypto.randomUUID() })),
+      visibility: undefined,
+      sourceProductId: undefined,
+      sourceOrgId: undefined,
+      stockQty: undefined,
     };
     void save(copy);
   };
@@ -261,11 +269,14 @@ export function CatalogScreen({
 
       <ProductDrawer
         product={editing}
-        onSave={saveProduct}
+        // The drawer waits for this answer and closes only on true — a refusal keeps the draft open
+        // with the server's reason under it (QA PR-2).
+        onSave={saveExplained}
         knownFlowers={knownFlowers}
         // The drawer's מחיקה asks the same question the menu's does — it is the same destructive
-        // act, and it was the one path that used to delete with no question at all. The drawer
-        // closes itself on the way out, so the two dialogs are never open at once.
+        // act, and it was the one path that used to delete with no question at all. The drawer stays
+        // open behind the question (QA PR-10 — it used to close first, so ביטול lost every edit);
+        // confirmDelete closes it once the row is gone.
         onDelete={(id) => setDeleting(products.find((p) => p.id === id) ?? null)}
         // The category picker's "פריט מורכב" — the same blank composite the catalog bar's button opens.
         onComposite={() => setEditing(blankComposite())}

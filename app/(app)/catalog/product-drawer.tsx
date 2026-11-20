@@ -61,8 +61,11 @@ import type { SourceStatus } from "@/lib/marketplace/types";
 import { formatPrice } from "@/lib/catalog/format";
 import { useIsSupplier } from "@/components/org-kind-context";
 import { canDelete, offeredCategories } from "@/lib/catalog/built-in";
+import { defaultShapeOf, recategorized } from "@/lib/catalog/product-rules";
+import { productProblem, sameDraft, shadeProblem, spareRateFor } from "@/lib/catalog/product-values";
 import { Button } from "@/components/button";
 import { Drawer } from "@/components/drawer";
+import { SaveError, useDrawerExit, type DrawerOnSave } from "./drawer-exit";
 import { FoldRow } from "@/components/fold-row";
 import { SearchInput } from "@/components/search-input";
 import { TagToggle } from "@/components/tag-toggle";
@@ -70,7 +73,7 @@ import { SwitchRow } from "@/components/toggle";
 import { Select } from "@/components/select";
 import { loadProducts } from "@/lib/catalog/storage";
 import { VESSEL_HOLDERS } from "@/lib/catalog/vessel";
-import { AISLE_CATEGORY, AISLE_PIECE_FIELD, AISLE_SIZE_MM, aislePatch, aisleSpecOf, aisleWords } from "@/lib/catalog/aisle";
+import { AISLE_CATEGORY, AISLE_PIECE_FIELD, aislePatch, aisleSpecOf, aisleWords } from "@/lib/catalog/aisle";
 import { aisleViewOf } from "@/lib/studio/catalog-resolver";
 import { AisleFields, AislePiecePicker, aislePieceChoices } from "./aisle-fields";
 import { VesselPicker, vesselChoices } from "./vessel-picker";
@@ -91,8 +94,9 @@ const NO_KNOWN_FLOWERS: KnownFlower[] = knownFlowersOf([]);
 
 /** What a new product of this category is drawn as. `CategoryDef.dims` used to pick which size
  *  fields the drawer showed; it seeds the SHAPE now, and the shape picks the fields — see the
- *  "מראה ומידות" section, and the note on `asksFootprint`. */
-const defaultShape = (c: CategoryDef): MapShape => (c.dims === "round" ? "circle" : "rect");
+ *  "מראה ומידות" section, and the note on `asksFootprint`. (One definition, with the re-filing rule
+ *  that also reads it — lib/catalog/product-rules.ts.) */
+const defaultShape = (c: CategoryDef): MapShape => defaultShapeOf(c);
 
 // What the plan draws for a draft right now — the value a toggle shows as chosen, and the one any
 // appearance patch has to preserve. A product from before `appearance` existed has no row to read
@@ -491,6 +495,10 @@ function pictureLine(p: Product): string | null {
 type RowKey = "img" | "flowers" | "aisle" | "shades" | "price" | "plan" | "spec" | "stock" | "vis";
 type RequiredKey = "name" | "shape" | "dims" | "height";
 
+/** The folded rows a row opens with: every one folded, but an aisle's make-up — the piece that lines
+ *  it is the first thing asked of it. */
+const openRowsFor = (p: Product | null): ReadonlySet<RowKey> => new Set<RowKey>(p?.category === AISLE_CATEGORY ? ["aisle"] : []);
+
 /** "מוצר חדש" / "עריכת מוצר" — the catalog's product drawer (2026-11-09, the user's redesign from
  *  claude.ai/design, "Create Product.dc.html"):
  *
@@ -519,9 +527,12 @@ export function ProductDrawer({
   knownFlowers = NO_KNOWN_FLOWERS,
 }: {
   product: Product | null;
-  onSave: (p: Product) => void;
+  /** The drawer closes once this answers that the save took, and stays open on the draft — saying why —
+   *  when it answers false or a reason (see DrawerSaveAnswer). */
+  onSave: DrawerOnSave;
   /** Absent = no delete in this drawer — the studio opens it to add or edit a row mid-sketch, and a
-   *  row placed on that very plan is a question for /catalog, not for the bar it was opened from. */
+   *  row placed on that very plan is a question for /catalog, not for the bar it was opened from.
+   *  The drawer stays open behind the screen's question; the screen closes it once the row is gone. */
   onDelete?: (id: string) => void;
   onClose: () => void;
   /** Offered on the category picker as "פריט מורכב" — the catalog passes it (a composite is its own
@@ -542,6 +553,11 @@ export function ProductDrawer({
   categories?: CategoryDef[];
 }) {
   const [draft, setDraft] = useState<Product>(blankProduct);
+  // The row as it was when it opened (or, for a new row, once its category was picked) — what a close
+  // compares the draft with before it asks (QA PR-10).
+  const [baseline, setBaseline] = useState<Product>(blankProduct);
+  const dirty = useMemo(() => !sameDraft(draft, baseline), [draft, baseline]);
+  const exit = useDrawerExit({ dirty, onSave, onClose });
   const [submitted, setSubmitted] = useState(false);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   // "picker": the category tiles; "form": the form. A new row starts on the tiles.
@@ -552,7 +568,7 @@ export function ProductDrawer({
   const [query, setQuery] = useState("");
   // Which "אפשר להשלים אחר כך" rows are open. Every row starts folded: they read back on their ends.
   // An aisle's row opens with its make-up out: the piece that lines it is the first thing asked of it.
-  const [rows, setRows] = useState<ReadonlySet<RowKey>>(() => new Set<RowKey>(product?.category === AISLE_CATEGORY ? ["aisle"] : []));
+  const [rows, setRows] = useState<ReadonlySet<RowKey>>(() => openRowsFor(product));
   // "המראה עודכן" on the preview for a moment after the editor saves — the answer to "did it take?".
   const [flash, setFlash] = useState(false);
   const flashTimer = useRef<number | null>(null);
@@ -583,12 +599,18 @@ export function ProductDrawer({
     setShown(product);
     if (product) {
       setDraft(product);
+      setBaseline(product);
+      exit.reset();
       setSubmitted(false);
       setAppearanceOpen(false);
       setStage(startsAtPicker(product) ? "picker" : "form");
       setFromForm(false);
       setQuery("");
-      setRows(new Set());
+      // Nothing of the last row's drawer carries over (QA PR-14): an aisle opens with its make-up out
+      // (it was opened folded), the order-unit box shut, the tag box empty.
+      setRows(openRowsFor(product));
+      setOrderUnitOpen(false);
+      setNewTag("");
       setFlash(false);
     }
   }
@@ -729,58 +751,19 @@ export function ProductDrawer({
     if (first) goTo(first.key);
   };
 
-  const changeCategory = (id: string) =>
-    setDraft((d) => {
-      const c = CATEGORY_BY_ID[id];
-      // A NEW product's height re-seeds with the category while it is still the old category's seed
-      // (or empty) — a fresh row starts as a table at 75cm, and turning it into a chair must not
-      // leave it 75cm tall. A saved product's height is a measurement and is never touched.
-      const seededHeight = CATEGORY_BY_ID[d.category]?.defaultHeightMm ?? 0;
-      const reseedHeight = !d.id && (d.dimensions.heightMm === 0 || d.dimensions.heightMm === seededHeight);
-      // A NEW row's PLANE follows the category's seed too (CategoryDef.front): picked as a backdrop it
-      // becomes a front panel FRONT_THICK_MM thick (a plan depth is no thickness), and picked away from
-      // one while still its front seed it is a plan shape again (a thickness is no plan depth). A saved
-      // row's plane, and a hand-drawn one, are the designer's drawing and are never touched.
-      const handDrawn = d.appearance?.shape === "custom";
-      const fromFront = !!CATEGORY_BY_ID[d.category]?.front;
-      const enterFront = !d.id && !handDrawn && !!c.front && !fromFront && d.appearance?.plane !== "front";
-      const leaveFront = !d.id && !handDrawn && !c.front && fromFront && d.appearance?.plane === "front";
-      const reseeded = reseedHeight ? { ...d.dimensions, heightMm: c.defaultHeightMm ?? 0 } : d.dimensions;
-      const planeSeed: Partial<MapAppearance> = enterFront
-        ? { plane: "front" }
-        : leaveFront
-          ? { plane: undefined, bendDeg: undefined, faceTurnDeg: undefined }
-          : {};
-      // A NEW aisle starts at a size (8 × 3 m — lib/catalog/aisle.ts): its two numbers are its length
-      // and its width across, and an unmeasured one would draw nothing to line.
-      const aisleSeed = !d.id && id === AISLE_CATEGORY && !d.dimensions.widthMm && !d.dimensions.depthMm && !handDrawn;
-      return {
-        ...d,
-        dimensions: aisleSeed ? { ...reseeded, ...AISLE_SIZE_MM, diameterMm: undefined } : enterFront ? { ...reseeded, depthMm: FRONT_THICK_MM } : leaveFront ? { ...reseeded, depthMm: undefined } : reseeded,
-        category: id,
-        layer: c.defaultLayer,
-        categoryFields: {},
-        // The spec follows the category: a product that stops being an arrangement has no flowers.
-        flowers: c.flowers ? d.flowers : undefined,
-        // Re-seeded with the layer and the category fields, for the same reason: the new category's
-        // opinion is a better starting point than the old one's, and it stays editable.
-        stockKind: c.defaultStock,
-        // A NEW product's price unit follows the category while it is still the old category's seed —
-        // the height's rule: a sail is sold by the m² until the designer says otherwise.
-        ...(!d.id && (d.priceUnit ?? "unit") === (CATEGORY_BY_ID[d.category]?.defaultPriceUnit ?? "unit")
-          ? { priceUnit: c.defaultPriceUnit && c.defaultPriceUnit !== "unit" ? c.defaultPriceUnit : undefined }
-          : {}),
-        // The shape re-seeds with them — a centrepiece is round, a stage is a box — except when the
-        // designer has drawn one by hand, which a category change must never throw away. Content is
-        // carried across as whatever the plan already draws, so changing category cannot silently
-        // blank the name off an older product.
-        appearance: handDrawn ? d.appearance : { ...d.appearance, shape: defaultShape(c), content: contentOf(d), ...planeSeed },
-      };
-    });
-  /** `layer`: the place picked with the category, for one whose rows stand anywhere (PLACES). */
+  /** `layer`: the place picked with the category, for one whose rows stand anywhere (PLACES).
+   *
+   *  Re-filing is lib/catalog/product-rules.ts `recategorized`: a NEW row follows the pick whole (its
+   *  shape, layer, stock kind, count fields, and its height, price unit and plane while they are still
+   *  the old category's seed); a SAVED row keeps its drawing, its procurement and the fields the new
+   *  category also asks (QA PR-3 — a rented oval bar re-filed as אחר used to come back an owned
+   *  rectangle with its vessel, hang height, seats and arms gone). */
   const pickCategory = (id: string, layer?: Product["layer"]) => {
-    if (id !== draft.category) changeCategory(id);
-    if (layer) setDraft((d) => (d.layer === layer ? d : { ...d, layer }));
+    let next = id !== draft.category ? recategorized(draft, id) : draft;
+    if (layer && next.layer !== layer) next = { ...next, layer };
+    setDraft(next);
+    // Picking what a NEW row is, is not yet a change to it: a close straight after asks nothing.
+    if (!draft.id && !dirty) setBaseline(next);
     // An aisle's make-up is the first thing asked of it: its row opens with that fold out.
     if (id === AISLE_CATEGORY) setRows((cur) => new Set([...cur, "aisle"]));
     setStage("form");
@@ -833,6 +816,14 @@ export function ProductDrawer({
       goToMissing();
       return;
     }
+    // A shade given a colour or a price but no name used to be dropped by the filter below without a
+    // word (QA PR-11): said, and its row opened, instead.
+    const nameless = shadeProblem(draft.variants);
+    if (nameless) {
+      exit.setError(nameless);
+      setRows((cur) => new Set([...cur, "shades"]));
+      return;
+    }
     const variants = draft.variants
       .map((v) => ({ ...v, id: v.id || uid(), name: v.name.trim() }))
       .filter((v) => v.name !== "" || v.archived);
@@ -840,9 +831,22 @@ export function ProductDrawer({
     // field — so the one number every other surface multiplies by can never disagree with the rows
     // beside it (lib/catalog/flowers.ts).
     const flowers = category.flowers ? cleanFlowers(draft.flowers) : undefined;
-    const categoryFields = flowers ? { ...draft.categoryFields, stems: stemCount(flowers) } : draft.categoryFields;
-    onSave({ ...draft, id: draft.id || uid(), name: draft.name.trim(), variants, flowers, categoryFields });
-    onClose();
+    const counted = flowers ? { ...draft.categoryFields, stems: stemCount(flowers) } : draft.categoryFields;
+    // A row that HANGS stands in no vase (QA PR-7): the field is not offered on the ceiling, so a vase
+    // chosen while the row stood on a table would otherwise ride along unseen — counted, packed and
+    // quoted under a hung arrangement. (lib/catalog/vessel.ts vesselOf ignores one there too.)
+    const { vessel: _hidden, ...unvased } = counted;
+    void _hidden;
+    const categoryFields = draft.layer === "ceiling" ? unvased : counted;
+    const p: Product = { ...draft, id: exit.idFor(draft), name: draft.name.trim(), variants, flowers, categoryFields };
+    // The numbers no row may be stored with (a size, a price) — the server asks the same, this only
+    // says it without the round trip.
+    const problem = productProblem(p);
+    if (problem) {
+      exit.setError(problem);
+      return;
+    }
+    void exit.save(p);
   };
 
   // The category's count-multipliers (seats, arms) — F-4.3: only these are structured. A flower
@@ -904,7 +908,8 @@ export function ProductDrawer({
         : [{ c, key: c.id, layer: undefined as Product["layer"] | undefined, label: c.label, hint: seedOf(c) }];
     const groups = CATEGORY_GROUPS.map((g) => ({ g, items: offered.filter((c) => c.group === g.id && (!q || categoryNamed(c, q))).flatMap(tiles) })).filter((x) => x.items.length > 0);
     return (
-      <Drawer title={isEdit ? "עריכת מוצר" : "מוצר חדש"} onClose={onClose}>
+      <Drawer title={isEdit ? "עריכת מוצר" : "מוצר חדש"} onClose={onClose} canClose={exit.canClose}>
+        {exit.question}
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
           <div>
             <p className="text-[17px] font-bold text-ink">{isEdit ? "לאיזו קטגוריה הפריט שייך?" : "מה מוסיפים לקטלוג?"}</p>
@@ -995,9 +1000,12 @@ export function ProductDrawer({
 
   // What each folded row holds, on its end.
   const tagCount = draft.styleTags.length;
-  const stems = category.flowers ? stemCount(draft.flowers ?? []) : 0;
   const flowerRows = (draft.flowers ?? []).filter((l) => l.name.trim()).length;
-  const vesselLabel = vesselValue ? vesselChoices(loadProducts()).find((o) => o.value === vesselValue)?.label : undefined;
+  // The rows' sum, or — with no rows — the bare total typed under them (QA PR-14: a typed 180 read
+  // "אין מפרט").
+  const stems = !category.flowers ? 0 : flowerRows ? stemCount(draft.flowers ?? []) : Number(draft.categoryFields.stems ?? 0);
+  // A hung row stands in no vase, whatever is left in the field (see `save`).
+  const vesselLabel = vesselValue && draft.layer !== "ceiling" ? vesselChoices(loadProducts()).find((o) => o.value === vesselValue)?.label : undefined;
   const kind: StockKind = draft.stockKind ?? "owned";
   const supplierName = draft.supplierId ? suppliers.find((s) => s.id === draft.supplierId)?.name : undefined;
   const counted = countFields
@@ -1039,7 +1047,8 @@ export function ProductDrawer({
     // The shell — geometry, header, close button and the single scrollbar — is the app's shared
     // drawer (components/drawer.tsx), the same one the dashboard's event detail opens. This screen
     // owns only the form inside it.
-    <Drawer title={isEdit ? "עריכת מוצר" : "מוצר חדש"} titleAside={categoryPill} onClose={onClose}>
+    <Drawer title={isEdit ? "עריכת מוצר" : "מוצר חדש"} titleAside={categoryPill} onClose={onClose} canClose={exit.canClose}>
+      {exit.question}
       <form
         method="dialog"
         onSubmit={(e) => {
@@ -1322,7 +1331,13 @@ export function ProductDrawer({
                           e.preventDefault();
                           addTag();
                         }
-                        if (e.key === "Escape") setNewTag("");
+                        // Field first (QA PR-10): Esc clears what is typed here, and only an Esc on
+                        // an empty box reaches the drawer — preventDefault keeps the dialog's close
+                        // watcher from closing the whole drawer on the first one.
+                        if (e.key === "Escape" && newTag) {
+                          e.preventDefault();
+                          setNewTag("");
+                        }
                       }}
                       placeholder="+ תגית משלכם"
                       aria-label="הוספת תגית סטייל"
@@ -1361,7 +1376,7 @@ export function ProductDrawer({
                 </div>
               </FoldRow>
             )}
-            {(category.flowers || vesselHolder) && (
+            {(category.flowers || (vesselHolder && draft.layer !== "ceiling")) && (
               <FoldRow
                 icon={category.flowers ? Flower2 : Amphora}
                 title={category.flowers ? "מפרט פרחים" : "כלי"}
@@ -1637,15 +1652,18 @@ export function ProductDrawer({
                         {/* Only the owned kind has a count worth keeping: a consumable's stock is gone
                             after the event, and a rental is never yours. "לא נספר" is a real answer. */}
                         {kind === "owned" && (
+                          // A count, so whole (QA PR-2: the column is an integer, and 2.5 failed the
+                          // save) — rounded as it is typed, and shown as stored.
                           <NumberField
                             id="p-stock"
                             label="כמה יש לכם"
                             className="w-44"
                             min={0}
+                            decimals={0}
                             hideZero
                             placeholder="לא נספר"
                             value={draft.stockQty ?? 0}
-                            onChange={(v) => patch({ stockQty: v || undefined })}
+                            onChange={(v) => patch({ stockQty: Math.round(v) || undefined })}
                           />
                         )}
 
@@ -1676,20 +1694,30 @@ export function ProductDrawer({
                         )}
 
                         {/* פחת — a rule about the product (Product.spareRate), never a usage figure:
-                            the order is this much over what the plan counts. The category's default
-                            shows as the placeholder, so a blank field still means 10% on a rose. */}
+                            the order is this much over what the plan counts. The field shows the rate
+                            the order will use — the row's own, else its category's — so a 0 typed on a
+                            rose reads 0 and is stored as 0 (QA PR-6: it was stored as nothing, which
+                            IS the category's 10%). Whole percent, like the column (PR-2). */}
                         {kind === "consumable" && (
-                          <NumberField
-                            id="p-spare"
-                            label="פחת — כמה אחוז מזמינים מעבר לספירה"
-                            className="w-44"
-                            min={0}
-                            max={100}
-                            hideZero
-                            placeholder={String(category.defaultSpareRate ?? 0)}
-                            value={draft.spareRate ?? 0}
-                            onChange={(v) => patch({ spareRate: v || undefined })}
-                          />
+                          <div>
+                            <NumberField
+                              id="p-spare"
+                              label="פחת — כמה אחוז מזמינים מעבר לספירה"
+                              className="w-44"
+                              min={0}
+                              max={100}
+                              decimals={0}
+                              hideZero={!category.defaultSpareRate}
+                              placeholder="0"
+                              value={draft.spareRate ?? category.defaultSpareRate ?? 0}
+                              onChange={(v) => patch({ spareRate: spareRateFor(v, category.defaultSpareRate) })}
+                            />
+                            {!!category.defaultSpareRate && (
+                              <p className="mt-1 text-xs leading-relaxed text-muted">
+                                ברירת המחדל ל{category.label}: {category.defaultSpareRate}%. 0 = בלי פחת.
+                              </p>
+                            )}
+                          </div>
                         )}
 
                         {/* The two order fields, folded: a florist sells stems and a fabric house
@@ -1777,9 +1805,12 @@ export function ProductDrawer({
           </section>
         </div>
 
+        <SaveError message={exit.error} />
         <footer className="flex items-center gap-2 border-t border-border bg-surface px-5 py-3.5">
-          <Button type="submit">שמירה</Button>
-          <Button variant="ghost" onClick={onClose}>
+          <Button type="submit" disabled={exit.saving}>
+            {exit.saving ? "שומר…" : "שמירה"}
+          </Button>
+          <Button variant="ghost" onClick={exit.cancel}>
             ביטול
           </Button>
           <div className="ms-auto flex min-w-0 items-center gap-3">
@@ -1801,13 +1832,10 @@ export function ProductDrawer({
               )
             )}
             {isEdit && onDelete && canDelete(product) && (
-              <Button
-                variant="danger"
-                onClick={() => {
-                  onDelete(draft.id);
-                  onClose();
-                }}
-              >
+              // The screen asks, with the drawer still open behind its question (QA PR-10: the drawer
+              // used to close first, so ביטול on the question left every edit thrown away), and
+              // closes it once the row is gone.
+              <Button variant="danger" onClick={() => onDelete(draft.id)}>
                 <Trash2 className="h-4 w-4" strokeWidth={2} />
                 מחיקה
               </Button>

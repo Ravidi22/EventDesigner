@@ -109,6 +109,13 @@ function check(label: string, ok: boolean, detail = "") {
   if (!ok) failures++;
 }
 
+/** saveProduct's catalog — it answers `{ error }` for a row it refuses, which here is a failed check. */
+function saved(answer: Awaited<ReturnType<typeof saveProduct>>): Product[] {
+  if ("products" in answer) return answer.products;
+  check("saveProduct accepted the row", false, answer.error);
+  return [];
+}
+
 /** Drop undefined keys, the way JSON transport does — absent and undefined are one thing here. */
 const clean = (p: Product) => JSON.parse(JSON.stringify(p)) as Record<string, unknown>;
 
@@ -149,7 +156,7 @@ async function main() {
 
   // ── round trip ───────────────────────────────────────────────────────────────────────────────
   const original = fixture();
-  const afterSave = await saveProduct(original);
+  const afterSave = saved(await saveProduct(original));
   const returned = afterSave.find((p) => p.id === original.id);
   check("saveProduct created it", !!returned);
 
@@ -171,11 +178,11 @@ async function main() {
   // ── visibility ───────────────────────────────────────────────────────────────────────────────
   check("a new product defaults to private (absent)", returned?.visibility === undefined, String(returned?.visibility));
 
-  const published = await saveProduct({ ...original, visibility: "public" });
+  const published = saved(await saveProduct({ ...original, visibility: "public" }));
   const pub = published.find((p) => p.id === original.id);
   check("publishing persists", pub?.visibility === "public", String(pub?.visibility));
 
-  const unpublished = await saveProduct({ ...original, visibility: "private" });
+  const unpublished = saved(await saveProduct({ ...original, visibility: "private" }));
   const priv = unpublished.find((p) => p.id === original.id);
   check("un-publishing collapses back to absent, not the string", priv?.visibility === undefined, String(priv?.visibility));
 
@@ -183,17 +190,17 @@ async function main() {
   // Same rule as the letterhead's and the gallery's, and it is wired separately in each, so it is
   // asserted separately: only a URL naming an object THIS studio uploaded may be stored.
   const ownImage = `/api/files/${SINGLE_ORG_ID}/product/${crypto.randomUUID()}.jpg`;
-  const pictured = (await saveProduct({ ...original, imageUrl: ownImage })).find((p) => p.id === original.id);
+  const pictured = saved(await saveProduct({ ...original, imageUrl: ownImage })).find((p) => p.id === original.id);
   check("an uploaded product image survives", pictured?.imageUrl === ownImage, pictured?.imageUrl);
 
-  const external = (await saveProduct({ ...original, imageUrl: "https://example.com/x.jpg" })).find(
+  const external = saved(await saveProduct({ ...original, imageUrl: "https://example.com/x.jpg" })).find(
     (p) => p.id === original.id,
   );
   check("an external URL is refused as a product image", external?.imageUrl === undefined, external?.imageUrl);
 
   // ── update ───────────────────────────────────────────────────────────────────────────────────
   const edited = { ...original, name: "בדיקה — שם מעודכן", variants: [] };
-  const afterEdit = await saveProduct(edited);
+  const afterEdit = saved(await saveProduct(edited));
   const updated = afterEdit.find((p) => p.id === original.id);
   check("update is in place, not a duplicate", afterEdit.filter((p) => p.id === original.id).length === 1);
   check("rename landed", updated?.name === "בדיקה — שם מעודכן");

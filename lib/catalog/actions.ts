@@ -23,7 +23,8 @@ import { installStandardCatalog } from "./standard/install";
 import { standardProductId, uuidV5 } from "./standard/id";
 import { compositeShell, fromTableDesign } from "./composition";
 import { markBuiltIns, builtInKeyOf } from "./standard/built-ins";
-import { BUILT_IN_DELETE_REFUSAL, isBuiltInCategory, isSupplierCategory } from "./built-in";
+import { BUILT_IN_CATEGORY_REFUSAL, BUILT_IN_DELETE_REFUSAL, SUPPLIER_CATEGORY_REFUSAL, isBuiltInCategory, isSupplierCategory } from "./built-in";
+import { productProblem } from "./product-values";
 
 // ── Input guards ───────────────────────────────────────────────────────────────────────────────
 //
@@ -152,12 +153,23 @@ export async function fetchCatalogShades(): Promise<CatalogShade[]> {
  *  The variants are replaced wholesale rather than diffed: the drawer edits the list as a unit, and
  *  a diff would have to guess whether a missing variant was deleted or simply not sent. Deleting
  *  and re-inserting inside ONE transaction means a reader never observes a product with no shades —
- *  and means a failure leaves the previous state intact rather than a half-applied edit. */
-export async function saveProduct(product: Product): Promise<Product[]> {
+ *  and means a failure leaves the previous state intact rather than a half-applied edit.
+ *
+ *  Answers the fresh catalog, or — for a refusal the designer can act on — `{ error }` with why: Next
+ *  redacts a thrown message in production, and the drawer stays open on the draft and says it (QA
+ *  2026-11-20, PR-2). A request no form could have sent still throws. */
+export async function saveProduct(product: Product): Promise<{ products: Product[] } | { error: string }> {
   assertProduct(product);
   const organizationId = await currentOrg();
+  // The numbers a row cannot be stored with (./product-values.ts): a stock count of 2.5 or a פחת of
+  // 7.5 (integer columns), a negative or absurd size, a price that is no price. The column would
+  // refuse them with an error nobody is shown (QA PR-2, PR-9).
+  const problem = productProblem(product);
+  if (problem) return { error: problem };
   const row = toProductRow(product, organizationId);
-  const variantRows = toVariantRows(product, organizationId);
+  // Every image the row names — each shade's as well as the product's (QA PR-12: a shade's image went
+  // to the outputs and the client portal unchecked) — must be one this studio uploaded.
+  const variantRows = toVariantRows(product, organizationId).map((v) => ({ ...v, imageUrl: ownedFileUrl(v.imageUrl, organizationId) }));
   // A composite names this studio's own rows (lib/catalog/composition.ts): another studio could
   // place nothing it is made of, so it is never published, whatever the request says.
   if (row.composition) row.visibility = "private";
@@ -185,12 +197,13 @@ export async function saveProduct(product: Product): Promise<Product[]> {
     row.archived = false;
   } else if (!existing && (isBuiltInCategory(row.category) || isSupplierCategory(row.category)) && (await currentActor()).organizationKind !== "supplier") {
     // …and a supplier's category (a cut stem) takes no studio row at all — a studio's flowers are
-    // its arrangements, and a stem reaches it as a spec line.
-    throw new Error("a built-in or supplier category takes no new studio row");
+    // its arrangements, and a stem reaches it as a spec line. Answered, not thrown (QA PR-8): a copy
+    // of an old stem row reached here, and the screen could say only "השמירה נכשלה".
+    return { error: isSupplierCategory(row.category) ? SUPPLIER_CATEGORY_REFUSAL : BUILT_IN_CATEGORY_REFUSAL };
   }
 
   await db().transaction(async (tx) => {
-    await tx
+    const written = await tx
       .insert(products)
       .values(row)
       .onConflictDoUpdate({
@@ -198,7 +211,12 @@ export async function saveProduct(product: Product): Promise<Product[]> {
         // Scoped: an UPDATE that omitted this would let a crafted id edit another studio's row.
         setWhere: eq(products.organizationId, organizationId),
         set: { ...row, updatedAt: new Date() },
-      });
+      })
+      .returning({ id: products.id });
+    // An id that is ANOTHER organisation's row: the scoped upsert updated nothing — and the shades
+    // below used to be written under that id anyway, attached to a row this studio does not own, with
+    // a success reported (QA PR-13). Refused before a shade is touched; the transaction rolls back.
+    if (written.length === 0) throw new Error("product id belongs to another organisation");
 
     await tx
       .delete(productVariants)
@@ -216,7 +234,7 @@ export async function saveProduct(product: Product): Promise<Product[]> {
   await removeReplacedFile(existing?.imageUrl, row.imageUrl, organizationId);
 
   revalidateCatalog();
-  return fetchProducts();
+  return { products: await fetchProducts() };
 }
 
 /** F-4.5: does anything this studio keeps NAME one of these variant ids — so that deleting the row
@@ -437,10 +455,16 @@ export async function importProducts(list: Product[]): Promise<Product[]> {
   if (organizationKind !== "supplier" && list.some((p) => isBuiltInCategory(p.category) || isSupplierCategory(p.category))) {
     throw new Error("a built-in or supplier category takes no imported studio row");
   }
+  // …and so are the numbers no row may be stored with — a negative size, a fractional count
+  // (./product-values.ts; QA PR-9): the import screen refuses such a LINE by name.
+  const problem = list.map(productProblem).find((p) => p !== null);
+  if (problem) throw new Error(`an imported row cannot be stored: ${problem}`);
 
+  // The rows are written as they came, but an image only if this studio uploaded it (QA PR-12): a
+  // sheet names none, a request may name anybody's.
   await db().transaction(async (tx) => {
-    await tx.insert(products).values(list.map((p) => toProductRow(p, organizationId)));
-    const variantRows = list.flatMap((p) => toVariantRows(p, organizationId));
+    await tx.insert(products).values(list.map((p) => ({ ...toProductRow(p, organizationId), imageUrl: ownedFileUrl(p.imageUrl, organizationId) })));
+    const variantRows = list.flatMap((p) => toVariantRows(p, organizationId)).map((v) => ({ ...v, imageUrl: ownedFileUrl(v.imageUrl, organizationId) }));
     if (variantRows.length) await tx.insert(productVariants).values(variantRows);
   });
 

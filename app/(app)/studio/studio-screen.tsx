@@ -307,7 +307,7 @@ export function StudioScreen({
 }) {
   // Held once here, for the whole studio: it fills the rail below AND primes the synchronous cache
   // that the canvas's resolver and dropProduct() read during render and mid-drag.
-  const { products: catalog, ready: catalogReady, error: catalogError, installStageBasics, installStageParts, save: saveProduct, remove: removeCatalogRow } = useCatalog(initialProducts);
+  const { products: catalog, ready: catalogReady, error: catalogError, installStageBasics, installStageParts, save: saveProduct, saveExplained: saveCatalogRow, remove: removeCatalogRow } = useCatalog(initialProducts);
   // A new catalog item made from the rail (its "+"), so a client asking for something the catalog
   // lacks does not end the meeting. The form is the catalog's own drawer; in the meeting's passes it
   // opens without anything a client must not see, and offers only the categories this pass's rail
@@ -6465,7 +6465,9 @@ export function StudioScreen({
         product={drawer?.product ?? null}
         internal={mode === "full"}
         categories={drawerCategories}
-        onSave={(p) => void (drawer?.mode === "new" ? addProduct(p) : drawer?.mode === "composite" ? addComposite(p) : updateProduct(p))}
+        // Answered: the drawer closes once the row is saved, and stays open on the draft with the
+        // reason when it is not (QA 2026-11-20, PR-2).
+        onSave={(p) => (drawer?.mode === "new" ? addProduct(p) : drawer?.mode === "composite" ? addComposite(p) : updateProduct(p))}
         // No onDelete: the drawer shows no delete from the studio (see `drawer`).
         onClose={() => {
           setDrawer(null);
@@ -6477,45 +6479,46 @@ export function StudioScreen({
   );
 
   /** An existing row saved from the drawer. The canvas and the rail redraw from the catalog cache the
-   *  save updates, so a new size or shade is on the plan the moment the drawer closes. */
-  async function updateProduct(p: Product) {
-    showHint((await saveProduct(p)) ? `${p.name} עודכן בקטלוג` : "השמירה בקטלוג נכשלה — נסו שוב");
+   *  save updates, so a new size or shade is on the plan the moment the drawer closes. A save that did
+   *  not take answers why, and the drawer says it over the draft. */
+  async function updateProduct(p: Product): Promise<true | string> {
+    const answer = await saveCatalogRow(p);
+    if (answer === true) showHint(`${p.name} עודכן בקטלוג`);
+    return answer;
   }
 
   /** A composite saved from the drawer: pinned to the head of the rail, to be dragged onto the next
    *  plan — dressed — whenever it is wanted. */
-  async function addComposite(p: Product) {
-    if (await saveProduct(p)) {
+  async function addComposite(p: Product): Promise<true | string> {
+    const answer = await saveCatalogRow(p);
+    if (answer === true) {
       setAddedIds((ids) => [p.id, ...ids]);
       showHint(`${p.name} נשמר בקטלוג כפריט מורכב — גוררים אותו מהרשימה כדי להניח אותו שוב`);
-    } else {
-      showHint("השמירה בקטלוג נכשלה — נסו שוב");
     }
+    return answer;
   }
 
-  async function addProduct(p: Product) {
+  async function addProduct(p: Product): Promise<true | string> {
     // "שטיח מותאם…" (lib/studio/cover.ts): the new rug was made for a surface or a stage, and is laid
     // over it once saved — not armed. Read before the save: the drawer's close clears it.
     const aim = coverPending.current;
     coverPending.current = null;
-    if (aim) {
-      if (await saveProduct(p)) {
-        setAddedIds((ids) => [p.id, ...ids]);
-        layCarpet(aim, defaultVariantId(p));
-        showHint(`${p.name} נוסף לקטלוג והונח ${aim.kind === "stage" ? "על הבמה" : `על ${aim.name}`} — המחיר נקבע בקטלוג`);
-      } else {
-        showHint("ההוספה לקטלוג נכשלה — נסו שוב");
-      }
-      return;
+    const answer = await saveCatalogRow(p);
+    if (answer !== true) {
+      // The drawer stays open on the draft — and the surface it was made for still waits for it.
+      coverPending.current = aim;
+      return answer;
     }
-    if (await saveProduct(p)) {
-      setAddedIds((ids) => [p.id, ...ids]);
+    setAddedIds((ids) => [p.id, ...ids]);
+    if (aim) {
+      layCarpet(aim, defaultVariantId(p));
+      showHint(`${p.name} נוסף לקטלוג והונח ${aim.kind === "stage" ? "על הבמה" : `על ${aim.name}`} — המחיר נקבע בקטלוג`);
+    } else {
       // Armed straight away: the reason it was made, mid-meeting, is to put it on the plan.
       arm(p.id);
       showHint(`${p.name} נוסף לקטלוג — לחצו על התוכנית כדי להניח`);
-    } else {
-      showHint("ההוספה לקטלוג נכשלה — נסו שוב");
     }
+    return answer;
   }
 
   /** "הוספה לקטלוג" for the pieces a stage's rim is missing (layStage `missing`): each one a

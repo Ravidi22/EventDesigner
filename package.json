@@ -107,6 +107,7 @@
     "check:flowers": "tsx lib/catalog/flowers.ts",
     "check:vessel": "tsx lib/catalog/vessel.ts",
     "check:variant-refs": "tsx lib/catalog/variant-refs.ts",
+    "check:product-rules": "tsx lib/catalog/product-rules.ts",
     "check:composition": "tsx lib/catalog/composition.ts",
     "check:flower-kinds": "tsx lib/catalog/flower-kinds.ts",
     "check:flower-draw": "tsx lib/catalog/flower-draw.ts",

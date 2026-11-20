@@ -2460,10 +2460,12 @@ export function Inspector({
             </>,
             <ShadeFields shades={shades} value={p.variantId} onChange={(v) => onVariant(p.id, v)} />,
           ),
-        // The vase or jug an arrangement stands in — packed and counted with it.
+        // The vase or jug an arrangement stands in — packed and counted with it. Not for one that hangs:
+        // a hung arrangement stands in none (lib/catalog/vessel.ts vesselOf).
         !!onVessel &&
           !!r &&
           takesVessel(r.product) &&
+          r.product.layer !== "ceiling" &&
           G("vessel", Amphora, "כלי", vesselView(p.vessel, rowVessel).name, <VesselPickRow own={p.vessel} rowVessel={rowVessel} onVessel={(v) => onVessel([p.id], v)} />),
         // A rug's or a runner's contour on THIS plan — its row's until it is given its own.
         !!onBorder &&

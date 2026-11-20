@@ -21,6 +21,8 @@ import { fieldLabelClassName } from "@/components/control";
 import { CompositionDrawing } from "@/components/composition-drawing";
 import { compositeTotal } from "./composite-summary";
 import type { CompositionEditorProps } from "./composition-editor";
+import { SaveError, useDrawerExit, type DrawerOnSave } from "./drawer-exit";
+import { sameDraft } from "@/lib/catalog/product-values";
 
 // The canvas editor carries the studio's whole canvas — its own chunk, fetched when it is opened.
 const CompositionEditor = dynamic<CompositionEditorProps>(() => import("./composition-editor"), { ssr: false });
@@ -56,13 +58,18 @@ export function CompositeDrawer({
   internal = true,
 }: {
   product: Product;
-  onSave: (p: Product) => void;
+  /** Answered: the drawer closes once the save took, and stays on the draft with the reason when not. */
+  onSave: DrawerOnSave;
+  /** The screen asks, with the drawer open behind its question, and closes it once the row is gone. */
   onDelete?: (id: string) => void;
   onClose: () => void;
   /** False in front of a client (the meeting): the parts' total is not shown. */
   internal?: boolean;
 }) {
   const [draft, setDraft] = useState<Product>(product);
+  // Mounted fresh per opening, so the row it opened on IS what a close compares the draft with.
+  const dirty = useMemo(() => !sameDraft(draft, product), [draft, product]);
+  const exit = useDrawerExit({ dirty, onSave, onClose });
   const [submitted, setSubmitted] = useState(false);
   const [newTag, setNewTag] = useState("");
   const [query, setQuery] = useState("");
@@ -101,8 +108,7 @@ export function CompositeDrawer({
   const save = () => {
     setSubmitted(true);
     if (missingName || empty) return;
-    onSave({ ...draft, id: draft.id || uid(), name: draft.name.trim() });
-    onClose();
+    void exit.save({ ...draft, id: exit.idFor(draft), name: draft.name.trim() });
   };
 
   const counted = compositionCounts(composition);
@@ -118,7 +124,12 @@ export function CompositeDrawer({
   };
 
   return (
-    <Drawer title={tableSet ? (isEdit ? "עריכת עיצוב שולחן" : "עיצוב שולחן חדש") : isEdit ? "עריכת פריט מורכב" : "פריט מורכב חדש"} onClose={onClose}>
+    <Drawer
+      title={tableSet ? (isEdit ? "עריכת עיצוב שולחן" : "עיצוב שולחן חדש") : isEdit ? "עריכת פריט מורכב" : "פריט מורכב חדש"}
+      onClose={onClose}
+      canClose={exit.canClose}
+    >
+      {exit.question}
       <form
         method="dialog"
         onSubmit={(e) => {
@@ -275,7 +286,11 @@ export function CompositeDrawer({
                     e.preventDefault();
                     addTag();
                   }
-                  if (e.key === "Escape") setNewTag("");
+                  // Field first: Esc clears the box, and only an Esc on an empty one reaches the drawer.
+                  if (e.key === "Escape" && newTag) {
+                    e.preventDefault();
+                    setNewTag("");
+                  }
                 }}
                 placeholder="+ תגית משלכם"
                 aria-label="הוספת תגית סטייל"
@@ -293,20 +308,17 @@ export function CompositeDrawer({
           />
         </div>
 
+        <SaveError message={exit.error} />
         <footer className="flex items-center gap-2 border-t border-[#ebe8f5] bg-surface px-5 py-3.5">
-          <Button type="submit">שמירה</Button>
-          <Button variant="ghost" onClick={onClose}>
+          <Button type="submit" disabled={exit.saving}>
+            {exit.saving ? "שומר…" : "שמירה"}
+          </Button>
+          <Button variant="ghost" onClick={exit.cancel}>
             ביטול
           </Button>
           {isEdit && onDelete && (
-            <Button
-              variant="danger"
-              className="ms-auto"
-              onClick={() => {
-                onDelete(draft.id);
-                onClose();
-              }}
-            >
+            // The drawer stays open behind the screen's question (QA PR-10).
+            <Button variant="danger" className="ms-auto" onClick={() => onDelete(draft.id)}>
               <Trash2 className="h-4 w-4" strokeWidth={2} />
               מחיקה
             </Button>

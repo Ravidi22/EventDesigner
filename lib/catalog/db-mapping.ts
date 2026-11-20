@@ -101,6 +101,13 @@ export function toProducts(rows: ProductRow[], variantRows: VariantRow[]): Produ
  *  how you get 1234.5600000000001 in a quote. */
 const toNumeric = (v: number | undefined): string | null => (v === undefined ? null : String(v));
 
+/** An `integer` column: the driver hands the number over as text and Postgres refuses "450.5" for an
+ *  int, failing the whole save (QA 2026-11-20, PR-2). A size worked out from geometry can carry a
+ *  fraction of a millimetre nobody typed, so the millimetre columns are rounded here, at the one
+ *  seam every write passes. (A COUNT that is not whole — a stock of 2.5 — is refused with words
+ *  before it gets here: lib/catalog/product-values.ts productProblem.) */
+const toInteger = (v: number | undefined | null): number | null => (v === undefined || v === null ? null : Math.round(v));
+
 export function toProductRow(p: Product, organizationId: string): ProductInsert {
   return {
     id: p.id,
@@ -109,10 +116,10 @@ export function toProductRow(p: Product, organizationId: string): ProductInsert 
     imageUrl: p.imageUrl ?? null,
     layer: p.layer,
     category: p.category,
-    diameterMm: p.dimensions.diameterMm ?? null,
-    widthMm: p.dimensions.widthMm ?? null,
-    depthMm: p.dimensions.depthMm ?? null,
-    heightMm: p.dimensions.heightMm,
+    diameterMm: toInteger(p.dimensions.diameterMm),
+    widthMm: toInteger(p.dimensions.widthMm),
+    depthMm: toInteger(p.dimensions.depthMm),
+    heightMm: Math.round(p.dimensions.heightMm),
     categoryFields: p.categoryFields,
     spec: p.spec ?? null,
     // Absent and empty are one answer — "no spec" — and the column holds it as NULL, not as [].
@@ -122,16 +129,16 @@ export function toProductRow(p: Product, organizationId: string): ProductInsert 
     styleTags: p.styleTags,
     appearance: p.appearance ?? null,
     resize: p.resize ?? null,
-    clearanceMm: p.clearanceMm ?? null,
+    clearanceMm: toInteger(p.clearanceMm),
     visibility: p.visibility ?? "private",
     archived: p.archived ?? false,
     supplierId: p.supplierId ?? null,
     costPrice: toNumeric(p.costPrice),
     stockKind: p.stockKind ?? "owned",
-    stockQty: p.stockQty ?? null,
+    stockQty: toInteger(p.stockQty),
     orderUnit: p.orderUnit ?? null,
     orderFactor: toNumeric(p.orderFactor),
-    spareRate: p.spareRate ?? null,
+    spareRate: toInteger(p.spareRate),
     sourceProductId: p.sourceProductId ?? null,
     sourceOrgId: p.sourceOrgId ?? null,
     composition: p.composition ?? null,

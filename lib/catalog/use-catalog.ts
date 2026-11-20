@@ -21,6 +21,10 @@ export interface CatalogHandle {
   error: string | null;
   /** True once the server has it. False means `error` says why. */
   save: (product: Product) => Promise<boolean>;
+  /** The same save, answering WHY it did not take: true, or the reason — the server's own for a row it
+   *  refuses (a stock count that is not whole, a size that is no size), else that the save failed. The
+   *  product drawer stays open on its draft and shows it (QA 2026-11-20, PR-2). */
+  saveExplained: (product: Product) => Promise<true | string>;
   remove: (id: string) => Promise<{ archived: boolean }>;
   importMany: (list: Product[]) => Promise<void>;
   reload: () => Promise<void>;
@@ -93,18 +97,24 @@ export function useCatalog(initial?: Product[]): CatalogHandle {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adopt]);
 
-  const save = useCallback(
-    async (product: Product) => {
+  const saveExplained = useCallback(
+    async (product: Product): Promise<true | string> => {
       try {
-        adopt(await saveProduct(product));
+        const answer = await saveProduct(product);
+        if ("error" in answer) {
+          setError(answer.error);
+          return answer.error;
+        }
+        adopt(answer.products);
         return true;
       } catch {
-        setError("השמירה נכשלה");
-        return false;
+        setError(SAVE_FAILED);
+        return SAVE_FAILED;
       }
     },
     [adopt],
   );
+  const save = useCallback(async (product: Product) => (await saveExplained(product)) === true, [saveExplained]);
 
   const remove = useCallback(
     async (id: string) => {
@@ -154,5 +164,8 @@ export function useCatalog(initial?: Product[]): CatalogHandle {
     }
   }, [adopt]);
 
-  return { products, ready, error, save, remove, importMany, reload, installStageBasics: installBasics, installStageParts: installParts };
+  return { products, ready, error, save, saveExplained, remove, importMany, reload, installStageBasics: installBasics, installStageParts: installParts };
 }
+
+/** What a save that threw is reported as — the network, the database: nothing the form can fix. */
+const SAVE_FAILED = "השמירה נכשלה — השינויים לא נשמרו. נסו שוב.";

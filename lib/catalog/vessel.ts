@@ -38,12 +38,14 @@ export function productVessel(p: Pick<Product, "categoryFields"> | undefined): s
  * The vessel this placement stands in, as a variant id: its own (`vessel`), else its row's — and
  * only when that names a row of the vessels' category, so a deleted or re-filed vase is simply no
  * vessel rather than a phantom line on the packing list. `null` on the placement is "none here",
- * whatever the row says.
+ * whatever the row says. A row that HANGS (layer "ceiling" — a flower cloud, a hoop) stands in no
+ * vessel at all: the drawer offers none for it, and one left from when the row stood on a table was
+ * still counted, packed and quoted under it (QA 2026-11-20, PR-7).
  */
 export function vesselOf(p: Pick<Placement, "variantId" | "vessel">, productOf: (variantId: string) => Product | undefined): string | undefined {
   if (p.vessel === null) return undefined;
   const holder = productOf(p.variantId);
-  if (!takesVessel(holder)) return undefined;
+  if (!takesVessel(holder) || holder?.layer === "ceiling") return undefined;
   const id = p.vessel ?? productVessel(holder);
   return id && isVessel(productOf(id)) ? id : undefined;
 }
@@ -73,5 +75,11 @@ if (isMain(import.meta.url)) {
   assert(vesselOf({ variantId: "candle", vessel: "glass" }, of) === undefined, "a candlestick is not set in a vase");
   assert(vesselOf({ variantId: "bare", vessel: "napkin" }, of) === undefined, "a vessel must be a vessel");
   assert(vesselOf({ variantId: "bare", vessel: "gone" }, of) === undefined, "…and must still be in the catalog");
+  // QA PR-7: an arrangement row moved to "תלוי מהתקרה" kept the vase it was given on a table — the
+  // field is not offered for a hung row, so nobody could see it, and it was still counted and quoted.
+  const hung = { ...row("cloud", "flower-arrangements", { vessel: "jug-gold" }), layer: "ceiling" } as Product;
+  rows.set("cloud", hung);
+  assert(vesselOf({ variantId: "cloud" }, of) === undefined, "a HUNG arrangement stands in no vase, whatever its row still holds");
+  assert(vesselOf({ variantId: "cloud", vessel: "glass" }, of) === undefined, "…nor in one a placement names");
   console.log("vessel self-check passed");
 }

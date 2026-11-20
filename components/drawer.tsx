@@ -31,6 +31,7 @@ export function Drawer({
   titleAside,
   subtitle,
   onClose,
+  canClose,
   closeLabel = "סגירה",
   actions,
   children,
@@ -45,6 +46,10 @@ export function Drawer({
   subtitle?: ReactNode;
   /** Fired by Esc and by the header's close button — the caller unmounts the drawer. */
   onClose: () => void;
+  /** Asked first, by Esc and the ✕, in a drawer holding something a close would throw away (a changed
+   *  form): true = close; false = stay open — the caller asks its own question (a ConfirmDialog) and
+   *  calls `onClose` itself on a yes. Absent = always close. */
+  canClose?: () => boolean;
   closeLabel?: string;
   /** What this drawer can DO to the thing it is showing, beside the close button — in practice a
    *  `Menu`. It is a slot rather than an `items` prop because the shell has no business knowing
@@ -70,7 +75,19 @@ export function Drawer({
       // shut the whole drawer when it was answered — the appearance editor carried its own guard
       // against exactly this; every drawer needs it.
       onClose={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target !== e.currentTarget) return;
+        // A close the cancel below could not hold — a browser makes the next Esc uncancelable when no
+        // click came between it and the one already held — opens again, and `canClose` asks.
+        if (canClose && !canClose()) {
+          e.currentTarget.showModal();
+          return;
+        }
+        onClose();
+      }}
+      // Esc asks `canClose` before the dialog closes itself — its OWN Esc only, for the same reason
+      // as above (a nested dialog's cancel reaches here through React too).
+      onCancel={(e) => {
+        if (e.target === e.currentTarget && canClose && !canClose()) e.preventDefault();
       }}
       style={{ left: "8px", right: "auto", top: "4px", bottom: "4px", height: "calc(100dvh - 8px)" }}
       className="drawer fixed m-0 w-full max-w-md overflow-hidden rounded-md bg-bg text-ink shadow-floating"
@@ -99,7 +116,12 @@ export function Drawer({
             <h2 className="min-w-0 flex-1 truncate text-base font-semibold">{title}</h2>
           )}
           {actions}
-          <CloseButton label={closeLabel} onClick={onClose} />
+          <CloseButton
+            label={closeLabel}
+            onClick={() => {
+              if (!canClose || canClose()) onClose();
+            }}
+          />
         </header>
         {children}
       </div>

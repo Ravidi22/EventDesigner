@@ -101,10 +101,15 @@ export function offeredCategories(
   return own && !base.some((c) => c.id === own.id) ? [...base, own] : base;
 }
 
-/** May "שכפול" copy this row? Never a built-in, and never a row in a built-in-only category — a copy
- *  would be a second row of a category the studio cannot otherwise make (a supplier can). */
+/** What the server answers a NEW studio row in a built-in-only category with (lib/catalog/actions.ts
+ *  saveProduct) — a request the forms never make. */
+export const BUILT_IN_CATEGORY_REFUSAL = "בקטגוריה הזו יש פריט מובנה אחד — עורכים אותו, ולא מוסיפים עוד.";
+
+/** May "שכפול" copy this row? Never a built-in, and never a row in a built-in-only category or a
+ *  supplier's (a studio's old stem row) — a copy would be a new row of a category the studio cannot
+ *  otherwise make, and the server refuses it (a supplier can). */
 export function canDuplicate(p: Pick<Product, "category" | "builtIn">, isSupplier = false): boolean {
-  return !p.builtIn && (isSupplier || !isBuiltInCategory(p.category));
+  return !p.builtIn && (isSupplier || (!isBuiltInCategory(p.category) && !isSupplierCategory(p.category)));
 }
 
 /** May the row be deleted (or, being placed, archived — which hides it from the rail and the
@@ -173,6 +178,10 @@ if (isMain(import.meta.url)) {
   assert(!canDuplicate({ category: "led-strips" }), "nor a hand row in a built-in-only category");
   assert(canDuplicate({ category: "led-strips" }, true), "…unless a supplier holds it");
   assert(canDuplicate({ category: "rugs" }), "an owned rug is duplicated as ever");
+  // QA PR-8: a studio's old stem row (a copy from before stems were the suppliers') was offered
+  // "שכפול", and the server refused the copy every time.
+  assert(!canDuplicate({ category: "flowers" }) && !canDuplicate({ category: "dried-flowers" }), "nor a studio's old stem row — a copy would be a new row in a supplier's category");
+  assert(canDuplicate({ category: "flowers" }, true), "…a supplier duplicates its stems");
   assert(!canDelete(strip) && canDelete({}), "a built-in is never deleted; an ordinary row is");
 
   const rows = [
