@@ -73,7 +73,7 @@ import { MAP_SHAPES, SHAPE_LABEL } from "@/lib/catalog/types";
 import { climbRunMm, isClimb } from "@/lib/venues/climb";
 import { seatingChair, seatingCount, seatingOf, seatingPatch } from "@/lib/venues/seating";
 import { canDefineColumns, columnOf, columnPatch } from "@/lib/venues/column";
-import { openingsAlong } from "@/lib/venues/wall-split";
+import { joinable, openingsAlong } from "@/lib/venues/wall-split";
 import { CURTAIN_FILL, curtainLengthMm, curtainLines, curtainLookPatch, curtainOf, curtainPatch, curtainRail, curtainRailPatch } from "@/lib/venues/curtain";
 import { CANTILEVER_MAX_MM, type RailLine } from "@/lib/studio/rail";
 import { ledLengthMm } from "@/lib/venues/led";
@@ -120,7 +120,7 @@ import { ZONE_KIND_LABEL, type ZoneKind, type ZoneSource } from "@/lib/venues/zo
 import { MAX_ZONE_MARGIN_MM } from "@/lib/venues/feature-zones";
 import { soleKind, type PlanSelection, type PlanSelectionKind } from "@/lib/venues/selection";
 // The venue round of 2026-11-07 (spec §2, §9): a wall's own height, and a pool's / surface's rim.
-import { SquareSquare } from "lucide-react";
+import { Link2, SquareSquare } from "lucide-react";
 import { setWallHeight } from "@/lib/venues/structure";
 import { rimPatch, rimSpecOf, takesRim } from "@/lib/venues/rim";
 // The pergola round of 2026-11-07 (spec §5): its own panel.
@@ -254,6 +254,10 @@ export interface HallsSelectionProps {
   onCut?: () => void;
   /** A wall's opening picked from its פתחים group. */
   onSelectOpening?: (id: string) => void;
+  /** "הוספת נקודה באמצע": the wall split at its middle (lib/venues/wall-split.ts). */
+  onSplitWallMiddle?: (wallId: string) => void;
+  /** "חיבור הקירות": the corner taken away, its two walls joined into one. */
+  onJoinAtNode?: (nodeId: string) => void;
   /** The lone selected zone, resolved by the screen. */
   zone?: ZoneQuick | null;
   onEditZone?: (id: string) => void;
@@ -317,6 +321,8 @@ export function HallsSelection({
   onCopy,
   onCut,
   onSelectOpening,
+  onSplitWallMiddle,
+  onJoinAtNode,
   zone,
   onEditZone,
   onSelectZoneMembers,
@@ -750,6 +756,12 @@ export function HallsSelection({
             />
           </>
         )}
+        {onSplitWallMiddle && (
+          <>
+            <QuickSep />
+            <BarButton icon={Plus} label="הוספת נקודה באמצע" onClick={() => onSplitWallMiddle(wall.id)} />
+          </>
+        )}
         <QuickTail onDelete={onDelete} deleteLabel="מחיקת הקיר" />
       </Bar>
     );
@@ -786,6 +798,12 @@ export function HallsSelection({
         <QuickUnit>Y</QuickUnit>
         <QuickNumber label="Y (מ׳)" decimals={2} value={node.y / 1000} onChange={(v) => moveTo({ x: node.x, y: Math.round(v * 1000) })} />
         <QuickUnit>מ׳</QuickUnit>
+        {onJoinAtNode && joinable(structure, node.id) && (
+          <>
+            <QuickSep />
+            <BarButton icon={Link2} label="חיבור הקירות" onClick={() => onJoinAtNode(node.id)} />
+          </>
+        )}
         <QuickTail onDelete={onDelete} deleteLabel="מחיקת הפינה" />
       </Bar>
     );

@@ -33,6 +33,8 @@ import {
 } from "@/lib/venues/storage";
 import { fetchVenues, fetchVenuePlan, saveVenuePlan, saveVenue, type BlockedZone } from "@/lib/venues/actions";
 import { canEditPlan, type VenueRole } from "@/lib/venues/access";
+import { splitWall } from "@/lib/venues/wall-split";
+import { deleteNode, dropNode, splitAt, wallUnder } from "@/lib/venues/wall-edit";
 import { fileProblem, uploadFile } from "@/lib/files/upload";
 import {
   calibrateUnderlay,
@@ -589,6 +591,11 @@ export function HallsScreen() {
     const zoneIds = refs.filter((r) => r.kind === "zone").map((r) => r.id);
     if (zoneIds.length) editZones((zs) => zs.filter((z) => !zoneIds.includes(z.id)));
     if (refs.some((r) => r.kind !== "zone")) {
+      // A lone corner between two walls is a POINT taken away: its walls join back into one
+      // (lib/venues/wall-edit.ts deleteNode). The hint is read off the plan as it stands now.
+      const nodeRefs = refs.filter((r) => r.kind === "node");
+      const onlyNode = nodeRefs.length === 1 && refs.every((r) => r.kind === "node" || r.kind === "zone") ? nodeRefs[0].id : null;
+      const nodeHint = onlyNode ? deleteNode(structure, onlyNode).hint : undefined;
       // Walls first, then corners: removing a corner already takes its walls, and doing it the
       // other way round would leave the wall pass reaching for ids that are no longer there.
       editStructure((st) => {
@@ -597,11 +604,13 @@ export function HallsScreen() {
         for (const r of refs) if (r.kind === "door") next = removeEntrance(next, r.id);
         // A locked feature is left standing (StructureFeature.locked) — unlock it first.
         for (const r of refs) if (r.kind === "feature" && !next.features.find((f) => f.id === r.id)?.locked) next = removeFeature(next, r.id);
+        if (onlyNode) return deleteNode(next, onlyNode).structure;
         for (const r of refs) if (r.kind === "node") next = removeNode(next, r.id);
         return next;
       });
+      if (nodeHint) setHint(nodeHint);
     }
-  }, [selection, editStructure, editZones]);
+  }, [selection, structure, editStructure, editZones]);
 
   // Copies of the selected features, which become the selection — so a second Ctrl+D copies the
   // copy, and a row of palms is one palm and a few keystrokes. Walls, corners and doors are part of
@@ -816,6 +825,8 @@ export function HallsScreen() {
     nodes: { id: string; x: number; y: number }[];
     features: { id: string; x: number; y: number }[];
   } | null>(null);
+  // The one corner being dragged alone, and whether Alt was held — read when the drag ends.
+  const nodeDrop = useRef<{ id: string; alt: boolean } | null>(null);
 
   const moveWithGroup = useCallback(
     (kind: "node" | "feature", id: string, p: Point) => {
@@ -978,9 +989,17 @@ export function HallsScreen() {
   // End of one gesture: close the history entry and drop the frozen origins together, so the next
   // drag can't reuse a snapshot taken before this one moved everything.
   const endGesture = useCallback(() => {
+    // A corner let go on another corner merges into it; on a wall, splits the wall there and joins
+    // it (lib/venues/wall-edit.ts dropNode) — folded into the drag's own entry. Alt: let go free.
+    const drop = nodeDrop.current;
+    nodeDrop.current = null;
+    if (drop && !drop.alt) {
+      dragStructure((s) => dropNode(s, drop.id, closeSnapMmRef.current * 0.625));
+      setSelection((sel) => sel.filter((r) => !(r.kind === "node" && r.id === drop.id)));
+    }
     groupDrag.current = null;
     hist.commit();
-  }, [hist]);
+  }, [hist, dragStructure]);
 
   // Shared by Enter and by clicking back near the first vertex (in onPick, below) — the two ways to
   // close a region boundary. Takes the boundary as an argument rather than reading `region` itself so
@@ -1155,8 +1174,21 @@ export function HallsScreen() {
 
     if (mode === "walls") {
       // Clicking an existing corner reuses it rather than stacking a new one on top — this is how
-      // walls come to share endpoints, and therefore how enclosed areas ever get detected.
-      const { structure: withNode, nodeId } = addNode(structure, p);
+      // walls come to share endpoints, and therefore how enclosed areas ever get detected. A click on
+      // a wall's MIDDLE (no corner near) splits that wall there and runs from the new corner — a T,
+      // so the room it closes is found like any other (lib/venues/wall-split.ts).
+      let base = structure;
+      let at = p;
+      if (!structure.nodes.some((n) => Math.hypot(n.x - p.x, n.y - p.y) <= 250)) {
+        const onWall = wallUnder(structure, p, closeSnapMmRef.current * 0.75);
+        const cut = onWall ? splitWall(structure, onWall.wallId, onWall.t) : null;
+        if (cut && !("error" in cut)) {
+          base = cut.structure;
+          const corner = cut.structure.nodes.find((n) => n.id === cut.nodeId)!;
+          at = { x: corner.x, y: corner.y };
+        }
+      }
+      const { structure: withNode, nodeId } = addNode(base, at);
       const walled = runNodeId ? addWall(withNode, runNodeId, nodeId, wallKind) : withNode;
       // The drawing's "קיר חדש" height, written onto the wall just drawn (blank = the room's).
       const fresh = walled.walls.length > withNode.walls.length ? walled.walls[walled.walls.length - 1] : null;
@@ -1818,6 +1850,21 @@ export function HallsScreen() {
     onCopy: copySelection,
     onCut: cutSelection,
     onSelectOpening: (id) => setSelection([{ kind: "door", id }]),
+    onSplitWallMiddle: (wallId) => {
+      const r = splitWall(structure, wallId, 0.5);
+      if ("error" in r) {
+        setHint(r.error);
+        return;
+      }
+      editStructure(() => r.structure);
+      setSelection([{ kind: "node", id: r.nodeId }]);
+    },
+    onJoinAtNode: (nodeId) => {
+      const r = deleteNode(structure, nodeId);
+      if (r.structure !== structure) editStructure(() => r.structure);
+      if (r.hint) setHint(r.hint);
+      setSelection([]);
+    },
     zone: zoneQuick,
     onEditZone: readOnly ? undefined : editZone,
     onSelectZoneMembers: selectZoneMembers,
@@ -1967,7 +2014,40 @@ export function HallsScreen() {
             onMoveVertex={() => {}}
             onMoveWallHandle={() => {}}
             graph={structure}
-            onMoveGraphNode={acts ? (id, p) => moveWithGroup("node", id, p) : undefined}
+            onMoveGraphNode={
+              acts
+                ? (id, p, info) => {
+                    // Only a corner dragged on its own merges on drop; a group carries its corners.
+                    nodeDrop.current = selection.length > 1 && isSelected(selection, "node", id) ? null : { id, alt: !!info?.alt };
+                    moveWithGroup("node", id, p);
+                  }
+                : undefined
+            }
+            // A double-click on a wall adds a point there (it splits); on a corner, takes it away —
+            // its two walls join back into one (lib/venues/wall-edit.ts).
+            onSplitGraphWall={
+              acts
+                ? (wallId, p) => {
+                    const r = splitAt(structure, wallId, p);
+                    if ("error" in r) {
+                      setHint(r.error);
+                      return;
+                    }
+                    editStructure(() => r.structure);
+                    setSelection([{ kind: "node", id: r.nodeId }]);
+                  }
+                : undefined
+            }
+            onRemoveGraphNode={
+              acts
+                ? (id) => {
+                    const r = deleteNode(structure, id);
+                    if (r.structure !== structure) editStructure(() => r.structure);
+                    if (r.hint) setHint(r.hint);
+                    setSelection([]);
+                  }
+                : undefined
+            }
             // Bowing a wall is a drag like any other: amended into one history entry, closed by
             // onCommit. A wall is bowed in place — no node moves — so the rooms either side of a
             // shared wall follow the curve together, exactly as they follow a dragged corner.

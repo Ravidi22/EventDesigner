@@ -49,6 +49,7 @@
     "typecheck": "tsc --noEmit",
     "check:structure": "tsx lib/venues/structure.ts",
     "check:wall-split": "tsx lib/venues/wall-split.ts",
+    "check:wall-edit": "tsx lib/venues/wall-edit.ts",
     "check:pool": "tsx lib/venues/pool.ts",
     "check:rim": "tsx lib/venues/rim.ts",
     "check:climb": "tsx lib/venues/climb.ts",

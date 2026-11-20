@@ -394,6 +394,8 @@ export function PlanCanvas({
   underlay,
   graph,
   onMoveGraphNode,
+  onSplitGraphWall,
+  onRemoveGraphNode,
   onCurveGraphWall,
   graphSelection = [],
   onSelectGraph,
@@ -499,7 +501,12 @@ export function PlanCanvas({
   // A connected wall graph, drawn and reshaped alongside `outline`. Its nodes join the snap
   // references, so tracing a new wing aligns to the walls already on the plan.
   graph?: CanvasGraph;
-  onMoveGraphNode?: (nodeId: string, p: Point) => void;
+  // `alt`: Alt was held on the move — the host lets the corner go free (no merge on drop).
+  onMoveGraphNode?: (nodeId: string, p: Point, info?: { alt: boolean }) => void;
+  // A double-click on a wall (it splits there — lib/venues/wall-split.ts) and on a corner (it is
+  // taken away). Absent = no double-click verb.
+  onSplitGraphWall?: (wallId: string, p: Point) => void;
+  onRemoveGraphNode?: (nodeId: string) => void;
   // Bowing a wall. "bulge" is the diamond on the wall's middle — drag it and the wall curves through
   // the pointer; "c1"/"c2" are the two bezier points a curved wall exposes for asymmetric shaping.
   // Supplying this is what puts the handles on screen at all, so a host that is mid-draw (or one
@@ -1900,7 +1907,15 @@ export function PlanCanvas({
                 strokeLinecap="round"
                 tabIndex={0}
                 role="button"
-                aria-label={`${isEdge ? "גבול שטח" : "קיר"} — בחירה לעריכה`}
+                aria-label={`${isEdge ? "גבול שטח" : "קיר"} — בחירה לעריכה${onSplitGraphWall ? " · לחיצה כפולה מוסיפה נקודה" : ""}`}
+                onDoubleClick={
+                  onSplitGraphWall
+                    ? (e) => {
+                        e.stopPropagation();
+                        onSplitGraphWall(w.id, clientToMm(e.clientX, e.clientY));
+                      }
+                    : undefined
+                }
                 className={`cursor-pointer touch-none ${HANDLE_CLS}`}
                 // Hovering a wall is what surfaces its bow handle (below) — the same rule the
                 // outline's walls follow, so a plan of forty walls isn't forty diamonds at once.
@@ -2044,7 +2059,7 @@ export function PlanCanvas({
           const drag = onMoveGraphNode
             ? dragHandlers(
                 clientToMm,
-                (p) => onMoveGraphNode(n.id, snapDrag(p, { graphNodeId: n.id })),
+                (p, mods) => onMoveGraphNode(n.id, snapDrag(p, { graphNodeId: n.id }), { alt: mods.alt }),
                 select,
                 undefined,
                 onCommit,
@@ -2061,7 +2076,15 @@ export function PlanCanvas({
               {...drag}
               tabIndex={0}
               role="button"
-              aria-label={onMoveGraphNode ? "פינה — גרירה לשינוי המבנה" : "פינה"}
+              aria-label={onMoveGraphNode ? "פינה — גרירה לשינוי המבנה · לחיצה כפולה מסירה אותה" : "פינה"}
+              onDoubleClick={
+                onRemoveGraphNode
+                  ? (e) => {
+                      e.stopPropagation();
+                      onRemoveGraphNode(n.id);
+                    }
+                  : undefined
+              }
               onKeyDown={(e) => onMoveGraphNode && nudge(e, n.x, n.y, (p) => onMoveGraphNode(n.id, p))}
               className={`${onMoveGraphNode ? "cursor-move" : "cursor-pointer"} touch-none ${HANDLE_CLS}`}
             >
