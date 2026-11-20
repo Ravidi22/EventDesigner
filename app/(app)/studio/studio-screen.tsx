@@ -13,6 +13,7 @@ import { layoutTables } from "@/lib/venues/venue-table";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
 import { saveDocument } from "@/lib/studio/actions";
+import { SaveQueue, type SaveState } from "@/lib/studio/save-queue";
 import { DEFAULT_SCENE_PREVIEW, loadScenePreview, loadScratch, saveScenePreview, saveScratch, type ScenePreviewPrefs } from "@/lib/studio/storage";
 import { fromLocalFrame, toLocalFrame } from "@/lib/studio/geometry";
 import { ALL_PLANES_VISIBLE, PLANES, type Plane } from "@/lib/studio/planes";
@@ -424,7 +425,7 @@ export function StudioScreen({
   // the pane for each drawing. `tool`: the SWAG tool — a ceiling drape armed from the rail (or dropped
   // on the plan), dragged from point to point; its row wears the armed look while it is up.
   const [clothDraw, setClothDraw] = useState<{ id: number; kind: "sail" | "run" | "canopy"; productId?: string; placementId?: string; start?: Point; tool?: boolean } | null>(null);
-  const [saveState, setSaveState] = useState<"saving" | "saved" | "error">("saved");
+  const [saveState, setSaveState] = useState<SaveState>("saved");
   const [zoneFocus, setZoneFocus] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const hintTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -432,14 +433,22 @@ export function StudioScreen({
   // reads it once per drag start, to draw the item being dragged at the size it will land at — see
   // catalog-rail.tsx. A ref, not state: nothing on this screen re-renders because of a zoom.
   const mmPerPx = useRef(20);
-  // Which event this drawing belongs to. A ref, not state: the autosave timeout below reads it when
-  // it FIRES rather than when it was scheduled, so the id cannot go stale in a closure.
+  // Which event this drawing belongs to. A ref, not state: the autosave reads it when a write FIRES
+  // rather than when it was scheduled, so the id cannot go stale in a closure.
   const eventId = useRef<string | null>(null);
-  // The autosave queue. `pending` is the newest document not yet written, `inFlight` whether a write
-  // is in the air, `persisted` the last content known to be on the server — see the note on flush().
-  const pending = useRef<DesignDocumentContent | null>(null);
-  const inFlight = useRef(false);
-  const persisted = useRef<DesignDocumentContent | null>(null);
+  // The autosave queue (lib/studio/save-queue.ts): one write in the air at a time, and when it lands
+  // what the server holds is compared with what the screen shows. It outlives this screen — see the
+  // autosave effects below.
+  const [saves] = useState(
+    () =>
+      new SaveQueue<DesignDocumentContent>({
+        delayMs: 500,
+        write: (next) => {
+          const id = eventId.current;
+          return id ? saveDocument(id, next) : saveScratch(next);
+        },
+      }),
+  );
   // Whether the restore below has finished. It gates the autosave, and it has to: resolving which
   // event we are in is a round trip now, and the 500ms debounce would otherwise beat it — writing
   // the blank starting document under the "default" key (clobbering a scratch drawing) and then
@@ -476,8 +485,8 @@ export function StudioScreen({
   // until the previous one returned.
   //
   // This one stays an EFFECT rather than becoming a render-phase adjustment like the others in this
-  // change, and the reason is the two refs: `eventId` and `persisted` are read by the autosave when
-  // it FIRES, and writing a ref during render is the thing that makes a concurrent re-render see a
+  // change, and the reason is the autosave's state: `eventId` and what the queue holds as saved are
+  // read when a write FIRES, and writing them during render is the thing that makes a concurrent re-render see a
   // value from a render that was thrown away. Seeding an editing session with an undo history from
   // data that arrived asynchronously is what an effect is actually for.
   useEffect(() => {
@@ -489,16 +498,16 @@ export function StudioScreen({
     const saved = event ? workspace?.document?.content : loadScratch();
     if (saved) {
       // A drawing from before ceiling items were linked to their tables gets its links now, off the
-      // drawing (hang-targets.ts adoptHung) — the one edit made on open. `persisted` stays the
-      // server's copy, so an adopted link is saved once, and a document with nothing to adopt is
+      // drawing (hang-targets.ts adoptHung) — the one edit made on open. The queue is restored with
+      // the server's copy, so an adopted link is saved once, and a document with nothing to adopt is
       // the same object and is not written back at all.
       // …and every carpet laid over a surface or a stage is laid again over it (lib/studio/cover.ts
       // adoptCovers): a lawn reshaped at /halls since reshapes its carpet now.
       setHistory(initHistory(adoptCovers(adoptHung(saved, arrangedStructure(plan.structure, saved)), plan.structure, deckOf)));
-      // What is already on the server, so the first render after a restore doesn't write it
-      // straight back. Against localStorage that redundant save was free; it is a round trip now.
-      persisted.current = saved;
     }
+    // What is already on the server, so the first render after a restore doesn't write it straight
+    // back. Against localStorage that redundant save was free; it is a round trip now.
+    saves.restore(saved ?? null);
     // THE VENUE'S DEFAULT TABLE LAYOUT (lib/venues/venue-table.ts): an event's drawing that is still
     // empty — beginEvent writes every new one empty — starts with the venue's tables as its OWN,
     // matched to this studio's rows, in ONE undo entry (Ctrl+Z takes them away), and marked so a
@@ -509,7 +518,6 @@ export function StudioScreen({
       const base = { ...(saved ?? emptyDocument()), layoutAdopted: true as const };
       const { tables, unmatched } = layoutTables(plan.layoutTables, catalog, { newId: uid, variantOf: defaultVariantId });
       setHistory(dispatch(initHistory(base), { type: "loadDocument", content: { ...base, tables } }));
-      persisted.current = saved ?? null;
       showHint(`נטענו ${tables.length} השולחנות של המקום${unmatched ? ` · ${unmatched} בלי פריט תואם בקטלוג` : ""} — Ctrl+Z מבטל`);
     }
     setRestored(true);
@@ -566,72 +574,33 @@ export function StudioScreen({
   // Continuous autosave (F-3.5) — debounced, no save button. The indicator only claims "saved" when
   // the write actually landed; a failed write shows an error + retry.
   //
-  // ⚠ WRITES ARE SEQUENCED, not just debounced. A save is a request now, and requests can overlap
-  // and land out of order — which against a single-row document means an older drawing overwriting
-  // a newer one, silently, with the screen showing "נשמר". So at most one is in the air at a time
-  // and the newest document waits its turn in `pending`.
-  const flush = useCallback(async () => {
-    if (inFlight.current) return; // the running save will pick up whatever is pending when it lands
-    const next = pending.current;
-    if (!next) return;
-
-    inFlight.current = true;
-    setSaveState("saving");
-    let ok = true;
-    try {
-      const id = eventId.current;
-      if (id) await saveDocument(id, next);
-      else ok = saveScratch(next);
-    } catch {
-      ok = false;
-    }
-    inFlight.current = false;
-
-    if (!ok) {
-      // `pending` deliberately keeps the document: retrySave and the next edit both resend it.
-      setSaveState("error");
-      return;
-    }
-    persisted.current = next;
-    if (pending.current === next) {
-      pending.current = null;
-      setSaveState("saved");
-    } else {
-      // An edit arrived while this write was in the air — send that one too.
-      void flush();
-    }
-  }, []);
-
+  // ⚠ WRITES ARE SEQUENCED, not just debounced, and what to write is decided by COMPARING what the
+  // server holds with what the screen shows (lib/studio/save-queue.ts). An undo puts back the very
+  // document the server holds: it is "saved" when nothing is in the air, and written once the save
+  // in the air lands when something is (QA 2026-11-20, SK-1 — it used to be dropped, or the undone
+  // edit written on the way out). The render that follows a restore is the document just read, and
+  // writes nothing.
   useEffect(() => {
     if (!restored) return;
-    // Nothing to do for the render that follows a restore: this is the document we just read.
-    if (doc === persisted.current) return;
-    pending.current = doc;
-    setSaveState("saving");
-    const t = setTimeout(() => void flush(), 500);
-    return () => clearTimeout(t);
-  }, [doc, restored, flush]);
+    saves.edit(doc);
+  }, [doc, restored, saves]);
 
-  // ⚠ THE DEBOUNCE DOES NOT SURVIVE AN UNMOUNT. The effect above clears its own timer on the way
-  // out, so a document still inside the 500ms window was simply dropped — and this screen is
+  // ⚠ THE DEBOUNCE DOES NOT SURVIVE AN UNMOUNT unless something sends it — and this screen is
   // unmounted constantly: the meeting steps it in and out (hall → gallery → design), and "יציאה"
   // navigates away from it. Place a table, press "השלב הבא" half a second later, and the table was
   // gone, silently, with the client watching. beforeunload never saw any of it — that fires for a
   // closing tab, not for a client-side route change.
   //
-  // Flushing here rather than lengthening the window: the write outlives the component, and a save
-  // that has already been decided on should not depend on the screen staying mounted to finish.
-  useEffect(
-    () => () => {
-      if (pending.current) void flush();
-    },
-    [flush],
-  );
+  // Closing sends it now rather than lengthening the window: the write outlives the component, and
+  // a save that has already been decided on should not depend on the screen staying mounted to
+  // finish. The next screen's read waits for it (whenSaved, lib/events/use-workspace.tsx) instead of
+  // being queued in front of it and drawing the drawing as it was (SK-7).
+  useEffect(() => {
+    saves.listen(setSaveState);
+    return () => saves.close();
+  }, [saves]);
 
-  const retrySave = useCallback(() => {
-    pending.current ??= doc;
-    void flush();
-  }, [doc, flush]);
+  const retrySave = useCallback(() => saves.retry(), [saves]);
 
   useEffect(() => {
     onSaveState?.(saveState);

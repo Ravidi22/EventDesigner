@@ -65,6 +65,7 @@
     "check:deck-move": "tsx lib/studio/deck-move.ts",
     "check:clipboard": "tsx lib/studio/clipboard.ts",
     "check:sketches": "tsx lib/studio/sketches.ts",
+    "check:save-queue": "tsx lib/studio/save-queue.ts",
     "check:seating": "tsx lib/venues/seating.ts",
     "check:seats": "tsx lib/studio/seating.ts",
     "check:column": "tsx lib/venues/column.ts",

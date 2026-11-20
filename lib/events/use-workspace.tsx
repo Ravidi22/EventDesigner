@@ -14,6 +14,7 @@
 // is no provider above it. Whether one exists is fixed for a component's lifetime, so the effect
 // below either never runs or runs exactly once; it is not a conditional hook.
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { whenSaved } from "@/lib/studio/save-queue";
 import { loadActiveEventId } from "./storage";
 import { fetchEventWorkspace, type EventWorkspace } from "./workspace";
 
@@ -55,9 +56,15 @@ function useResolvedWorkspace(skip = false): WorkspaceHandle {
   useEffect(() => {
     if (skip) return;
     let live = true;
+    // AFTER THE LAST SAVE, never in front of it (QA 2026-11-20, SK-7). The studio a meeting stage
+    // just stepped away from may still be writing its last edit — its queue outlives it
+    // (lib/studio/save-queue.ts) — and Next sends server actions one at a time: a read sent now
+    // could be queued before that write, open the drawing as it was, and the next edit here would
+    // write that over the designer's last one.
     // loadActiveEventId reads localStorage, so it can only run after mount — on the server there is
     // no such thing as "the event this device has open".
-    void fetchEventWorkspace(loadActiveEventId())
+    void whenSaved()
+      .then(() => fetchEventWorkspace(loadActiveEventId()))
       .then((w) => {
         if (live) setWorkspace(w);
       })
