@@ -8,8 +8,9 @@
 // another without connecting them would leave the room silently unclosed.
 import type { Point } from "@/lib/studio/hall";
 import { wallTrack } from "@/lib/studio/anchor";
-import { removeNode, type VenueStructure } from "./structure";
-import { joinable, joinRefusal, joinWalls, mergeNodes, splitWall } from "./wall-split";
+import { moveNode, removeNode, type VenueStructure } from "./structure";
+import { detectFaces, type Face } from "./faces";
+import { hasWall, joinable, joinRefusal, joinWalls, mergeNodes, splitWall } from "./wall-split";
 import { isMain } from "../self-check";
 
 /** The wall nearest `p` within `reachMm`, and where along it (its own parameter) — bows followed.
@@ -38,12 +39,14 @@ export function splitAt(s: VenueStructure, wallId: string, p: Point): { structur
   return tr ? splitWall(s, wallId, tr.nearestT(p)) : { error: "הקיר לא נמצא" };
 }
 
-/** A corner let go: on another corner within `reachMm` it merges into it; on a wall (not its own) it
- *  splits that wall there and merges into the new corner — a T. Anywhere else, nothing (the same
- *  structure object comes back). */
-export function dropNode(s: VenueStructure, nodeId: string, reachMm: number): VenueStructure {
+/** A corner let go: on another corner within `reachMm` it merges into it (`into` names the corner it
+ *  became); on a wall (not its own) it splits that wall there and the new corner merges into IT — so
+ *  the dragged corner keeps its id and stays selected, now standing on the wall (a T). A split the
+ *  wall refuses (inside a door) changes nothing and says why in `hint`: a corner left loose on the
+ *  wall's line would be a room silently unclosed. Anywhere else, nothing (the same structure object). */
+export function dropNode(s: VenueStructure, nodeId: string, reachMm: number): { structure: VenueStructure; into?: string; hint?: string } {
   const node = s.nodes.find((n) => n.id === nodeId);
-  if (!node) return s;
+  if (!node) return { structure: s };
   let into: string | null = null;
   let bestD = reachMm;
   for (const n of s.nodes) {
@@ -54,11 +57,30 @@ export function dropNode(s: VenueStructure, nodeId: string, reachMm: number): Ve
       into = n.id;
     }
   }
-  if (into) return mergeNodes(s, nodeId, into);
+  if (into) return { structure: mergeNodes(s, nodeId, into), into };
   const under = wallUnder(s, node, reachMm, nodeId);
-  if (!under) return s;
+  if (!under) return { structure: s };
   const cut = splitWall(s, under.wallId, under.t);
-  return "error" in cut ? s : mergeNodes(cut.structure, nodeId, cut.nodeId);
+  if ("error" in cut) return { structure: s, hint: cut.error };
+  const at = cut.structure.nodes.find((n) => n.id === cut.nodeId)!;
+  return { structure: mergeNodes(moveNode(cut.structure, nodeId, { x: at.x, y: at.y }), cut.nodeId, nodeId) };
+}
+
+/** The room a wall run just closed: the face of `after` that `before` did not have. `before` must be
+ *  the plan as it stood just before the new wall — after any split the click made, which adds a corner
+ *  to the room next door without making it new. Compared by node set. */
+export function newFaceAfter(before: VenueStructure, after: VenueStructure): Face | null {
+  const sig = (f: Face) => [...f.nodeIds].sort().join(",");
+  const prior = new Set(detectFaces(before).map(sig));
+  return detectFaces(after).find((f) => !prior.has(sig(f))) ?? null;
+}
+
+/** A double-click on a corner (spec §5: "where exactly two walls meet"): it only ever JOINS. On any
+ *  other corner it changes nothing and says why — removing a T's three walls is Delete's to do. */
+export function removePoint(s: VenueStructure, nodeId: string): { structure: VenueStructure; hint?: string } {
+  if (joinable(s, nodeId)) return deleteNode(s, nodeId);
+  const j = joinWalls(s, nodeId);
+  return { structure: s, hint: "error" in j ? j.error : undefined };
 }
 
 /** Delete on a corner (spec DECIDE 24): where exactly two walls of one kind meet, the point goes and
@@ -114,20 +136,46 @@ if (isMain(import.meta.url)) {
   const n = cut.structure.nodes.find((x) => x.id === cut.nodeId)!;
   assert(near(n.x, 2000) && near(n.y, 0), "the new corner stands on the wall, under the click");
 
-  // A corner dropped on a corner merges into it.
-  const onB = dropNode(at(room, "E", { x: 6040, y: 30 }), "E", 100);
-  assert(!onB.nodes.some((x) => x.id === "E") && onB.walls.find((w) => w.id === "e")!.a === "B", "dropped on a corner, it becomes that corner");
-  // …on a wall's middle, splits the wall and joins it there.
-  const onAB = dropNode(at(room, "E", { x: 3000, y: 40 }), "E", 100);
-  const eWall = onAB.walls.find((w) => w.id === "e")!;
-  const joint = onAB.nodes.find((x) => x.id === eWall.a)!;
-  assert(onAB.walls.length === 6 && !onAB.walls.some((w) => w.id === "ab") && near(joint.x, 3000) && near(joint.y, 0), "dropped on a wall, it splits the wall and joins it");
-  assert(onAB.walls.filter((w) => w.a === joint.id || w.b === joint.id).length === 3, "…a T: three walls at the new corner");
+  // A corner dropped on a corner merges into it — and says which, so the screen can select it.
+  const onBDrop = dropNode(at(room, "E", { x: 6040, y: 30 }), "E", 100);
+  const onB = onBDrop.structure;
+  assert(!onB.nodes.some((x) => x.id === "E") && onB.walls.find((w) => w.id === "e")!.a === "B" && onBDrop.into === "B", "dropped on a corner, it becomes that corner");
+  // …on a wall's middle, splits the wall and joins it there — keeping the dragged corner's own id.
+  const onABDrop = dropNode(at(room, "E", { x: 3000, y: 40 }), "E", 100);
+  const onAB = onABDrop.structure;
+  const joint = onAB.nodes.find((x) => x.id === "E")!;
+  assert(!!joint && onABDrop.into === undefined && onAB.walls.length === 6 && !onAB.walls.some((w) => w.id === "ab") && near(joint.x, 3000) && near(joint.y, 0), "dropped on a wall, it splits the wall and joins it, still itself");
+  assert(onAB.walls.filter((w) => w.a === "E" || w.b === "E").length === 3 && hasWall(onAB, "ab"), "…a T: three walls at the corner, the old wall still resolving");
   // …anywhere else, nothing.
   const free = at(room, "E", { x: 8000, y: 3000 });
-  assert(dropNode(free, "E", 100) === free, "dropped in the open, nothing changes");
+  assert(dropNode(free, "E", 100).structure === free, "dropped in the open, nothing changes");
   const ownWalls = at(room, "C", { x: 6000, y: 3990 });
-  assert(dropNode(ownWalls, "C", 100) === ownWalls, "a corner is never dropped onto its own walls");
+  assert(dropNode(ownWalls, "C", 100).structure === ownWalls, "a corner is never dropped onto its own walls");
+  // …inside a door: refused, and it says why — a corner left loose on the wall's line would be a
+  // room silently unclosed (spec DECIDE 23).
+  const doored: VenueStructure = { ...room, entrances: [{ id: "dd", wallId: "ab", distanceMm: 3000, widthMm: 1000, swingInward: true, doubleDoor: false }] };
+  const inDoor = dropNode(at(doored, "E", { x: 3000, y: 40 }), "E", 100);
+  assert(inDoor.structure.walls.length === doored.walls.length && inDoor.hint === "הנקודה בתוך פתח הדלת", "dropped inside a door: refused, with the reason");
+
+  // The room a wall run closes — found against the plan as it stood just before the wall, after any
+  // split the click made (the split adds a corner to the room next door, which is not new).
+  const splitRight = splitWall(room, "bc", 0.5) as { structure: VenueStructure; nodeId: string };
+  assert(newFaceAfter(room, splitRight.structure) !== null, "against the plan BEFORE the split the room next door looks new — which is why a caller passes the split plan as `before`");
+  assert(newFaceAfter(splitRight.structure, splitRight.structure) === null, "nothing new against itself");
+  const M = splitRight.nodeId;
+  const second: VenueStructure = {
+    ...splitRight.structure,
+    nodes: [...splitRight.structure.nodes, { id: "P", x: 9000, y: 2000 }, { id: "Q", x: 9000, y: 4000 }],
+    walls: [...splitRight.structure.walls, { id: "mp", a: M, b: "P", kind: "wall" }, { id: "pq", a: "P", b: "Q", kind: "wall" }, { id: "qc", a: "Q", b: "C", kind: "wall" }],
+  };
+  const closed = newFaceAfter(splitRight.structure, second);
+  assert(!!closed && [...closed.nodeIds].sort().join(",") === [M, "P", "Q", "C"].sort().join(","), "the run's own room is the new one, not the room next door");
+
+  // A double-click on a corner only ever JOINS (spec §5: "where exactly two walls meet").
+  const dblTee = removePoint(onAB, "E");
+  assert(dblTee.structure === onAB && !!dblTee.hint, "a double-click on a corner of three walls changes nothing, and says so");
+  const dblCorner = removePoint(room, "A");
+  assert(!dblCorner.structure.nodes.some((x) => x.id === "A"), "a double-click on a corner of two walls joins them");
 
   // Delete on a corner.
   const straightCut = splitAt(room, "ab", { x: 3000, y: 0 }) as { structure: VenueStructure; nodeId: string };
@@ -140,8 +188,8 @@ if (isMain(import.meta.url)) {
   assert(refused.structure === mixed && refused.hint === "קיר וגבול שטח לא מתחברים", "a wall and an edge are not joined, nothing removed");
   const end = deleteNode(room, "G");
   assert(!end.structure.walls.some((w) => w.id === "e") && !end.structure.nodes.some((x) => x.id === "G"), "a corner with one wall is removed with it, as before");
-  const tee = deleteNode(onAB, joint.id);
-  assert(!tee.structure.nodes.some((x) => x.id === joint.id) && tee.structure.walls.length === 3, "a corner of three walls is removed with them, as before");
+  const tee = deleteNode(onAB, "E");
+  assert(!tee.structure.nodes.some((x) => x.id === "E") && tee.structure.walls.length === 3, "a corner of three walls is removed with them, as before");
 
   console.log("wall-edit: ok");
 }

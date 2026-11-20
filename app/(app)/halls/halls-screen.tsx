@@ -34,7 +34,7 @@ import {
 import { fetchVenues, fetchVenuePlan, saveVenuePlan, saveVenue, type BlockedZone } from "@/lib/venues/actions";
 import { canEditPlan, type VenueRole } from "@/lib/venues/access";
 import { splitWall } from "@/lib/venues/wall-split";
-import { deleteNode, dropNode, splitAt, wallUnder } from "@/lib/venues/wall-edit";
+import { deleteNode, dropNode, newFaceAfter, removePoint, splitAt, wallUnder } from "@/lib/venues/wall-edit";
 import { fileProblem, uploadFile } from "@/lib/files/upload";
 import {
   calibrateUnderlay,
@@ -825,8 +825,10 @@ export function HallsScreen() {
     nodes: { id: string; x: number; y: number }[];
     features: { id: string; x: number; y: number }[];
   } | null>(null);
-  // The one corner being dragged alone, and whether Alt was held — read when the drag ends.
-  const nodeDrop = useRef<{ id: string; alt: boolean } | null>(null);
+  // The one corner being dragged alone, where the pointer last put it, and whether Alt was held —
+  // read when the drag ends. The point is kept because the last move frame may not have rendered
+  // yet when the button lifts, and the drop must be judged where the corner really is.
+  const nodeDrop = useRef<{ id: string; alt: boolean; p: Point } | null>(null);
 
   const moveWithGroup = useCallback(
     (kind: "node" | "feature", id: string, p: Point) => {
@@ -994,8 +996,18 @@ export function HallsScreen() {
     const drop = nodeDrop.current;
     nodeDrop.current = null;
     if (drop && !drop.alt) {
-      dragStructure((s) => dropNode(s, drop.id, closeSnapMmRef.current * 0.625));
-      setSelection((sel) => sel.filter((r) => !(r.kind === "node" && r.id === drop.id)));
+      // Read off the plan as the drag left it; nothing changes unless the corner landed on something.
+      // `hist.present` is the last render's — the final move frame may not have rendered yet — so the
+      // corner is put where the pointer last put it before the drop is judged; the write recomputes on
+      // the latest plan.
+      const reach = closeSnapMmRef.current * 0.625;
+      const now = moveNode(hist.present.structure, drop.id, drop.p);
+      const r = dropNode(now, drop.id, reach);
+      if (r.structure !== now) dragStructure((s) => dropNode(s, drop.id, reach).structure);
+      // Dropped on a wall the corner keeps its id (still selected); merged, the selection follows it.
+      const into = r.into;
+      if (into) setSelection((sel) => sel.map((x) => (x.kind === "node" && x.id === drop.id ? { kind: "node", id: into } : x)));
+      if (r.hint) setHint(r.hint);
     }
     groupDrag.current = null;
     hist.commit();
@@ -1182,7 +1194,12 @@ export function HallsScreen() {
       if (!structure.nodes.some((n) => Math.hypot(n.x - p.x, n.y - p.y) <= 250)) {
         const onWall = wallUnder(structure, p, closeSnapMmRef.current * 0.75);
         const cut = onWall ? splitWall(structure, onWall.wallId, onWall.t) : null;
-        if (cut && !("error" in cut)) {
+        if (cut && "error" in cut) {
+          // Inside a door: no corner at all — one left loose on the wall's line would close nothing.
+          setHint(cut.error);
+          return;
+        }
+        if (cut) {
           base = cut.structure;
           const corner = cut.structure.nodes.find((n) => n.id === cut.nodeId)!;
           at = { x: corner.x, y: corner.y };
@@ -1198,14 +1215,11 @@ export function HallsScreen() {
 
       // A wall that just closed a loop back onto itself created a brand new room — offer to name
       // it right away instead of making the designer end the run, switch to "zones" mode, and
-      // click inside it separately. `faces` is still the pre-click set (memoised off the
-      // structure before this edit), so comparing against it tells a genuinely new room apart from
-      // one that already existed — and already-named ones are, by definition, not new.
+      // click inside it separately. Compared against `base` — the plan just before this wall, AFTER
+      // any split the click made: a split adds a corner to the room next door, and against the
+      // pre-click faces that room would look new (lib/venues/wall-edit.ts newFaceAfter).
       if (!draftZone) {
-        const priorSignatures = new Set(faces.map((f) => [...f.nodeIds].sort().join(",")));
-        const newFace = detectFaces(nextStructure).find(
-          (f) => !priorSignatures.has([...f.nodeIds].sort().join(",")),
-        );
+        const newFace = newFaceAfter(base, nextStructure);
         if (newFace) {
           setDraftZone({ source: { type: "face", anchor: polygonCentroid(newFace.boundary) }, name: "", kind: "hall" });
         }
@@ -2017,8 +2031,10 @@ export function HallsScreen() {
             onMoveGraphNode={
               acts
                 ? (id, p, info) => {
-                    // Only a corner dragged on its own merges on drop; a group carries its corners.
-                    nodeDrop.current = selection.length > 1 && isSelected(selection, "node", id) ? null : { id, alt: !!info?.alt };
+                    // Only a corner DRAGGED on its own merges on drop; a group carries its corners. A
+                    // keyboard nudge comes with no `info` and ends no gesture — it must not leave a drop
+                    // waiting for the next unrelated drag's end.
+                    nodeDrop.current = !info || (selection.length > 1 && isSelected(selection, "node", id)) ? null : { id, alt: info.alt, p };
                     moveWithGroup("node", id, p);
                   }
                 : undefined
@@ -2041,9 +2057,11 @@ export function HallsScreen() {
             onRemoveGraphNode={
               acts
                 ? (id) => {
-                    const r = deleteNode(structure, id);
-                    if (r.structure !== structure) editStructure(() => r.structure);
+                    // A double-click only ever JOINS (spec §5); a T's walls are Delete's to remove.
+                    const r = removePoint(structure, id);
                     if (r.hint) setHint(r.hint);
+                    if (r.structure === structure) return;
+                    editStructure(() => r.structure);
                     setSelection([]);
                   }
                 : undefined
