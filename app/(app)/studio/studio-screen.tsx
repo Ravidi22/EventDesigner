@@ -110,8 +110,13 @@ import { MIN_EDGE_ITEM_MM, isRoundPiece, isShapedPiece, pieceOutline, placeEdgeI
 /** The room as a frame: what a stage's pieces are carried into to stand in room coordinates
  *  (the fill tool keeps its hand-placed decks there, see StageFillState.pieces). */
 const ROOM_FRAME: Frame = { position: { x: 0, y: 0 }, rotation: 0 };
+/** What the fill tool's layout is laid FROM — a change to any of these lays it afresh. */
+const FILL_LAID_FROM = ["polygon", "front", "smooth", "chosen", "exceed", "roundedMm", "roundedAt", "bowMm", "pieces"] as const satisfies readonly (keyof Extract<StageFillState, { phase: "pick" }>)[];
 import { StageDrawBar, StageFillPanel, sameDeckRef, type DeckAction, type DeckRef, type PickedDeck, type StageFillPanelProps, type StageFillState } from "./stage-fill-panel";
 import { boundsOf, deckBox, snapDeck } from "@/lib/studio/deck-move";
+import { heldPieces, keepDeckPick } from "@/lib/studio/deck-move";
+import { crossesWalls, wallPolylines } from "@/lib/studio/wall-clip";
+import { WALL_HUG_MM } from "@/lib/design-document/stage";
 import { catalogBox, clampSize, footprintBounds, resizeAxes, resizeSpecOf, sizedFootprint } from "@/lib/studio/footprint";
 import { chipBox, dressBlockOf, dressingSpots, tableBlock, tableBox, tableFootprint, tableUnder } from "@/components/footprint-shape";
 import { arrange, clampToTable, fromTableFrame, spineOf, toTableFrame, type ArrangeKind, type TableBox } from "@/lib/design-document/dressing";
@@ -418,7 +423,15 @@ export function StudioScreen({
   // few items that carry one, and a designer who set it wants to see it. Breaches draw either way.
   const [showClearance, setShowClearance] = useState(true);
   // "מילוי במות": null, drawing the area, or choosing which decks fill it (see stage-fill-panel.tsx).
-  const [stageFill, setStageFill] = useState<StageFillState | null>(null);
+  const [stageFill, setStageFillState] = useState<StageFillState | null>(null);
+  /** Every change to the fill tool goes through here: a LAID deck is picked by its index in the
+   *  layout on screen, so a change to what the layout is laid from lets that pick go before the
+   *  index can name another deck (lib/studio/deck-move.ts keepDeckPick — QA 2026-11-20, ST-8). */
+  const setStageFill = useCallback(
+    (u: StageFillState | null | ((cur: StageFillState | null) => StageFillState | null)) =>
+      setStageFillState((cur) => keepDeckPick(cur, typeof u === "function" ? u(cur) : u, FILL_LAID_FROM)),
+    [],
+  );
   // "וילון על מוט": the drape whose free-standing rod is being drawn on the canvas, post by post
   // (components/rod-draw-pane.tsx) — null when no rod is being drawn.
   const [rodDraw, setRodDraw] = useState<string | null>(null);
@@ -2623,8 +2636,14 @@ export function StudioScreen({
       const c = toRoom({ position: at.position, rotation: at.rotation }, shaped.offset);
       return { x: Math.round(c.x), y: Math.round(c.y) };
     })() : at.position;
-    // The decks put by hand stand in the room; the stage holds them in its own frame.
-    const pieces = stageFill.pieces?.length ? carryPieces(stageFill.pieces, ROOM_FRAME, { position, rotation: at.rotation }) : undefined;
+    // The decks put by hand stand in the room; the stage holds them in its own frame — those its
+    // outline holds. One it no longer holds (a side typed shorter past it) is set aside: not laid,
+    // drawn, counted or billed, on a new stage as on an edited one, and back if the outline grows
+    // round it again (lib/studio/deck-move.ts heldPieces — QA 2026-11-20, ST-5). `held` names each
+    // kept piece by its place in the fill state, which is how the canvas and the bar pick it.
+    const carried = stageFill.pieces?.length ? carryPieces(stageFill.pieces, ROOM_FRAME, { position, rotation: at.rotation }) : undefined;
+    const held = carried ? heldPieces(carried, shaped ? shaped.outline : at.outline) : [];
+    const pieces = carried ? held.map((k) => carried[k]) : undefined;
     const stage: StageBuild = {
       outline: shaped ? shaped.outline : at.outline,
       front: shaped ? shaped.front : at.front,
@@ -2650,6 +2669,8 @@ export function StudioScreen({
       /** The shaped outline where it stands in the room — what the canvas draws instead of the plain
        *  rectangle while a shape is on. */
       shapedOutline: shaped ? stageOutlineInRoom(placement) : null,
+      /** Each of the stage's pieces, by its place among the fill state's (the rest are set aside). */
+      held,
     };
   }, [stageFill, stageObstacles]);
   /** …and its decks, built by the SAME functions the saved stage is counted with
@@ -2663,7 +2684,19 @@ export function StudioScreen({
     return { ...laid, decks: stageDecksInRoom(placement, deckOf), missing: stageMissingInRoom(placement, deckOf), holes: stageHolesInRoom(placement, deckOf) };
   }, []);
   const settledShape = useSettled(stageShape, STAGE_SETTLE_MS);
-  const stagePreview = useMemo(() => (settledShape ? { placement: settledShape.placement, layout: layPreview(settledShape.placement) } : null), [settledShape, layPreview]);
+  const stagePreview = useMemo(() => {
+    if (!settledShape) return null;
+    const laid = layPreview(settledShape.placement);
+    // The layout numbers the stage's pieces among those its outline holds; the canvas and the bar name
+    // each by its place in the fill state (ST-5).
+    const home = settledShape.held;
+    const layout = {
+      ...laid,
+      decks: laid.decks.map((d) => (d.piece === undefined ? d : { ...d, piece: home[d.piece] ?? d.piece })),
+      holes: laid.holes.map((h) => ({ ...h, piece: home[h.piece] ?? h.piece })),
+    };
+    return { placement: settledShape.placement, layout };
+  }, [settledShape, layPreview]);
   const stageLayout = stagePreview?.layout ?? null;
   const previewStale = !!stageShape && settledShape !== stageShape;
   /** The lengths the decks in hand build exactly — what a side being drawn, or a corner of the
@@ -2751,7 +2784,8 @@ export function StudioScreen({
       return { xMm: Math.round(q.x - bounds.minX), yMm: Math.round(q.y - bounds.minY) };
     };
     if (ref.kind === "piece") {
-      const pc = stageFill.pieces?.[ref.index];
+      // A piece the outline no longer holds is set aside (ST-5): nothing on the plan to act on.
+      const pc = stageShape.held.includes(ref.index) ? stageFill.pieces?.[ref.index] : undefined;
       const t = pc ? deckOf(pc.variantId) : undefined;
       if (!pc || !t) return null;
       return { ref, typeId: pc.variantId, widthMm: t.widthMm, depthMm: t.depthMm, pinned: true, hole: !!pc.hole, shaped: !!(t.round || t.outline), rotationDeg: rel(pc.rotation || 0), ...at(pc.centre) };
@@ -2917,7 +2951,8 @@ export function StudioScreen({
    *  quarter, Ctrl+D copies it, Delete releases it. True when the key was one of these. */
   const deckKey = useCallback(
     (e: KeyboardEvent): boolean => {
-      if (stageFill?.phase !== "pick" || !stageFill.picked) return false;
+      // The deck the bar shows — never one set aside outside the outline (ST-5).
+      if (!pickedDeck) return false;
       const mod = e.ctrlKey || e.metaKey;
       if (!mod && e.key.startsWith("Arrow")) {
         const step = e.shiftKey ? 100 : 10;
@@ -2941,15 +2976,37 @@ export function StudioScreen({
       }
       return false;
     },
-    [stageFill, deckAction],
+    [pickedDeck, deckAction],
   );
 
-  /** Take one of the layout's exact sizes: the area is redrawn at that size, front first. */
-  const resizeStageArea = useCallback((widthMm: number, depthMm: number) => {
-    setStageFill((cur) =>
-      cur?.phase === "pick" ? { ...cur, polygon: resizeRect(cur.polygon, cur.front, widthMm, depthMm), front: 0 } : cur,
-    );
-  }, []);
+  /** The venue's walls as polylines in the room — what a stage resized here may not be pushed
+   *  through (lib/studio/wall-clip.ts), as the canvas's grips and typed figures may not. */
+  const stageWalls = useMemo(() => wallPolylines(plan.structure), [plan.structure]);
+  /** Take one of the layout's exact sizes: the area is redrawn at that size, front first — grown or
+   *  shrunk along its front from the end that stands against a wall (else about its middle), and
+   *  never through a wall: the first of those that fits (QA 2026-11-20, ST-3 — a stage in a corner
+   *  "made 7.32" grew about its middle 21cm into the side wall). */
+  const resizeStageArea = useCallback(
+    (widthMm: number, depthMm: number) => {
+      const cur = stageFill;
+      if (cur?.phase !== "pick") return;
+      const p = cur.polygon;
+      const n = p.length;
+      const gap = (a: Point, b: Point) => nearestWall(plan.structure, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })?.distanceMm ?? Infinity;
+      // The side through the front's first corner, and the side through its second.
+      const atStart = gap(p[cur.front], p[(cur.front + n - 1) % n]);
+      const atEnd = gap(p[(cur.front + 1) % n], p[(cur.front + 2) % n]);
+      const first: "centre" | "start" | "end" = atStart <= WALL_HUG_MM && atStart <= atEnd ? "start" : atEnd <= WALL_HUG_MM ? "end" : "centre";
+      const anchors = [first, ...(["centre", "start", "end"] as const).filter((a) => a !== first)];
+      const polygon = anchors.map((a) => resizeRect(p, cur.front, widthMm, depthMm, a)).find((q) => !stageWalls.length || !crossesWalls(q, stageWalls, p));
+      if (!polygon) {
+        showHint("המידה לא נכנסת כאן — הבמה תעבור דרך קיר");
+        return;
+      }
+      setStageFill((c) => (c === cur ? { ...c, polygon, front: 0 } : c));
+    },
+    [stageFill, plan.structure, stageWalls, setStageFill],
+  );
 
   /** The studio's railing rule (settings → במות). Off until the studio says otherwise — and off while
    *  it is being read, rather than guessing a height for a frame. */
@@ -3216,12 +3273,35 @@ export function StudioScreen({
       if (!soleStage) return;
       if (size.widthMm < 100 || size.depthMm < 100) return;
       const st = soleStage.stage;
+      // The new stage, put with its middle `dx` along its front from where it was — the back held where
+      // it stands — and never through a wall (QA 2026-11-20, ST-3). Of its middle and its two sides,
+      // the side against a wall is held first, so a stage beside a wall grows from it, not into it;
+      // the first that fits is taken.
+      const was = stageOutlineInRoom(soleStage);
+      const place = (widthNow: number, make: (dx: number) => { stage: StageBuild; position: DocPoint }) => {
+        const half = widthNow / 2;
+        const grow = (size.widthMm - widthNow) / 2;
+        const gap = (x: number) => wallDistance(toRoom(soleStage, { x, y: 0 }));
+        const order = gap(-half) <= WALL_HUG_MM && gap(-half) <= gap(half) ? [grow, 0, -grow] : gap(half) <= WALL_HUG_MM ? [-grow, 0, grow] : [0, grow, -grow];
+        for (const dx of order) {
+          const next = make(dx);
+          if (stageWalls.length && crossesWalls(next.stage.outline.map((q) => toRoom({ ...soleStage, position: next.position }, q)), stageWalls, was)) continue;
+          act({ type: "setPlacementStage", id: soleStage.id, stage: next.stage, position: next.position });
+          return;
+        }
+        showHint("המידה לא נכנסת כאן — הבמה תעבור דרך קיר");
+      };
+      const at = (dx: number, dy: number) => {
+        const c = toRoom(soleStage, { x: dx, y: dy });
+        return { x: Math.round(c.x), y: Math.round(c.y) };
+      };
       const cur = stageRect(st);
       if (cur) {
-        const c = toRoom(soleStage, { x: 0, y: (cur.depthMm - size.depthMm) / 2 });
-        const position = { x: Math.round(c.x), y: Math.round(c.y) };
-        const levels = carryLevels(st.levels, soleStage, { ...soleStage, position });
-        act({ type: "setPlacementStage", id: soleStage.id, stage: { ...st, outline: rectOutline(size.widthMm, size.depthMm), levels }, position });
+        place(cur.widthMm, (dx) => {
+          const position = at(dx, (cur.depthMm - size.depthMm) / 2);
+          const levels = carryLevels(st.levels, soleStage, { ...soleStage, position });
+          return { stage: { ...st, outline: rectOutline(size.widthMm, size.depthMm), levels }, position };
+        });
         return;
       }
       // A rounded or bowed rectangle: the plain rectangle at the new size, shaped the same way again
@@ -3230,11 +3310,12 @@ export function StudioScreen({
       if (shape && plainRect(st)) {
         const box = stageBox(st);
         const next = shapedRect(size.widthMm, Math.max(100, size.depthMm - shape.bowMm), shape);
-        const c = toRoom(soleStage, { x: 0, y: (box.depthMm - size.depthMm) / 2 });
-        const position = { x: Math.round(c.x), y: Math.round(c.y) };
-        const levels = carryLevels(st.levels, soleStage, { ...soleStage, position });
         const { smooth: _s, ...rest } = st;
-        act({ type: "setPlacementStage", id: soleStage.id, stage: { ...rest, outline: next.outline, front: next.front, ...(next.smooth ? { smooth: next.smooth } : {}), levels }, position });
+        place(box.widthMm, (dx) => {
+          const position = at(dx, (box.depthMm - size.depthMm) / 2);
+          const levels = carryLevels(st.levels, soleStage, { ...soleStage, position });
+          return { stage: { ...rest, outline: next.outline, front: next.front, ...(next.smooth ? { smooth: next.smooth } : {}), levels }, position };
+        });
         return;
       }
       // A stage with a curve — a disc, an oval, a half-round — is SCALED whole: the curve stays the
@@ -3247,10 +3328,9 @@ export function StudioScreen({
       const w = Math.max(...xs) - Math.min(...xs);
       const d = Math.max(...ys) - Math.min(...ys);
       if (!w || !d || (Math.abs(size.widthMm - w) < 1 && Math.abs(size.depthMm - d) < 1)) return;
-      const c = toRoom(soleStage, { x: 0, y: (d - size.depthMm) / 2 });
-      act({ type: "setPlacementStage", id: soleStage.id, stage: scaleStage(st, size), position: { x: Math.round(c.x), y: Math.round(c.y) } });
+      place(w, (dx) => ({ stage: scaleStage(st, size), position: at(dx, (d - size.depthMm) / 2) }));
     },
-    [soleStage, act],
+    [soleStage, act, wallDistance, stageWalls],
   );
 
   /** Back into the area tool with this stage's own outline, front and decks. */
@@ -5730,8 +5810,14 @@ export function StudioScreen({
               // A stage's handles stretch its OUTLINE — the decks follow on their own. A round one is
               // scaled whole (scaleStage): it stays the curve it is.
               const was = doc.placements.find((p) => p.id === id);
+              // A frame that would take the stage through a wall — deeper than it already was — is not
+              // taken: the handle holds, as an outline grip does (lib/studio/wall-clip.ts, QA 2026-11-20 ST-3).
+              const throughWall = (stage: StageBuild) =>
+                !!was?.stage && stageWalls.length > 0 && crossesWalls(stage.outline.map((q) => toRoom({ ...was, position }, q)), stageWalls, stageOutlineInRoom(was as StagePlacement));
               if (was?.stage && stageIsRound(was.stage)) {
-                drag({ type: "setPlacementStage", id, stage: scaleStage(was.stage, sizeMm), position });
+                const stage = scaleStage(was.stage, sizeMm);
+                if (throughWall(stage)) return;
+                drag({ type: "setPlacementStage", id, stage, position });
                 return;
               }
               // A rounded or bowed rectangle's handles stretch its BOX; the plain rectangle behind it
@@ -5741,12 +5827,16 @@ export function StudioScreen({
                 const next = shapedRect(sizeMm.widthMm, Math.max(100, sizeMm.depthMm - shape.bowMm), shape);
                 const levels = carryLevels(was.stage.levels, was, { ...was, position });
                 const { smooth: _s, ...rest } = was.stage;
-                drag({ type: "setPlacementStage", id, stage: { ...rest, outline: next.outline, front: next.front, ...(next.smooth ? { smooth: next.smooth } : {}), levels }, position });
+                const stage: StageBuild = { ...rest, outline: next.outline, front: next.front, ...(next.smooth ? { smooth: next.smooth } : {}), levels };
+                if (throughWall(stage)) return;
+                drag({ type: "setPlacementStage", id, stage, position });
                 return;
               }
               if (was?.stage) {
                 const levels = carryLevels(was.stage.levels, was, { ...was, position });
-                drag({ type: "setPlacementStage", id, stage: { ...was.stage, outline: rectOutline(sizeMm.widthMm, sizeMm.depthMm), levels }, position });
+                const stage = { ...was.stage, outline: rectOutline(sizeMm.widthMm, sizeMm.depthMm), levels };
+                if (throughWall(stage)) return;
+                drag({ type: "setPlacementStage", id, stage, position });
                 return;
               }
               drag({ type: "resizePlacement", id, sizeMm });

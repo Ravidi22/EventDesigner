@@ -83,6 +83,44 @@ export function snapDeck(box: DeckBox, others: readonly DeckBox[], bounds: Bound
   return { x: Math.round(cx), y: Math.round(cy) };
 }
 
+/** The pieces put by hand (decks, holes) the outline holds, by their index among them — a piece by its
+ *  centre. One the outline no longer holds (a side typed shorter past it, an area redrawn smaller) is
+ *  SET ASIDE: not laid, drawn, counted or billed — a new stage kept it, a deck floating off its edge
+ *  and a hole off its billed area (QA 2026-11-20, ST-5) — and back the moment the outline holds it
+ *  again. */
+export function heldPieces(pieces: readonly { centre: Point }[], outline: readonly Point[]): number[] {
+  const held = (p: Point) => {
+    let inside = false;
+    for (let i = 0, j = outline.length - 1; i < outline.length; j = i++) {
+      const a = outline[i];
+      const b = outline[j];
+      if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+    }
+    return inside;
+  };
+  return pieces.flatMap((pc, k) => (held(pc.centre) ? [k] : []));
+}
+
+/** A deck of the fill as picked: a PIECE by its index among the pieces put by hand, or a LAID deck by
+ *  its index in the layout on screen. */
+type DeckPick = { kind: "piece" | "deck"; index: number };
+
+/** The fill tool's next state, its deck pick kept only while it still names the deck it named. A laid
+ *  deck is picked by its place in the layout on screen, and a layout laid again from another outline,
+ *  front or set of decks numbers its decks afresh — the same index then names another deck, and a key
+ *  pressed after a typed length turned or pinned THAT one (QA 2026-11-20, ST-8). So a change to any of
+ *  `laidFrom` (compared by reference: an update keeps what it does not change) lets a deck pick go; a
+ *  piece is picked by its own index, and is kept. */
+export function keepDeckPick<S extends object>(cur: S | null, next: S | null, laidFrom: readonly string[]): S | null {
+  const picked = (next as { picked?: DeckPick } | null)?.picked;
+  if (!cur || !next || picked?.kind !== "deck") return next;
+  const was = cur as Record<string, unknown>;
+  const now = next as Record<string, unknown>;
+  if (laidFrom.every((k) => was[k] === now[k])) return next;
+  const { picked: _gone, ...rest } = next as S & { picked?: DeckPick };
+  return rest as S;
+}
+
 // ponytail: self-check. Run: npm run check:deck-move
 if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
@@ -103,5 +141,23 @@ if (isMain(import.meta.url)) {
   assert(edge.x === 1780 && edge.y === 1390, `near the outline's corner it lands in the corner (${edge.x}, ${edge.y})`);
   const out = snapDeck(sheet(2900, 0), laid, bounds, 80);
   assert(out.x === 1780, "dragged past the line it stops at it");
+
+  // QA 2026-11-20 ST-5: a deck pinned (or a hole made) at the left end, the front then typed shorter
+  // so that end goes — the outline no longer holds it, and it is set aside, not built.
+  const area = [{ x: 0, y: 0 }, { x: 4880, y: 0 }, { x: 4880, y: 2440 }, { x: 0, y: 2440 }];
+  const pinned = [{ centre: { x: 610, y: 1220 } }, { centre: { x: 3660, y: 610 } }, { centre: { x: 6000, y: 610 } }];
+  assert(heldPieces(pinned, area).join() === "0,1", "the pieces the outline holds, by their place among them");
+  assert(heldPieces(pinned, [{ x: 2440, y: 0 }, { x: 4880, y: 0 }, { x: 4880, y: 2440 }, { x: 2440, y: 2440 }]).join() === "1", "…its left end cut away, the left piece is set aside");
+
+  // QA 2026-11-20 ST-8: a LAID deck is picked by its index in the layout, so a change to what the
+  // layout is laid from lets the pick go; a piece is picked by its own index and is kept.
+  const laidFrom = ["polygon", "front"];
+  const poly = [{ x: 0, y: 0 }];
+  const st = { polygon: poly, front: 0, picked: { kind: "deck" as const, index: 3 } };
+  assert(keepDeckPick(st, { ...st }, laidFrom)?.picked?.index === 3, "a change that lays nothing afresh keeps the deck picked");
+  assert(keepDeckPick(st, { ...st, polygon: [{ x: 1, y: 0 }] }, laidFrom)?.picked === undefined, "a reshaped outline lets a laid deck's pick go");
+  assert(keepDeckPick(st, { ...st, front: 1 }, laidFrom)?.picked === undefined, "…and so does another front");
+  const pc = { ...st, picked: { kind: "piece" as const, index: 0 } };
+  assert(keepDeckPick(pc, { ...pc, polygon: [{ x: 1, y: 0 }] }, laidFrom)?.picked?.index === 0, "a piece stays picked through a reshape");
   console.log("deck-move self-check passed");
 }

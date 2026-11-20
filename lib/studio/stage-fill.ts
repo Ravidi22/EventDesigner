@@ -1261,12 +1261,14 @@ export function polygonsOverlap(a: readonly Point[], b: readonly Point[]): boole
 
 /** The drawn rectangle at a new size: centred along the front, and kept against its BACK edge — a
  *  stage is usually against something (a wall, a backdrop), and the front is what moves to meet
- *  the room. Returned with its front as edge 0. */
-export function resizeRect(polygon: readonly Point[], front: number, widthMm: number, depthMm: number): Point[] {
+ *  the room. Returned with its front as edge 0. `anchor` holds one END of the front instead of its
+ *  middle — "start" the front's first corner, "end" its second — for a stage against a side wall,
+ *  which grows from that wall rather than into it (QA 2026-11-20, ST-3). */
+export function resizeRect(polygon: readonly Point[], front: number, widthMm: number, depthMm: number, anchor: "centre" | "start" | "end" = "centre"): Point[] {
   const rect = asRect(polygon, front);
   if (!rect) return [...polygon];
   const frame = frameOf(polygon, front);
-  const x0 = (rect.widthMm - widthMm) / 2;
+  const x0 = anchor === "start" ? 0 : anchor === "end" ? rect.widthMm - widthMm : (rect.widthMm - widthMm) / 2;
   const x1 = x0 + widthMm;
   const y1 = rect.depthMm;
   const y0 = y1 - depthMm;
@@ -1358,6 +1360,14 @@ if (isMain(import.meta.url)) {
   const ry = resized.map((p) => p.y);
   assert(Math.min(...ry) === 1000 && Math.max(...ry) === 3000, "a suggested size keeps the back edge where it was");
   assert(fillWithDecks(resized, [big], { front: 0 }).coverage > 0.999, "…and the resized area really is exact");
+  // QA 2026-11-20 ST-3: a stage in a corner, made wider, grows from the wall it stands against — its
+  // far end moves — instead of about its middle into that wall.
+  const fromStart = resizeRect(rect(0, 0, 6900, 3000), 0, 7320, 3000, "start");
+  assert(Math.min(...fromStart.map((p) => p.x)) === 0 && Math.max(...fromStart.map((p) => p.x)) === 7320, "anchored at the front's first corner, it grows from there");
+  const fromEnd = resizeRect(rect(0, 0, 6900, 3000), 0, 7320, 3000, "end");
+  assert(Math.min(...fromEnd.map((p) => p.x)) === -420 && Math.max(...fromEnd.map((p) => p.x)) === 6900, "…at its second, from there");
+  const aboutMiddle = resizeRect(rect(0, 0, 6900, 3000), 0, 7320, 3000);
+  assert(Math.min(...aboutMiddle.map((p) => p.x)) === -210, "…and by default about its middle, as before");
 
   // Turned: a 4×2 area drawn at 30° is decked along its own edge.
   const t = (30 * Math.PI) / 180;
