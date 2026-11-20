@@ -17,6 +17,7 @@ import type { HollowSpec, MapAppearance, MapShape, Product, ShapePart } from "./
 import { FRONT_THICK_MM, canHollow, usesDiameter } from "./types";
 import type { EdgeCurve, Point } from "../studio/hall";
 import { customShapeBounds, flattenEdge, frontFace, hollowOuter, placedPartOutline, roundSizeMm, sampledBounds, placedPartOutlines, repeatCopies, resolveFootprint, footprintBounds, type BuiltOutline } from "../studio/footprint";
+import { seatSides, type SeatSide } from "../studio/seating";
 import { isMain } from "../self-check";
 
 /** A line's thickness when nothing says otherwise — a rope, a cable, a rail. */
@@ -210,7 +211,34 @@ export function upright(s: ShapePart): ShapePart {
   if ((s.shape === "rect" || s.shape === "square" || s.shape === "ellipse") && !s.hollow && r % 90 === 0) {
     return r % 180 === 0 ? { ...s, rotation: 0 } : { ...s, rotation: 0, widthMm: s.depthMm, depthMm: s.widthMm };
   }
+  // A turn the shape is its own image under — anything point-symmetric's half turn, a regular
+  // hexagon's 60° — is no turn at all (SH-9): it stays the shape it is, never a free drawing of it.
+  if (s.shape !== "custom" && turnsIntoItself(s, r)) return { ...s, rotation: 0 };
   return baked(s, placedPartOutline(s));
+}
+
+const symmetryCache = new Map<string, boolean>();
+/** Whether the shape turned `r` draws exactly what it draws unturned — measured off its drawing. */
+function turnsIntoItself(s: ShapePart, r: number): boolean {
+  const at = { ...s, id: "", x: 0, y: 0 };
+  const key = JSON.stringify({ ...at, rotation: r });
+  const hit = symmetryCache.get(key);
+  if (hit !== undefined) return hit;
+  const still = placedPartOutlines({ ...at, rotation: 0 });
+  const turned = polylines(placedPartOutlines({ ...at, rotation: r }));
+  const b = sampledBounds(still);
+  const tol = Math.max(1, Math.max(b.w, b.h) * 0.002);
+  const same = onLines(turned, polylines(still), tol) && onLines(polylines(still), turned, tol);
+  if (symmetryCache.size > 200) symmetryCache.clear();
+  symmetryCache.set(key, same);
+  return same;
+}
+
+/** Whether a first shape stored as the base would be turned into a FREE DRAWING by its turn (the
+ *  base has no turn of its own): the editor says so before it is saved (SH-9) — a hexagon turned 45°
+ *  comes back "צורה חופשית", and a width typed later stretches its corners. */
+export function bakesTurn(s: ShapePart): boolean {
+  return s.shape !== "custom" && s.plane !== "front" && turn(s.rotation || 0) !== 0 && upright(s).shape === "custom";
 }
 
 /** A FRONT shape as the base can store it: its plan turn is the caller's (lookOf turns the whole
@@ -392,8 +420,6 @@ export function lookOf(look: Product, shapes: readonly ShapePart[]): { dimension
     ? { ...d, widthMm: Math.round(box.w), depthMm: Math.round(box.h), diameterMm: undefined }
     : { ...d, ...sizeFieldsOf(s0.shape, s0) };
   const parts = rest.map((q) => shifted(q, -s0.x, -s0.y));
-  // The turned base moved the seat sides under the chairs; they are picked again.
-  const moved = s0 !== first && turn(first.rotation || 0) !== 0;
   return {
     dimensions,
     appearance: {
@@ -414,7 +440,10 @@ export function lookOf(look: Product, shapes: readonly ShapePart[]): { dimension
       textureImage: s0.textureImage,
       baseStyle: s0.style,
       parts: parts.length ? parts : undefined,
-      blockedSides: moved ? undefined : a?.blockedSides,
+      // Kept whatever the first shape's turn (SH-9): the editor draws the seat sides on this very row
+      // (its preview is lookOf's), so what it showed blocked is what is saved. They were dropped on
+      // every save of a turned first shape, even a half turn, while the editor showed them blocked.
+      blockedSides: a?.blockedSides,
       plane: undefined,
       bendDeg: undefined,
       faceTurnDeg: undefined,
@@ -478,6 +507,120 @@ export function drawnBounds(shapes: readonly ShapePart[]) {
 export function drawnPieces(shapes: readonly ShapePart[]): BuiltOutline[] {
   const base = shapes[0] ? placedPartOutline(shapes[0]) : null;
   return shapes.flatMap((s, i) => (i > 0 && s.repeat && s.plane !== "front" && base ? repeatCopies(s, base) : placedPartOutlines(s)));
+}
+
+// ── The stack and the base ────────────────────────────────────────────────────────────────────────
+
+export type StackMove = "front" | "back" | "forward" | "backward";
+
+/** The list with `ids` moved in the stack — the list IS the stack, the last drawn on top — with the
+ *  FIRST shape left first. It is the item's base (the row's dimensions, on the floor, as tall as the
+ *  item), and "to the back" used to make whatever was sent there the base: a shelf a metre up became
+ *  a block on the floor as tall as the item, its height and its place thrown away (SH-8). Now "to the
+ *  back" is just above the base, and the base moves only by being deleted (promotionLoss says what
+ *  the next one loses then). */
+export function restackShapes(list: readonly ShapePart[], ids: readonly string[], how: StackMove): ShapePart[] {
+  if (list.length < 2) return [...list];
+  const [base, ...out] = list;
+  const moved = out.filter((s) => ids.includes(s.id));
+  const rest = out.filter((s) => !ids.includes(s.id));
+  if (how === "front") return [base, ...rest, ...moved];
+  if (how === "back") return [base, ...moved, ...rest];
+  const step = how === "forward" ? 1 : -1;
+  const order = how === "forward" ? [...out.keys()].reverse() : [...out.keys()];
+  for (const i of order) {
+    const j = i + step;
+    if (!ids.includes(out[i].id) || j < 0 || j >= out.length || ids.includes(out[j].id)) continue;
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return [base, ...out];
+}
+
+/** What a shape loses by becoming the base (the first shape deleted): the base stands on the floor,
+ *  as tall as the item, laid once — so its own height from the floor, its own height, its pin and its
+ *  repeat go. Empty when it loses nothing. In the words the editor's warning uses. */
+export function promotionLoss(s: ShapePart): string[] {
+  const out: string[] = [];
+  if (s.zMm) out.push(`גובה מהרצפה ${Math.round(s.zMm / 10)} ס״מ`);
+  if (s.heightMm !== undefined && s.plane !== "front") out.push(`גובה ${Math.round(s.heightMm / 10)} ס״מ`);
+  if (s.pin) out.push("העיגון");
+  if (s.repeat) out.push("החזרה");
+  return out;
+}
+
+// ── Seat sides that follow their shape ────────────────────────────────────────────────────────────
+
+/** The pieces a shape adds to the item's footprint, where the canvas stands them: the first as it is
+ *  STORED (upright — a turned base is numbered as the row will number it), a repeated one as its
+ *  copies (drawnPieces). */
+function seatPiecesOf(list: readonly ShapePart[], i: number): BuiltOutline[] {
+  const s = list[i];
+  if (i === 0) return placedPartOutlines(upright(s));
+  const base = placedPartOutline(list[0]);
+  return s.repeat && s.plane !== "front" ? repeatCopies(s, base) : placedPartOutlines(s);
+}
+
+/** Every shape's seat sides, in list order, where the canvas stands them — blockedSides number them
+ *  base first, then each shape (lib/studio/seating.ts seatSides over the composed footprint). Null
+ *  when they do not add up to the item's own count (a shape too unusual to tell apart). */
+function sidesByShape(look: Product, list: readonly ShapePart[]): SeatSide[][] | null {
+  if (!list.length) return [];
+  const sides = list.map((_, i) => seatSides({ kind: "multi", parts: seatPiecesOf(list, i) }));
+  const total = seatSides(resolveFootprint({ ...look, ...lookOf(look, list) })).length;
+  return sides.reduce((n, s) => n + s.length, 0) === total ? sides : null;
+}
+
+const SIDE_TOL_MM = 2;
+
+/** Whether seat side `s` lies along polyline `on` — its middle on it, within a hair. */
+function liesOn(s: SeatSide, on: readonly Point[]): boolean {
+  let walked = 0;
+  let mid = s.pts[0];
+  for (let k = 0; k < s.pts.length - 1; k++) {
+    if (walked + s.lengths[k] >= s.len / 2) {
+      const t = s.lengths[k] ? (s.len / 2 - walked) / s.lengths[k] : 0;
+      mid = { x: s.pts[k].x + (s.pts[k + 1].x - s.pts[k].x) * t, y: s.pts[k].y + (s.pts[k + 1].y - s.pts[k].y) * t };
+      break;
+    }
+    walked += s.lengths[k];
+  }
+  return on.some((v, i) => i < on.length - 1 && segDist(mid, v, on[i + 1]) <= SIDE_TOL_MM);
+}
+
+/** The item's blocked seat sides when its list of shapes changes, each following ITS shape (SH-13,
+ *  QA 2026-11-20): a shape deleted takes its blocks with it and the shapes after it shift down, a
+ *  shape made the base or moved in the stack takes them where it goes. Before, an index past the end
+ *  was dropped and every other kept its number — a head table's blocked front became its side, chairs
+ *  on the front. A shape REDRAWN point by point (`redrawn`, its id) — or any whose sides changed in
+ *  number — is read by where its sides are: a new side is blocked where it lies on one that was (a
+ *  point added on a straight side changes no seat side; one pulled out of the line splits it, and
+ *  neither half is where the side was). */
+export function remapBlockedSides(look: Product, before: readonly ShapePart[], after: readonly ShapePart[], blocked: readonly number[], redrawn?: string): number[] {
+  if (!blocked.length || !after.length) return [];
+  const was = sidesByShape(look, before);
+  const now = sidesByShape(look, after);
+  if (!was || !now) {
+    const total = seatSides(resolveFootprint({ ...look, ...lookOf(look, after) })).length;
+    return blocked.filter((i) => i < total);
+  }
+  const start = (sides: SeatSide[][]) => sides.map((_, i) => sides.slice(0, i).reduce((n, s) => n + s.length, 0));
+  const wasAt = start(was);
+  const nowAt = start(now);
+  const out: number[] = [];
+  after.forEach((s, i) => {
+    const k = before.findIndex((q) => q.id === s.id);
+    if (k < 0) return;
+    const local = blocked.filter((b) => b >= wasAt[k] && b < wasAt[k] + was[k].length).map((b) => b - wasAt[k]);
+    if (!local.length) return;
+    if (s.id !== redrawn && was[k].length === now[i].length) {
+      out.push(...local.map((l) => nowAt[i] + l));
+      return;
+    }
+    now[i].forEach((side, j) => {
+      if (local.some((l) => liesOn(side, was[k][l].pts))) out.push(nowAt[i] + j);
+    });
+  });
+  return [...new Set(out)].sort((a, b) => a - b);
 }
 
 // ponytail: self-check. Run: npm run check:shape-list
@@ -659,5 +802,63 @@ if (isMain(import.meta.url)) {
   assert(twoNumbers.widthMm === 1200 && twoNumbers.depthMm === 1200, `a square row stored 120×60 opens 120 a side, as drawn (${twoNumbers.widthMm}×${twoNumbers.depthMm})`);
   const made = reshaped(shapesOf(row({}))[0], "square");
   assert(made.widthMm === 1600 && made.depthMm === 1600, `a 160×90 made a square is 160 a side (${made.widthMm}×${made.depthMm})`);
+
+  // SH-8: the stack never makes another shape the base. "To the back" stops just above it; the base
+  // itself stays first whatever is asked of it. A shelf a metre up sent "to the back" became the base
+  // — its height and its place above the floor thrown away.
+  const ids = (l: ShapePart[]) => l.map((s) => s.id).join("");
+  const stack: ShapePart[] = [
+    { id: "a", shape: "rect", widthMm: 1600, depthMm: 600, x: 0, y: 0, rotation: 0 },
+    { id: "b", shape: "rect", widthMm: 1600, depthMm: 250, x: 0, y: -400, rotation: 0, zMm: 1000, heightMm: 40 },
+    { id: "c", shape: "circle", diameterMm: 600, x: 900, y: 0, rotation: 0 },
+  ];
+  assert(ids(restackShapes(stack, ["c"], "back")) === "acb", `to the back: just above the base (${ids(restackShapes(stack, ["c"], "back"))})`);
+  assert(ids(restackShapes(stack, ["b"], "back")) === "abc", "…a shape already there stays");
+  assert(ids(restackShapes(stack, ["a"], "front")) === "abc" && ids(restackShapes(stack, ["a"], "forward")) === "abc", "the base stays first");
+  assert(ids(restackShapes(stack, ["c"], "backward")) === "acb" && ids(restackShapes(stack, ["b"], "backward")) === "abc", "one step back stops above the base");
+  assert(ids(restackShapes(stack, ["b"], "front")) === "acb" && ids(restackShapes(stack, ["b"], "forward")) === "acb", "to the front as before");
+  assert(promotionLoss(stack[1]).length === 2 && promotionLoss(stack[2]).length === 0, `a raised shelf made the base loses its height and its place above the floor (${promotionLoss(stack[1])})`);
+
+  // SH-9: a turn a shape is its own image under is no turn — it stays the shape it is; any other turn
+  // of a drawn shape is baked into a free drawing, and the editor can say so before it happens.
+  const hexAt = (rotation: number, depthMm = 1000): ShapePart => ({ id: "h", shape: "hexagon", widthMm: 1200, depthMm, x: 50, y: 70, rotation });
+  assert(upright(hexAt(180)).shape === "hexagon" && upright(hexAt(180)).rotation === 0, "a hexagon turned 180° stays a hexagon");
+  assert(upright(hexAt(60, Math.round((1200 * Math.sqrt(3)) / 2))).shape === "hexagon", "…a regular one turned 60° too");
+  assert(upright(hexAt(60)).shape === "custom" && bakesTurn(hexAt(60)), "a hexagon turned 60° that is not regular is baked, and the editor knows it");
+  assert(!bakesTurn(hexAt(180)) && !bakesTurn({ ...rect, rotation: 90 }) && !bakesTurn({ id: "c", shape: "circle", diameterMm: 900, x: 0, y: 0, rotation: 33 }), "…the turns that are no turn are not");
+  assert(upright({ id: "t", shape: "triangle", widthMm: 1200, depthMm: 600, x: 0, y: 0, rotation: 180 }).shape === "custom", "a triangle turned upside down is baked");
+  // What the editor showed is what is saved: a turned first shape's seat sides were dropped on save
+  // (even at 180°), while the editor drew them blocked.
+  const blockedRow = row({ blockedSides: [2] });
+  assert(lookOf(blockedRow, [{ ...shapesOf(blockedRow)[0], rotation: 180 }]).appearance.blockedSides?.join() === "2", "a turned first shape keeps its seat sides");
+  assert(lookOf(blockedRow, [{ ...shapesOf(blockedRow)[0], rotation: 30 }]).appearance.blockedSides?.join() === "2", "…baked or not");
+
+  // SH-13: blocked seat sides follow THEIR shape when the list changes — base first, then each shape,
+  // as seatSides numbers them. Before, an index past the end was dropped and every other kept its
+  // number: a head table's blocked front became its side.
+  const head = row({ parts: [{ id: "end", shape: "circle", diameterMm: 900, x: 800, y: 0, rotation: 0 }] });
+  const hs = shapesOf(head);
+  const rr: ShapePart = { id: "r", shape: "rect", widthMm: 600, depthMm: 400, x: -900, y: 0, rotation: 0 };
+  assert(remapBlockedSides(head, hs, [hs[0]], [2]).join() === "2", "the end taken away: the front stays blocked");
+  assert(remapBlockedSides(head, hs, [hs[1]], [4]).join() === "0", "the base taken away: the end's blocked side is the new base's");
+  assert(remapBlockedSides(head, [...hs, rr], [hs[0], rr, hs[1]], [2, 4, 6]).join() === "2,5,8", `reordered: each side moves with its shape (${remapBlockedSides(head, [...hs, rr], [hs[0], rr, hs[1]], [2, 4, 6])})`);
+  assert(remapBlockedSides(head, hs, [hs[0], { ...hs[1], x: 1200 }], [2, 4]).join() === "2,4", "moved: nothing renumbers");
+  // Redrawn point by point: a side is blocked where it lies on a side that was. A point added on a
+  // straight side and left on it changes no seat side (seatSides joins it), one pulled out of the line
+  // makes the top two sides and the front side 3; a side no longer where any blocked one was is open.
+  const drawnAs = (outline: Point[]): ShapePart => {
+    const b = customShapeBounds(outline);
+    return { ...hs[0], shape: "custom", outline, widthMm: Math.round(b.w), depthMm: Math.round(b.h), x: Math.round(b.cx), y: Math.round(b.cy) };
+  };
+  const onLine = drawnAs([{ x: -800, y: -450 }, { x: 0, y: -450 }, { x: 800, y: -450 }, { x: 800, y: 450 }, { x: -800, y: 450 }]);
+  assert(remapBlockedSides(head, hs, [onLine, hs[1]], [2, 4], hs[0].id).join() === "2,4", `a point added on the top, left on its line: nothing moves (${remapBlockedSides(head, hs, [onLine, hs[1]], [2, 4], hs[0].id)})`);
+  const pulled = drawnAs([{ x: -800, y: -450 }, { x: 0, y: -600 }, { x: 800, y: -450 }, { x: 800, y: 450 }, { x: -800, y: 450 }]);
+  assert(remapBlockedSides(head, hs, [pulled, hs[1]], [2, 4], hs[0].id).join() === "3,5", `…pulled out: the front is side 3, the end's side 5 (${remapBlockedSides(head, hs, [pulled, hs[1]], [2, 4], hs[0].id)})`);
+  assert(remapBlockedSides(head, hs, [pulled, hs[1]], [0, 4], hs[0].id).join() === "5", "…and the blocked top it split is open: neither half is where it was");
+  // The base stands upright from a half turn: its sides are read as stored, wherever the editor started.
+  const halfTurned = [{ ...shapesOf(blockedRow)[0], rotation: 180 }];
+  const redrawnTurned = { ...drawnAs(placedPartOutline(halfTurned[0]).outline), id: halfTurned[0].id };
+  // (its outline now starts at the corner the turn put first, so the bottom is the new side 0)
+  assert(remapBlockedSides(blockedRow, halfTurned, [redrawnTurned], [2], halfTurned[0].id).join() === "0", `a half-turned rectangle redrawn keeps its blocked bottom (${remapBlockedSides(blockedRow, halfTurned, [redrawnTurned], [2], halfTurned[0].id)})`);
   console.log("shape-list: ok");
 }

@@ -49,7 +49,7 @@ import { CHANDELIER_CRYSTALS, CHANDELIER_PROFILES, FITTING_LABEL, PENDANT_FITTIN
 import { CHUPPAH_FINISHES, CHUPPAH_FINISH_LABEL, CHUPPAH_FLOWERS_LABEL, CHUPPAH_FLOWER_SPOTS, CHUPPAH_PROFILES, CHUPPAH_PROFILE_FORMS, CHUPPAH_PROFILE_LABEL, CHUPPAH_ROOFS, CHUPPAH_ROOF_LABEL, chuppahDrawOf, chuppahLayout, chuppahOf, chuppahPatch } from "@/lib/catalog/chuppah";
 import { ARC_SWEEP, FRONT_BEND_MAX_DEG, FRONT_THICK_MM, MAP_SHAPES, PICKER_SHAPES, RING_GAP, ROUND_FIELD, SHAPE_LABEL, canHollow, usesDiameter } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
-import { LINE_MM, drawnBounds, drawnPieces, flipShapes, hollowAcross, lookOf, patchedPart, reshaped, shapesOf, squareSide, type FlipAxis } from "@/lib/catalog/shape-list";
+import { LINE_MM, bakesTurn, drawnBounds, drawnPieces, flipShapes, hollowAcross, lookOf, patchedPart, promotionLoss, remapBlockedSides, reshaped, restackShapes, shapesOf, squareSide, type FlipAxis, type StackMove } from "@/lib/catalog/shape-list";
 import type { EdgeCurve } from "@/lib/studio/hall";
 import {
   arcSpecOf,
@@ -772,22 +772,6 @@ const partBox = (p: ShapePart) => {
 
 const shifted = (p: ShapePart, dx: number, dy: number): ShapePart => ({ ...p, x: Math.round(p.x + dx), y: Math.round(p.y + dy) });
 
-/** The list with `ids` moved in the stack — the list IS the stack, the last drawn on top. */
-function restacked(list: readonly ShapePart[], ids: readonly string[], how: "front" | "back" | "forward" | "backward"): ShapePart[] {
-  const moved = list.filter((s) => ids.includes(s.id));
-  const rest = list.filter((s) => !ids.includes(s.id));
-  if (how === "front") return [...rest, ...moved];
-  if (how === "back") return [...moved, ...rest];
-  const out = [...list];
-  const step = how === "forward" ? 1 : -1;
-  const order = how === "forward" ? [...out.keys()].reverse() : [...out.keys()];
-  for (const i of order) {
-    const j = i + step;
-    if (!ids.includes(out[i].id) || j < 0 || j >= out.length || ids.includes(out[j].id)) continue;
-    [out[i], out[j]] = [out[j], out[i]];
-  }
-  return out;
-}
 
 /** The shape picker on a shape's bar: every shape as its own picture, plus "draw it yourself". A grid
  *  of cards rather than a Select — the bar sits on the bottom edge of the canvas, and a list that
@@ -1413,7 +1397,7 @@ function ShapeQuickBar({
       icon={drawn ? (part.open ? Route : PenLine) : Shapes}
       title={title}
       badge={base ? "בסיס" : undefined}
-      facts={base ? "מידות הפריט וגובהו" : part.repeat ? `חוזרת ${REPEAT_SHORT[part.repeat.along]}` : undefined}
+      facts={base ? (bakesTurn(part) ? "מסובבת — תישמר כצורה חופשית" : "מידות הפריט וגובהו") : part.repeat ? `חוזרת ${REPEAT_SHORT[part.repeat.along]}` : undefined}
       onClose={onClose}
     >
       <Popover label="צורה" icon={Shapes} value={drawn ? "חופשית" : SHAPE_LABEL[part.shape]} variant="picker">
@@ -1588,6 +1572,14 @@ function ShapePanel({
   const fillOuter = front ? frontFace(part.shape, { ...part, hollow: undefined }).pieces[0] : placedPartOutline(part);
   return (
     <>
+      {/* The base has no turn of its own: a first shape turned at an angle it is not its own image
+          under is saved as a FREE DRAWING of what the canvas shows (lib/catalog/shape-list.ts upright).
+          Said before it happens (SH-9) — afterwards a typed width stretches its corners. */}
+      {base && bakesTurn(part) && (
+        <div className="px-4 pb-3">
+          <Note>{`הצורה הראשונה מסובבת ב־${Math.round(part.rotation || 0)}° — בשמירה היא תישמר כצורה חופשית בזווית הזו, ושינוי רוחב או עומק אחר כך ימתח את הקווים. כדי שתישאר ${SHAPE_LABEL[part.shape]}: החזירו אותה ל־0° וסובבו את הפריט על הסקיצה.`}</Note>
+        </div>
+      )}
       {front && (
         <FoldRow
           {...group(groups, "front")}
@@ -2081,10 +2073,10 @@ export function AppearanceModal({
   // A transient line over the canvas — why a close was refused, and the like. The studio's own.
   const [hint, setHint] = useState<string | null>(null);
   const hintTimer = useRef<number | null>(null);
-  const showHint = (msg: string) => {
+  const showHint = (msg: string, ms = 2800) => {
     setHint(msg);
     if (hintTimer.current !== null) window.clearTimeout(hintTimer.current);
-    hintTimer.current = window.setTimeout(() => setHint(null), 2800);
+    hintTimer.current = window.setTimeout(() => setHint(null), ms);
   };
   useEffect(
     () => () => {
@@ -2141,9 +2133,11 @@ export function AppearanceModal({
     hist.set((d) => ({ ...d, look: { ...d.look, appearance: { shape: shapeOf(d.look), content: contentOf(d.look), ...d.look.appearance, ...p } } }));
   const toggleSide = (i: number) => setAppearance({ blockedSides: blocked.includes(i) ? blocked.filter((x) => x !== i) : [...blocked, i].sort((a, b) => a - b) });
 
-  /** A new list of shapes, its seat sides kept only while they still exist. Side indices run over the
-   *  whole item's outline, so a shape added or taken away can leave one pointing past the end. */
-  const withShapes = (d0: Draft, next: ShapePart[]): Draft => {
+  /** A new list of shapes, its seat sides following THEIR shapes (remapBlockedSides, SH-13): side
+   *  indices run over the whole item, base first, so a shape deleted, made the base, moved in the
+   *  stack or redrawn (`redrawn`, its id) renumbers every side after it. Moved, turned or resized
+   *  only, nothing renumbers — the drag path, every frame, takes the short way. */
+  const withShapes = (d0: Draft, next: ShapePart[], redrawn?: string): Draft => {
     // A FRONT first shape stands on the floor and its face IS the item's height (backdrops S2): every
     // edit that changes the face — the bar, a drag in חזית, the panel — moves the item's height with it.
     const lead = next[0];
@@ -2151,14 +2145,15 @@ export function AppearanceModal({
     const d = faceH !== null && faceH !== d0.look.dimensions.heightMm ? { ...d0, look: { ...d0.look, dimensions: { ...d0.look.dimensions, heightMm: faceH } } } : d0;
     const had = d.look.appearance?.blockedSides;
     if (!had?.length || !next.length) return { ...d, shapes: next };
-    const count = seatSides(resolveFootprint({ ...d.look, ...lookOf(d.look, next) })).length;
-    const kept = had.filter((i) => i < count);
+    const placeOnly = (a: ShapePart, b: ShapePart) => a.id === b.id && JSON.stringify({ ...a, x: 0, y: 0, rotation: 0 }) === JSON.stringify({ ...b, x: 0, y: 0, rotation: 0 });
+    if (!redrawn && next.length === d.shapes.length && next.every((s, i) => placeOnly(s, d.shapes[i]))) return { ...d, shapes: next };
+    const kept = remapBlockedSides(d.look, d.shapes, next, had, redrawn);
     return {
       shapes: next,
-      look: kept.length === had.length ? d.look : { ...d.look, appearance: { ...d.look.appearance!, blockedSides: kept.length ? kept : undefined } },
+      look: kept.join() === had.join() ? d.look : { ...d.look, appearance: { ...d.look.appearance!, blockedSides: kept.length ? kept : undefined } },
     };
   };
-  const editShapes = (fn: (list: ShapePart[]) => ShapePart[]) => hist.set((d) => withShapes(d, fn(d.shapes)));
+  const editShapes = (fn: (list: ShapePart[]) => ShapePart[], redrawn?: string) => hist.set((d) => withShapes(d, fn(d.shapes), redrawn));
   const dragShapes = (fn: (list: ShapePart[]) => ShapePart[]) => hist.amend((d) => withShapes(d, fn(d.shapes)));
 
   /** A hollow slice of a lone round table leaves its two caps across the band unseated, as the arc's
@@ -2202,8 +2197,12 @@ export function AppearanceModal({
   };
   const removeShapes = (ids: readonly string[]) => {
     if (!ids.length) return;
+    // The base deleted, the next shape becomes it (SH-8): what it loses is said, not done silently.
+    const next = shapes[0] && ids.includes(shapes[0].id) ? shapes.find((s) => !ids.includes(s.id)) : undefined;
+    const lost = next ? promotionLoss(next) : [];
     editShapes((l) => l.filter((s) => !ids.includes(s.id)));
     setSel([]);
+    if (next && lost.length) showHint(`${shapeName(next).replace(/ \d+$/, "")} היא עכשיו הבסיס — עומדת על הרצפה בגובה הפריט, בלי ${lost.join(", ")}. Ctrl+Z מחזיר.`, 6000);
   };
   const addCopies = (list: ShapePart[]) => {
     const copies = list.map((s) => ({ ...s, id: crypto.randomUUID() }));
@@ -2221,7 +2220,8 @@ export function AppearanceModal({
     copiedShapes = copiedShapes.map((s) => shifted(s, PASTE_STEP_MM, PASTE_STEP_MM));
     addCopies(copiedShapes.map((s) => shifted(s, anchor.x, anchor.y)));
   };
-  const restack = (ids: readonly string[], how: "front" | "back" | "forward" | "backward") => editShapes((l) => restacked(l, ids, how));
+  // The base stays first whatever is asked (restackShapes, SH-8): "to the back" is just above it.
+  const restack = (ids: readonly string[], how: StackMove) => editShapes((l) => restackShapes(l, ids, how));
   // Turned over, the sides are numbered from other corners: the seat sides are picked again, as after
   // a reshape.
   const flip = (ids: readonly string[], axis: FlipAxis) =>
@@ -2396,7 +2396,8 @@ export function AppearanceModal({
       return;
     }
     setDrawingPart(null);
-    if (next !== shapes) editShapes(() => next);
+    // Redrawn: its blocked seat sides are read off where its sides now are (SH-13).
+    if (next !== shapes) editShapes(() => next, id);
     if (next !== shapes || !isNew) setSel([id]);
   };
   const cancelDrawing = () => {
