@@ -2052,6 +2052,23 @@ export function StudioScreen({
             next = amend(next, { type: "setPlacementStage", id: sp.id, stage: { ...sp.stage, stairs: settled } });
           }
         }
+        // …and one the move put AGAINST another stage — a flight climbing into its deck, a banquette
+        // under it — is taken away, on either side of the seam (trimSeams, as הצמדה does): above it
+        // was only kept, beside a neighbour read as a wall. Only seams the move made: two stages
+        // carried together keep whatever stood between them.
+        const movedIds = new Set(refs.filter((r) => r.kind === "placement").map((r) => r.id));
+        const stagesNow = next.present.placements.filter((x): x is StagePlacement => !!x.stage);
+        const trims = new Map<string, StageStair[]>();
+        for (const m of stagesNow.filter((x) => movedIds.has(x.id)))
+          for (const o of stagesNow.filter((x) => !movedIds.has(x.id)))
+            for (const [id, stairs] of trimSeams([m, o], deckOf)) {
+              const was = trims.get(id) ?? stagesNow.find((x) => x.id === id)!.stage.stairs ?? [];
+              trims.set(id, was.filter((it) => stairs.some((s) => s.id === it.id)));
+            }
+        for (const [id, stairs] of trims) {
+          const sp = stagesNow.find((x) => x.id === id)!;
+          next = amend(next, { type: "setPlacementStage", id, stage: { ...sp.stage, stairs } });
+        }
         // A ceiling item let go is linked to the table now under its hang point (Placement.over),
         // or freed over bare floor — in the same entry as the move. While its own table is being
         // dressed it stays that table's wherever round it it was slid: a pendant ring outside the
