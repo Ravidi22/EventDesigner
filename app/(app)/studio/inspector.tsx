@@ -130,6 +130,7 @@ import { VesselPicker, vesselChoices } from "../catalog/vessel-picker";
 import { loadProducts } from "@/lib/catalog/storage";
 import { Amphora } from "lucide-react";
 import { aisleOf, benchOf, chairBlockOf, coverOn, resolve, shadesOf, tableUtilization, type AisleView } from "@/lib/studio/catalog-resolver";
+import { sofaOf } from "@/lib/studio/catalog-resolver";
 import { AISLE_PITCH_MAX_MM, AISLE_PITCH_MIN_MM, AISLE_PITCH_MM, aisleWords, type AislePlacement } from "@/lib/catalog/aisle";
 import { AisleFields, AislePiecePicker, aislePieceChoices } from "../catalog/aisle-fields";
 import { Route } from "lucide-react";
@@ -233,9 +234,9 @@ export interface BenchSideRow extends BenchSideLayout {
 }
 
 /** What the bar may change about one side of a banquette: what it is, how many sit there
- *  (`seats: null` = back to one per 60cm), and — a sofa — its run along the banquette and its seat
- *  depth (`null` = the whole length / the half strip). */
-export type BenchSidePatch = { kind?: BenchSideKind; seats?: number | null; widthMm?: number | null; depthMm?: number | null };
+ *  (`seats: null` = back to one per 60cm), and — a sofa — its run along the banquette, its seat
+ *  depth (`null` = the whole length / the half strip) and whether it counts as seating. */
+export type BenchSidePatch = { kind?: BenchSideKind; seats?: number | null; widthMm?: number | null; depthMm?: number | null; notSeating?: boolean };
 
 /** What the bar shows for a STANDALONE banquette (Placement.bench): how it is laid, what the
  *  designer set, and whether it currently carries a number. */
@@ -575,6 +576,8 @@ export type InspectorProps = {
   /** Set when the one selected thing is a STANDALONE banquette (lib/design-document/bench.ts). */
   benchPanel: BenchPanel | null;
   onBench: (id: string, patch: BenchPatch) => void;
+  /** A SOFA counted as seating or not (Placement.notSeating, lib/catalog/sofa.ts). Absent = no switch. */
+  onSeating?: (ids: string[], counted: boolean) => void;
   /** A chair standing on the floor set out as a BLOCK OF ROWS, re-set, or put back to one chair
    *  (null) — lib/design-document/chair-rows.ts. Absent = no rows panel. */
   onChairRows?: (id: string, rows: ChairRows | null) => void;
@@ -734,6 +737,7 @@ export function Inspector({
   onStairChange,
   benchPanel,
   onBench,
+  onSeating,
   onChairRows,
   onStageSurface,
   onStageCorners,
@@ -1886,6 +1890,8 @@ export function Inspector({
     // A chair on the floor may be set out in ROWS (lib/design-document/chair-rows.ts); one that is,
     // is a block — its count is its rows, and the quantity stepper would only argue with them.
     const block = chairBlockOf(p);
+    // A SOFA's places (lib/catalog/sofa.ts) — counted as seating unless it says it is not (U6).
+    const sofaSeatCount = sofaOf(p);
     // AN AISLE (lib/catalog/aisle.ts): the piece that lines it and how it is laid — its row's
     // answers, or this plan's own.
     const aisle = !table && !drape ? aisleOf(p) : null;
@@ -2448,6 +2454,16 @@ export function Inspector({
           // A block's count is its rows — no stepper.
           <ItemFields product={r?.product} swap={swap} onSwap={onSwap} quantity={block ? undefined : p.quantity} onQuantity={(d) => onQuantity(p.id, d)} />,
         ),
+        // A SOFA's places, and whether the sketch's seating counts them (U6).
+        sofaSeatCount !== null &&
+          !!onSeating &&
+          G(
+            "sofa-seating",
+            Armchair,
+            "ישיבה",
+            p.notSeating ? "לא נספר" : `${sofaSeatCount * Math.max(1, p.quantity)} מקומות`,
+            <SofaSeatingFields seats={sofaSeatCount} quantity={p.quantity} notSeating={!!p.notSeating} onCounted={(counted) => onSeating([p.id], counted)} />,
+          ),
         shades.length > 0 &&
           G(
             "shade",
@@ -3127,6 +3143,13 @@ function BenchSidesFields({
               {[row.depthMaxMm !== undefined ? `עד ${cmOf(row.depthMaxMm)}` : null, depthMm !== undefined ? `מתוך ${cmOf(depthMm)} של הבנקט` : "מהקצה פנימה"].filter(Boolean).join(" · ")}
             </span>
           </PanelRow>
+          {/* Counted as seating or not (U6) — the count only: the banquette keeps its number. */}
+          <SwitchRow
+            checked={!!row.notSeating}
+            onChange={(off) => onSide(key, { notSeating: off })}
+            label="לא נספר כישיבה"
+            hint="היושבים על הספה לא נכנסים לספירת מקומות הישיבה של הסקיצה. הם עדיין יושבים בה — והבנקט שומר על המספר שלו."
+          />
         </>
       )}
     </div>
@@ -4492,6 +4515,25 @@ function BenchNumberFields({
           ? "בנקט שיושבים בו ממוספר כמו שולחן — במפת ההצבה ובמספור מחדש. בלי מספר הוא נשאר במניין המקומות בלבד."
           : "המספר יופיע כשיהיו מקומות ישיבה בבנקט."}
       </Note>
+    </>
+  );
+}
+
+/** A sofa's ״ישיבה״ group (U6): how many sit on it — its row's count, else the cushions it is drawn
+ *  with — and the switch that leaves it out of the sketch's seating count (a lounge corner). */
+function SofaSeatingFields({ seats, quantity, notSeating, onCounted }: { seats: number; quantity: number; notSeating: boolean; onCounted: (counted: boolean) => void }) {
+  return (
+    <>
+      <PanelRow label="מקומות ישיבה">
+        <span className="nums text-sm text-ink">{quantity > 1 ? `${seats} × ${quantity}` : seats}</span>
+      </PanelRow>
+      <SwitchRow
+        checked={notSeating}
+        onChange={(off) => onCounted(!off)}
+        label="לא נספר כישיבה"
+        hint="ספה בפינת לאונג׳ שלא מושיבים בה אורחים — המקומות שלה לא נכנסים לספירת הישיבה של הסקיצה."
+      />
+      <Note>מספר המקומות נקבע בקטלוג (״מקומות ישיבה״), ובלעדיו — לפי הכריות שבציור.</Note>
     </>
   );
 }

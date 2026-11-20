@@ -91,6 +91,7 @@
     "check:stage-rim": "tsx lib/studio/stage-rim.ts",
     "check:stage": "tsx lib/design-document/stage.ts",
     "check:bench": "tsx lib/design-document/bench.ts",
+    "check:sofa": "tsx lib/catalog/sofa.ts",
     "check:stage-draw": "tsx lib/studio/stage-draw.ts",
     "check:edge-runs": "tsx lib/design-document/edge-runs.ts",
     "db:seed": "tsx lib/db/seed.ts",

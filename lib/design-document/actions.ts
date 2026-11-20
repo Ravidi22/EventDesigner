@@ -144,6 +144,9 @@ export type Action =
   // A STANDALONE banquette's sides, heights, number and occupancy (Placement.bench) — the whole spec,
   // replaced; null puts it back to the defaults. The caller merges, so one history entry is one edit.
   | { type: "setPlacementBench"; id: string; bench: BenchSpec | null }
+  // A sofa counted as seating or not (Placement.notSeating, the bar's "לא נספר כישיבה") — the
+  // studio's seating readout only (lib/catalog/sofa.ts).
+  | { type: "setPlacementSeating"; ids: string[]; counted: boolean }
   // A chair set out as a BLOCK OF ROWS, or put back to one chair (null) — the spec and the count it
   // is, together (lib/design-document/chair-rows.ts): `quantity` = rows × chairs per row, so the
   // quote and the packing list count every chair. `position` keeps the front row where it stood.
@@ -736,6 +739,20 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
           return rest;
         }),
       };
+    case "setPlacementSeating": {
+      const ids = new Set(action.ids);
+      if (!doc.placements.some((p) => ids.has(p.id) && !!p.notSeating === action.counted)) return doc;
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (!ids.has(p.id)) return p;
+          if (!action.counted) return p.notSeating ? p : { ...p, notSeating: true as const };
+          const { notSeating: _was, ...rest } = p;
+          void _was;
+          return rest;
+        }),
+      };
+    }
     case "setChairRows":
       return {
         ...doc,
@@ -1469,6 +1486,11 @@ if (isMain(import.meta.url)) {
     assert(block.placements[0].rows?.perRow === 5 && block.placements[0].quantity === 25 && block.placements[0].position.y === 900, "a block of 5×5 is 25 chairs on the quote, its front row kept in place");
     const single = apply(block, { type: "setChairRows", id: "a", rows: null });
     assert(!("rows" in single.placements[0]) && single.placements[0].quantity === 1, "…and put back, one chair again");
+    // A sofa that is not seating (U6, QA BQ-3): the flag is written, and taken off leaves no field.
+    const lounge = apply(base, { type: "setPlacementSeating", ids: ["a"], counted: false });
+    assert(lounge.placements[0].notSeating === true, "a sofa marked not seating carries the flag");
+    assert(apply(lounge, { type: "setPlacementSeating", ids: ["a"], counted: false }) === lounge, "…the same again changes nothing");
+    assert(!("notSeating" in apply(lounge, { type: "setPlacementSeating", ids: ["a"], counted: true }).placements[0]), "…and counted again, no field is left behind");
 
     const reset = apply(arranged, { type: "resetDressing", tableId: "t1" });
     assert(!("arranged" in reset.tables[0]) && reset.placements.every((p) => p.position.x === 0), "reset hands the table back to the automatic layout");

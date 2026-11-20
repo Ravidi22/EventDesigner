@@ -2075,14 +2075,17 @@ export function stageAreaMm2(stage: StageBuild, deckOf?: DeckLookup): number {
   return Math.max(0, area - sunk.reduce((s, q) => s + Math.abs(signedArea(q)), 0));
 }
 
-/** Everyone a document's STAGE banquettes seat — on chairs and on a sofa side alike. (A standalone
- *  banquette's seats are standaloneBenchSeats, ./bench.ts — it needs the catalog to be told apart.) */
+/** Everyone a document's STAGE banquettes seat, as the seating readout COUNTS them — on chairs and on
+ *  a sofa side alike, a sofa side that is not seating left out (BenchLayout.countedSeats). (A
+ *  standalone banquette's seats are standaloneBenchSeats, ./bench.ts — it needs the catalog to be
+ *  told apart.) */
 export function benchSeats(placements: readonly Placement[], deckOf: DeckLookup): number {
   let n = 0;
   for (const p of placements)
     for (const it of p.stage?.stairs ?? []) {
       if (edgeKind(it) !== "bench") continue;
-      n += edgeItemShape(p.stage!, it, deckOf)?.seats ?? 0;
+      const shape = edgeItemShape(p.stage!, it, deckOf);
+      n += shape?.bench?.countedSeats ?? shape?.seats ?? 0;
     }
   return n;
 }
@@ -3243,6 +3246,10 @@ if (isMain(import.meta.url)) {
   assert(twoSided.cushions.length === 4 && twoSided.cushions.every((q) => q.every((p) => p.y <= -2000 - BENCH_TABLE_DEPTH_MM / 2 + 1e-6)), "…the cushions on the room half of the strip");
   assert(twoSided.backs.length === 1 && twoSided.backs[0].every((p) => Math.abs(p.y - (-2000 - BENCH_TABLE_DEPTH_MM / 2)) <= 80 + 1e-6), "…with the backrest toward the strip's stage half");
   assert(twoSided.sofaHeightMm === SOFA_SEAT_MM && twoSided.bench?.front.kind === "sofa", "…a sofa seat at 46cm, and the layout says which side is which");
+  // U6 / QA BQ-3: its sofa side may be left out of the seating readout — the count only.
+  const loungeSide: StageStair = { ...benches[0], bench: { back: { kind: "chairs", seats: 6 }, front: { kind: "sofa", seats: 4, notSeating: true } } };
+  assert(benchSeats([{ ...down, stage: { ...down.stage, stairs: [loungeSide] } }], deckOf) === 6, "a stage banquette's sofa side that is not seating is out of the seating count");
+  assert(edgeItemShape(down.stage, loungeSide, deckOf)!.seats === 10, "…its sitters still seated there");
   const frontChairs = edgeItemShape(down.stage, { ...benches[0], bench: { back: { kind: "none" }, front: { kind: "chairs", seats: 3 } } }, deckOf)!;
   assert(frontChairs.chairs.length === 3 && frontChairs.chairs.every((c) => c.y < -2000 - BENCH_TABLE_DEPTH_MM && Math.abs(Math.abs(c.facingDeg) - 90) < 1), "chairs on the room side stand in the room, facing the banquette");
   // The legacy form still reads: an old item's `seats` is its stage side's count, nothing in front.

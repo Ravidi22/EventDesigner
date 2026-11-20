@@ -21,8 +21,10 @@
 // — one per seat, the half of the strip on that side, with a backrest line toward the other half.
 //
 // COUNTING. Everyone on either side is a SEAT (the seating readout, benchSeats); only a chairs side
-// packs chairs (lib/design-document/measure.ts reads `chairs.length`, never `seats`). The banquette's
-// own row is quoted by the metre whatever sits at it — this file never touches a price.
+// packs chairs (lib/design-document/measure.ts reads `chairs.length`, never `seats`). A sofa side may
+// be "not seating" (BenchSide.notSeating): the readout leaves its sitters out (`countedSeats`), the
+// numbering and the occupancy do not (`seats`). The banquette's own row is quoted by the metre
+// whatever sits at it — this file never touches a price.
 //
 // Pure, no DOM, self-checked: `npm run check:bench`.
 import type { BenchSide, BenchSideKind, BenchSpec, Placement, Point, StageStair } from "./types";
@@ -134,6 +136,8 @@ export interface BenchSideLayout {
    *  the bar's field runs between them. */
   depthMaxMm?: number;
   depthDefaultMm?: number;
+  /** A sofa side the designer said is not seating (BenchSide.notSeating) — out of the readout's count. */
+  notSeating?: true;
 }
 
 export interface BenchLayout {
@@ -159,6 +163,10 @@ export interface BenchLayout {
   seats: number;
   chairSeats: number;
   sofaSeats: number;
+  /** Of everyone seated, those the seating readout COUNTS: every chair, and a sofa side's sitters
+   *  unless it is not seating (BenchSide.notSeating). The numbering and the occupancy go by `seats`
+   *  — a banquette people sit on keeps its number whether they are counted or not. */
+  countedSeats: number;
 }
 
 /** Lay a banquette `widthMm` long and `depthMm` deep out of its spec. */
@@ -201,7 +209,7 @@ export function benchLayout(widthMm: number, depthMm: number, spec?: BenchSpec):
       kind,
       seats: sideSeats(run, side, fallback),
       autoSeats: sideSeats(run, { kind }, fallback),
-      ...(kind === "sofa" ? { widthMm: run, depthMm: seat, depthMaxMm: Math.max(seatMin, sofaSeatMax(d, other)), depthDefaultMm: seatDefault } : {}),
+      ...(kind === "sofa" ? { widthMm: run, depthMm: seat, depthMaxMm: Math.max(seatMin, sofaSeatMax(d, other)), depthDefaultMm: seatDefault, ...(side?.notSeating ? { notSeating: true as const } : {}) } : {}),
     };
   };
   const back = sideOf(spec?.back, DEFAULT_BACK, seatB, { kind: frontKind, ...(frontKind === "sofa" ? { depthMm: seatF } : {}) });
@@ -247,6 +255,7 @@ export function benchLayout(widthMm: number, depthMm: number, spec?: BenchSpec):
 
   const chairSeats = (back.kind === "chairs" ? back.seats : 0) + (front.kind === "chairs" ? front.seats : 0);
   const sofaSeats = (back.kind === "sofa" ? back.seats : 0) + (front.kind === "sofa" ? front.seats : 0);
+  const counted = (side: BenchSideLayout) => (side.kind === "none" || side.notSeating ? 0 : side.seats);
   return {
     widthMm: w,
     depthMm: d,
@@ -260,6 +269,7 @@ export function benchLayout(widthMm: number, depthMm: number, spec?: BenchSpec):
     seats: chairSeats + sofaSeats,
     chairSeats,
     sofaSeats,
+    countedSeats: counted(back) + counted(front),
   };
 }
 
@@ -351,11 +361,12 @@ export function standaloneBench(p: Placement, benches: BenchLookup | undefined):
   return box.footprint ? benchLayoutFor(box.footprint, p.bench) : benchLayout(box.widthMm, box.depthMm, p.bench);
 }
 
-/** Everyone a document's standalone banquettes seat. A placement's quantity multiplies, as it does
- *  on the packing list. */
+/** Everyone a document's standalone banquettes seat, as the seating readout COUNTS them — a sofa side
+ *  that is not seating left out (BenchLayout.countedSeats). A placement's quantity multiplies, as it
+ *  does on the packing list. */
 export function standaloneBenchSeats(placements: readonly Placement[], benches: BenchLookup | undefined): number {
   let n = 0;
-  for (const p of placements) n += (standaloneBench(p, benches)?.seats ?? 0) * Math.max(1, p.quantity);
+  for (const p of placements) n += (standaloneBench(p, benches)?.countedSeats ?? 0) * Math.max(1, p.quantity);
   return n;
 }
 
@@ -393,11 +404,14 @@ export function benchSideRows(item: Pick<StageStair, "bench" | "seats" | "height
 export function patchBenchSide(
   spec: BenchSpec | undefined,
   side: "back" | "front",
-  patch: { kind?: BenchSideKind; seats?: number | null; widthMm?: number | null; depthMm?: number | null },
+  patch: { kind?: BenchSideKind; seats?: number | null; widthMm?: number | null; depthMm?: number | null; notSeating?: boolean },
   laid?: Pick<BenchLayout, "widthMm" | "depthMm" | "back" | "front">,
 ): BenchSpec {
   const cur: BenchSide = spec?.[side] ?? { kind: side === "back" ? DEFAULT_BACK : DEFAULT_FRONT };
   const next: BenchSide = { ...cur, ...(patch.kind !== undefined ? { kind: patch.kind } : {}) };
+  // Counted as seating or not (a sofa side's "לא נספר כישיבה") — absent is counted.
+  if (patch.notSeating === true) next.notSeating = true;
+  else if (patch.notSeating === false) delete next.notSeating;
   if (patch.seats === null) delete next.seats;
   else if (patch.seats !== undefined) next.seats = Math.max(0, Math.round(patch.seats));
   if (patch.widthMm === null) delete next.widthMm;
@@ -594,6 +608,17 @@ if (isMain(import.meta.url)) {
   assert(crescent.chairs.every((c) => Math.abs(((((c.facingDeg - (Math.atan2(C.y - c.y, C.x - c.x) * 180) / Math.PI) % 360) + 540) % 360) - 180) < 8), "…each facing in toward the centre, square at the band");
   assert(crescent.cushions.length === 3 && crescent.cushions.every((q) => q.every((p) => rad(p) < 2720)), "…and the sofa's cushions on the inner half of the band");
   assert(crescent.backs.length === 3, "…its backrest in segments that follow the curve");
+
+  // ── A sofa side may be left out of the seating readout (U6, QA BQ-3) — the COUNT only.
+  const lounge: BenchSpec = { back: { kind: "chairs", seats: 4 }, front: { kind: "sofa", seats: 3, notSeating: true } };
+  const loungeLay = benchLayout(3000, 600, lounge);
+  assert(loungeLay.seats === 7 && loungeLay.countedSeats === 4 && loungeLay.sofaSeats === 3, "a sofa side that is not seating is out of the count — its three still sit there");
+  assert(benchLayout(3000, 600, { ...lounge, front: { kind: "sofa", seats: 3 } }).countedSeats === 7, "…while one that is counts");
+  const loungeOnly = free("lo", { back: { kind: "sofa", notSeating: true }, number: 6 });
+  assert(benchIsNumbered(loungeOnly, standaloneBench(loungeOnly, benches)), "…a banquette people sit on keeps its number though none of them is counted");
+  assert(standaloneBenchSeats([loungeOnly, free("a")], benches) === 5, "…and the readout leaves its sofa out");
+  assert(patchBenchSide(undefined, "front", { kind: "sofa", notSeating: true }).front?.notSeating === true, "the switch is written on the side");
+  assert(patchBenchSide(lounge, "front", { notSeating: false }).front?.notSeating === undefined, "…and taken off it");
 
   console.log("bench self-check passed");
 }

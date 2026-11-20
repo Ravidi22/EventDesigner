@@ -217,6 +217,10 @@ export interface Placement {
    *  absent = a banquette with chairs along its back and nothing along its front, exactly as a stage
    *  edge banquette starts. */
   bench?: BenchSpec;
+  /** A SOFA (a `sofas` row standing on the plan) that is NOT SEATING — "לא נספר כישיבה": a lounge
+   *  corner nobody is seated at. The studio's seating readout leaves its seats out (lib/catalog/sofa.ts);
+   *  nothing else reads it — it is drawn, packed and quoted as before. Absent = its seats count. */
+  notSeating?: true;
   /** How a rented flight of stairs or ramp standing ON ITS OWN climbs on this plan — a `stage-stairs`
    *  or `stage-ramps` row dropped off the rail, not one on a stage's edge (StageStair). Its run is
    *  `sizeMm`'s depth, re-derived whenever the rise changes (lib/studio/climb-item.ts). Absent = the
@@ -276,6 +280,10 @@ export interface BenchSide {
    *  band. Read only on a sofa side (lib/design-document/bench.ts). */
   widthMm?: number;
   depthMm?: number;
+  /** A SOFA side that is not seating ("לא נספר כישיבה"): its sitters are left out of the studio's
+   *  seating readout. The count only — the banquette still seats them, so it keeps its number, and a
+   *  sofa packs no chairs either way. Read only on a sofa side. */
+  notSeating?: true;
 }
 
 /** What a banquette is, beyond its length: each long side, and its two heights.

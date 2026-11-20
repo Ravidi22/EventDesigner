@@ -23,6 +23,7 @@ export { CLOTH_DROP_MM };
 import { isDark } from "@/lib/element-style";
 import type { PlacementClimb, Point } from "@/lib/design-document/types";
 import { benchLayoutFor, type BenchLayout } from "@/lib/design-document/bench";
+import { sofaArmMm, sofaCushionCount } from "@/lib/catalog/sofa";
 import { CHAIR_D_MM, CHAIR_W_MM, seatTransform } from "@/lib/studio/seating";
 import { FootprintShape, sameDrawProps } from "./footprint-shape";
 import { ClimbGlyph } from "./climb-glyph";
@@ -1409,9 +1410,10 @@ function ottoman(w: number, h: number, c: Colours, line: Line) {
 /** The default sofa: the back along its back edge, an arm at each end, and its seat cushions between them. */
 function classicSofa(w: number, h: number, c: Colours, line: Line) {
   const back = Math.min(h * 0.28, 260);
-  const arm = Math.min(w * 0.13, 230, h * 0.3);
+  // The arms and the cushions are lib/catalog/sofa.ts's — the count a sofa is seated by (U6).
+  const arm = sofaArmMm(w, h);
   const innerW = w - arm * 2;
-  const n = Math.max(1, Math.round(innerW / 650));
+  const n = sofaCushionCount(w, h);
   const gap = 25;
   const cw = (innerW - gap * (n + 1)) / n;
   const cy = -h / 2 + back + gap;

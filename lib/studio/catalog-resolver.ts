@@ -14,6 +14,7 @@ import { tableAreaMm2 } from "./geometry";
 import { catalogBox, sizedFootprint } from "./footprint";
 import { deckTypeOf, type DeckLookup } from "@/lib/design-document/stage";
 import type { BenchLookup } from "@/lib/design-document/bench";
+import { SOFA_CATEGORY, sofaSeatsOf, type SofaLookup } from "@/lib/catalog/sofa";
 import { isRailed } from "./rail";
 import { AISLE_CATEGORY, AISLE_PIECE_FIELD, aisleLayout, aisleRowBox, aisleSpecOf, canBeAislePiece, mergedAisle, type AisleLayout, type AislePlacement, type AisleSpec } from "@/lib/catalog/aisle";
 
@@ -80,6 +81,16 @@ export const benchOf: BenchLookup = (p) => {
   // …and the shape it is drawn as, so a crescent or a ח banquette is laid along its band
   // (benchLayoutFor) rather than across its box.
   return { ...(p.sizeMm ?? catalogBox(r.product)), footprint: sizedFootprint(r.product, p.sizeMm) };
+};
+
+/** Which placements are SOFAS standing on the plan (lib/catalog/sofa.ts), and how many sit on each: a
+ *  `sofas` row not on a table, a stage or a banquette — its row's seat count, else the cushions it is
+ *  drawn with at its size on the plan. The one definition the seating readout and the bar read. */
+export const sofaOf: SofaLookup = (p) => {
+  if (p.stage || p.perch || p.tableId) return null;
+  const r = resolve(p.variantId);
+  if (!r || r.product.category !== SOFA_CATEGORY) return null;
+  return sofaSeatsOf(r.product, p.sizeMm ?? catalogBox(r.product));
 };
 
 /** Which placements are BLOCKS OF CHAIRS IN ROWS (Placement.rows, lib/design-document/chair-rows.ts):

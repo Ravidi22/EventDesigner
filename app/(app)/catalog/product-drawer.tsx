@@ -49,6 +49,7 @@ import { costUnitLabel } from "@/lib/suppliers/procurement";
 import { useSupplierPicker } from "@/lib/suppliers/use-suppliers";
 import { SupplierSelect } from "@/app/(app)/suppliers/supplier-select";
 import { catalogBox, frontFace, resolveContent, resolveFootprint, roundSizeMm, rowShapeDims } from "@/lib/studio/footprint";
+import { SOFA_CATEGORY, SOFA_SEATS_FIELD, sofaSeatsOf } from "@/lib/catalog/sofa";
 import { RESIZE_DEFAULT_STEP_MM, type ResizeSpec } from "@/lib/catalog/types";
 import { HANG_FIELD, HANG_MAX_MM } from "@/lib/studio/hang";
 import { CATEGORIES, CATEGORY_BY_ID, CATEGORY_GROUPS, LAYERS, PLACES, categoryNamed, styleTagsOf, type CategoryDef } from "@/lib/catalog/categories";
@@ -1549,7 +1550,8 @@ export function ProductDrawer({
                       label={f.label}
                       min={0}
                       hideZero
-                      placeholder="0"
+                      // A sofa left blank seats the cushions it is drawn with (lib/catalog/sofa.ts).
+                      placeholder={draft.category === SOFA_CATEGORY && f.key === SOFA_SEATS_FIELD ? String(sofaSeatsOf({ categoryFields: {} }, catalogBox(draft))) : "0"}
                       value={Number(draft.categoryFields[f.key] ?? 0)}
                       onChange={(v) => setField(f.key, v)}
                     />

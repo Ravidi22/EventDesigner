@@ -41,6 +41,7 @@ import { BOTTLE_PITCH_MM, type Strip, barDrawing, bottleRadiusMm, counterShelfMm
 import { DEFAULT_TONE } from "@/components/item-symbol";
 import { type BenchLayout, SOFA_BACK_MM, benchLayout } from "@/lib/design-document/bench";
 import { FALLBACK_CHAIR, chairRowsLayout } from "@/lib/design-document/chair-rows";
+import { sofaArmMm, sofaCushionCount } from "@/lib/catalog/sofa";
 import { type ClimbHost, climbRisers, climbTreads, riserHeightMm, treadDepthMm } from "@/lib/venues/climb";
 import { isMain } from "../self-check";
 import { pergolaFromStyle, pergolaGeometry, pergolaLines, pergolaPostOf } from "@/lib/venues/pergola";
@@ -378,9 +379,10 @@ function sofaBody(ctx: ItemContext): ItemBuild {
     return { parts, material, instanced: [], emitters: [] };
   }
   const back = Math.min(d * 0.28, 260);
-  const arm = Math.min(w * 0.13, 230, d * 0.3);
+  // The plan's arms and cushion count (lib/catalog/sofa.ts) — the count the sofa is seated by.
+  const arm = sofaArmMm(w, d);
   const innerW = w - arm * 2;
-  const n = Math.max(1, Math.round(innerW / 650));
+  const n = sofaCushionCount(w, d);
   const gap = 25;
   const cw = (innerW - gap * (n + 1)) / n;
   const cy = -d / 2 + back + gap;

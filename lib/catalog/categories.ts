@@ -227,8 +227,10 @@ export const CATEGORIES: CategoryDef[] = [
   { id: "tables", label: "שולחנות", group: "grp-seating", defaultLayer: "floor", icon: Table2, dims: "both", defaultHeightMm: 750, fields: [{ key: "seats", label: "כמות כסאות תקנית", suffix: "כסאות" }] },
   { id: "chairs", label: "כיסאות", group: "grp-seating", defaultLayer: "floor", icon: Armchair, dims: "box", fields: [] },
   // Lounge seating — a corner of sofas and armchairs round a low table, not a place laid for dinner.
-  // No seat field: a sofa is counted as one sofa on the packing list, and nothing multiplies off it.
-  { id: "sofas", label: "ספות", group: "grp-seating", defaultLayer: "floor", icon: Sofa, dims: "box", fields: [] },
+  // Its seat field (U6) is what the studio's seating readout counts a sofa as — blank = the cushions
+  // the plan draws on it (lib/catalog/sofa.ts). No `suffix`, so it multiplies nothing: a sofa is still
+  // one sofa on the packing list and packs no chairs.
+  { id: "sofas", label: "ספות", group: "grp-seating", defaultLayer: "floor", icon: Sofa, dims: "box", fields: [{ key: "seats", label: "מקומות ישיבה" }] },
   // A lounge's game table — billiards (2026-11-20, the user: "I want to be able to add a pool table"),
   // drawn as the table itself on the plan and in the room (lib/catalog/game-tables.ts). Furniture of
   // the hall pass, beside the sofas; never a dining table (no seats, no number, nothing dressed).

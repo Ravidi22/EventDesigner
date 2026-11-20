@@ -21,6 +21,8 @@ import type { Point } from "@/lib/studio/hall";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { benchOf, coverOn, deckOf, defaultVariantId, firstVariantId, primeEventShades, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
 import { BENCH_TABLE_DEPTH_MM, benchIsNumbered, benchSideRows, patchBenchSide, standaloneBench, standaloneBenchSeats } from "@/lib/design-document/bench";
+import { sofaSeats } from "@/lib/catalog/sofa";
+import { sofaOf } from "@/lib/studio/catalog-resolver";
 import { productById } from "@/lib/catalog/storage";
 import type { Composition, Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
@@ -3813,8 +3815,9 @@ export function StudioScreen({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [armedId]);
 
-  /** Everyone the plan seats: at its tables (a group of tables as the one table it is), and on its
-   *  banquettes — the stages' and the standalone ones, chairs and sofa seats alike. */
+  /** Everyone the plan seats: at its tables (a group of tables as the one table it is), on its
+   *  banquettes — the stages' and the standalone ones, chairs and sofa seats alike — and on its sofas
+   *  (lib/catalog/sofa.ts); a sofa, or a banquette's sofa side, that is not seating is left out. */
   const seating = useMemo(() => {
     let tables = 0;
     // …and how many of the tables' places are spoken for — a block's as the one table it is.
@@ -3833,7 +3836,7 @@ export function StudioScreen({
     // so its people are in `seated` too, or the summary reads two bases. (A stage's edge banquette
     // carries no such note: `seated` is a standalone banquette's only.)
     for (const p of doc.placements) if (p.bench?.seated && standaloneBench(p, benchOf)) seated += p.bench.seated;
-    return { tables, seated, benches: benchSeats(doc.placements, deckOf) + standaloneBenchSeats(doc.placements, benchOf) };
+    return { tables, seated, benches: benchSeats(doc.placements, deckOf) + standaloneBenchSeats(doc.placements, benchOf), sofas: sofaSeats(doc.placements, sofaOf) };
   }, [doc]);
 
   /** Every bare stretch of open edge covered with `kind` — a flight or a banquette where there is
@@ -5667,6 +5670,7 @@ export function StudioScreen({
     onStairChange: changeStair,
     benchPanel,
     onBench: changeBench,
+    onSeating: (ids, counted) => act({ type: "setPlacementSeating", ids, counted }),
     onChairRows: changeChairRows,
     onStageSurface: setSurface,
     onStageCorners: setCorners,
@@ -6292,11 +6296,12 @@ export function StudioScreen({
                     key: "seating",
                     icon: Armchair,
                     title: "ישיבה",
-                    summary: `${seating.seated}/${seating.tables + seating.benches} מושבים`,
+                    summary: `${seating.seated}/${seating.tables + seating.benches + seating.sofas} מושבים`,
                     body: (
                       <>
-                        <FactRow label="מקומות ישיבה" value={seating.tables + seating.benches} />
+                        <FactRow label="מקומות ישיבה" value={seating.tables + seating.benches + seating.sofas} />
                         {seating.benches > 0 && <FactRow label="מהם על בנקטים" value={seating.benches} />}
+                        {seating.sofas > 0 && <FactRow label="מהם על ספות" value={seating.sofas} />}
                         <FactRow label="שולחנות" value={doc.tables.length} />
                       </>
                     ),
