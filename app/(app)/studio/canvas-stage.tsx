@@ -1528,8 +1528,12 @@ export function CanvasStage({
       // which is what lets the box below be taken without a guard. A locked member of the selection
       // stays where it is: the others move round it.
       const picked = movable.filter((m) => isSel(m.ref.kind, m.ref.id) && !isLocked(m.ref));
+      // `start` is the PRESS: the pressed item's own centre as it stood, which is what `p` is the
+      // pointer's delta from. The first move's `p` is already past the drag threshold — anchored
+      // there, the whole group lagged the pointer by that first step for the rest of the drag.
+      const pressed = picked.find((m) => sameRef(m.ref, ref))?.box;
       groupDrag.current ??= {
-        start: p,
+        start: pressed ? { x: pressed.x, y: pressed.y } : p,
         box: unionBox(picked.map((m) => m.box)),
         snapshot: picked.map((m) => ({ ref: m.ref, origin: { x: m.box.x, y: m.box.y } })),
       };
@@ -1567,7 +1571,17 @@ export function CanvasStage({
     // itself excluded, or it would align to where it already is and could never be pulled off. Its
     // own extent goes along too: that is what lets the gap either side of it be measured.
     const self = alignTo.find((m) => sameRef(m.ref, ref))?.box;
-    if (!travelled.current && (!self || Math.hypot(p.x - self.x, p.y - self.y) >= ctx.mm(TRAVEL_PX))) travelled.current = true;
+    // Two of a kind touching are held FLUSH rather than one sliding a pixel into the other — but
+    // only within a few pixels (nudgeApart): push on and the item follows the pointer, overlap and
+    // all. Same-kind only, and an overlap that was already there when the drag began is left alone
+    // (lib/studio/collide.ts). `self` is this item's box as it stood when the gesture began:
+    // beginSolids runs on the first move frame only (??=), before any of this drag's writes landed.
+    solids.current ??= beginSolids([ref], self ? { x: self.x, y: self.y } : { x: Math.round(p.x), y: Math.round(p.y) });
+    // The travel is measured from that ORIGIN, never from `self`: `self` is the box the previous
+    // frame of this same drag wrote, so it asked whether one FRAME had moved 10px — a slow or a
+    // corrective drag never snapped or held at all.
+    const from = solids.current.origin;
+    if (!travelled.current && (!self || Math.hypot(p.x - from.x, p.y - from.y) >= ctx.mm(TRAVEL_PX))) travelled.current = true;
     const early = !travelled.current;
     const snapped = early
       ? (ctx.endSnap(), { x: Math.round(p.x), y: Math.round(p.y) })
@@ -1575,12 +1589,6 @@ export function CanvasStage({
           boxes: snapBoxesFor([ref]),
           self: self && { widthMm: self.widthMm, depthMm: self.depthMm },
         });
-    // Two of a kind touching are held FLUSH rather than one sliding a pixel into the other — but
-    // only within a few pixels (nudgeApart): push on and the item follows the pointer, overlap and
-    // all. Same-kind only, and an overlap that was already there when the drag began is left alone
-    // (lib/studio/collide.ts). `self` is this item's box as it stood when the gesture began:
-    // beginSolids runs on the first move frame only (??=), before any of this drag's writes landed.
-    solids.current ??= beginSolids([ref], self ? { x: self.x, y: self.y } : snapped);
     const clear = early ? { x: 0, y: 0 } : clearOf(snapped, ctx.mm(NUDGE_REACH_PX));
     let at = { x: snapped.x + clear.x, y: snapped.y + clear.y };
     draggingRefs.current = [ref];
