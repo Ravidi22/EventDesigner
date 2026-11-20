@@ -119,7 +119,10 @@ export function EventForm({
   useEffect(() => {
     void fetchVenues().then((list) => {
       setVenues(list);
-      setVenueId((current) => current || event?.venueId || loadActiveVenueId() || "");
+      // The sidebar's venue is where a NEW event starts. An event being edited keeps the venue it has
+      // — none included: editing a venue-less event used to quietly give it this device's venue, and
+      // the save wrote it (QA 2026-11-20, SK-11).
+      setVenueId((current) => current || event?.venueId || (event ? "" : loadActiveVenueId()) || "");
     });
   }, [event?.venueId]);
 
@@ -175,7 +178,8 @@ export function EventForm({
       if (event.contact2Name || event.contact2Phone) setContact2((c) => (c === "hidden" ? "shown" : c));
       setDate(event.date);
       setSetupDate(event.setupDate ?? "");
-      setVenueId(event.venueId ?? loadActiveVenueId() ?? "");
+      // Its own venue, or none — never this device's (SK-11, as above).
+      setVenueId(event.venueId ?? "");
       setZoneIds(event.zoneIds);
       setGuests(event.guests ?? 0);
       setEventType(event.eventType ?? "");
