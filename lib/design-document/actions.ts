@@ -648,6 +648,8 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
         ...(c.groups?.length ? { groups: c.groups } : {}),
         ...(c.features?.length ? { features: c.features } : {}),
         ...(c.exceptions?.length ? { exceptions: c.exceptions } : {}),
+        // Once the venue's tables were copied in, a drawing loaded over it does not invite them back.
+        ...(c.layoutAdopted || doc.layoutAdopted ? { layoutAdopted: true as const } : {}),
       };
     }
     case "setPlacementStage":

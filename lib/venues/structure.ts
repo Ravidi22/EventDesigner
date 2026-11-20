@@ -38,6 +38,7 @@ import type { FeatureCurtain } from "./curtain";
 import type { FeatureLed } from "./led";
 import { NEW_PERGOLA, pergolaOfProduct, type Pergola } from "./pergola";
 import { itemSnapshot, type FeatureItem } from "./item";
+import { nextTableNumber, tableSpec, type FeatureTable } from "./venue-table";
 import { isMain } from "../self-check";
 
 export interface StructureNode {
@@ -213,7 +214,7 @@ export function doorDistanceFrom(e: Pick<StructureEntrance, "widthMm" | "measure
 // A pergola (2026-11-07, spec §5): posts at its outline's corners, beams along its sides, a roof of
 // slats, a deck, a cloth or nothing across them (./pergola.ts) — the one definition a hired pergola
 // in the catalog shares. Tables stand under it, so only its posts are in anyone's way.
-export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "column" | "other" | "plant" | "surface" | "stairs" | "ramp" | "seating" | "fountain" | "curtain" | "pergola" | "led" | "screen" | "item";
+export type FeatureKind = "pool" | "stage" | "bar" | "structure" | "column" | "other" | "plant" | "surface" | "stairs" | "ramp" | "seating" | "fountain" | "curtain" | "pergola" | "led" | "screen" | "item" | "table";
 
 /** A `column` feature's parts (./column.ts). Its footprint — width × depth, square or round — is the
  *  PLINTH it stands on; the shaft rises from it `shaftMm` across, with a base moulding `baseMm`
@@ -354,6 +355,10 @@ export interface StructureFeature {
   /** iff `kind === "item"`: the copy of the catalog row it was put down from (./item.ts) — what it
    *  is drawn and built as. No price, no stock, no link back. */
   item?: FeatureItem;
+  /** A TABLE of the venue's default layout (kind "table", ./venue-table.ts): its number, its seats and
+   *  the row it was copied from by name. Never part of the room an event draws on (lib/events/plan.ts
+   *  takes it out) — every new sketch in this venue starts with these as its own tables. */
+  table?: FeatureTable;
   /** iff `kind === "curtain"`: the wall stretch it hangs on and which side (./curtain.ts). The box
    *  is derived from it and written with it; a curtain with no span keeps the box it has. */
   curtain?: FeatureCurtain;
@@ -439,6 +444,7 @@ export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
   screen: "מסך לד",
   pergola: "פרגולה",
   item: "פריט מהקטלוג",
+  table: "שולחן",
 };
 
 export interface VenueStructure {
@@ -672,8 +678,15 @@ export function removeEntrance(s: VenueStructure, id: string): VenueStructure {
 // --- fixed features --------------------------------------------------------
 
 export function addFeature(s: VenueStructure, f: Omit<StructureFeature, "id">): { structure: VenueStructure; featureId: string } {
-  const feature: StructureFeature = { ...f, id: crypto.randomUUID() };
+  const feature: StructureFeature = { ...numberedAmong(s.features, f), id: crypto.randomUUID() };
   return { structure: { ...s, features: [...s.features, feature] }, featureId: feature.id };
+}
+
+/** A table of the layout (./venue-table.ts) whose number another table already holds — a copy, a
+ *  paste — takes the next free one; anything else is itself. */
+function numberedAmong<T extends Omit<StructureFeature, "id">>(features: readonly StructureFeature[], f: T): T {
+  if (!f.table || !features.some((o) => o.table?.number === f.table!.number)) return f;
+  return { ...f, table: { ...f.table, number: nextTableNumber(features) } };
 }
 
 /** How far a copy lands from its original — enough to see there are two, not so far that the copy
@@ -690,9 +703,11 @@ export function copiedFeature(f: StructureFeature): Omit<StructureFeature, "id">
 /** Copies of the given features — stairs, style, species and all — offset together, so a group
  *  copied keeps its own arrangement. The new ids come back in the same order, for the selection. */
 export function duplicateFeatures(s: VenueStructure, ids: string[]): { structure: VenueStructure; featureIds: string[] } {
-  const copies = s.features
-    .filter((f) => ids.includes(f.id))
-    .map((f) => ({ ...copiedFeature(f), ...(f.locked ? { locked: true as const } : {}), id: crypto.randomUUID(), x: f.x + DUPLICATE_OFFSET_MM, y: f.y + DUPLICATE_OFFSET_MM }));
+  const copies: StructureFeature[] = [];
+  for (const f of s.features.filter((f) => ids.includes(f.id))) {
+    const copy = { ...copiedFeature(f), ...(f.locked ? { locked: true as const } : {}), id: crypto.randomUUID(), x: f.x + DUPLICATE_OFFSET_MM, y: f.y + DUPLICATE_OFFSET_MM };
+    copies.push(numberedAmong([...s.features, ...copies], copy));
+  }
   return { structure: { ...s, features: [...s.features, ...copies] }, featureIds: copies.map((f) => f.id) };
 }
 
@@ -910,6 +925,7 @@ const FEATURE_DEFAULTS: Record<FeatureKind, Pick<StructureFeature, "widthMm" | "
   pergola: { widthMm: 4000, depthMm: 4000, heightMm: 2600, shape: "rect" },
   // Never placed bare — a catalog item is always put down from its row (newItemFeature).
   item: { widthMm: 1000, depthMm: 1000, heightMm: 1000, shape: "rect" },
+  table: { widthMm: 1800, depthMm: 1800, heightMm: 750, shape: "circle" },
 };
 
 // A plant's rough size is the species', not the kind's: a palm's crown is metres across and a pot
@@ -1002,6 +1018,12 @@ export function newFeatureFromProduct(kind: FeatureKind, product: Product, at: P
 export function newItemFeature(product: Product, at: Point, variantId?: string): Omit<StructureFeature, "id"> {
   const f = newFeatureFromProduct("item", product, at);
   return { ...f, item: itemSnapshot(product, { w: f.widthMm, h: f.depthMm }, variantId) };
+}
+
+/** A table row put down as table `number` of the venue's default layout (./venue-table.ts): the
+ *  row's outline, as a bar lands, and the table's number, seats and name. */
+export function newTableFeature(product: Product, at: Point, number: number): Omit<StructureFeature, "id"> {
+  return { ...newFeatureFromProduct("table", product, at), table: tableSpec(product, number) };
 }
 
 /** What a feature is drawn as — one footprint, shared by the editor, the printed placement map and

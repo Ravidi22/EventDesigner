@@ -34,9 +34,11 @@ import { POOL_PRESETS, POOL_PRESET_LABEL, type PoolPreset } from "./pool";
 import { PERGOLA_CATEGORY } from "./pergola";
 import { venueItemOffered } from "./item";
 import { BILLIARD_TABLE } from "@/lib/catalog/game-tables";
+import { STANDARD_TABLES, standardProduct } from "@/lib/catalog/standard/items";
+import { TABLE_CATEGORY } from "./venue-table";
 import { isMain } from "../self-check";
 
-export type AddToolSection = "structure" | "pool" | "ground" | "plants" | "bars" | "stages" | "seating" | "lounge" | "catalog";
+export type AddToolSection = "structure" | "pool" | "ground" | "plants" | "bars" | "stages" | "tables" | "seating" | "lounge" | "catalog";
 
 export interface AddTool {
   /** Stable within one list, and the entire payload of a drag onto the canvas. */
@@ -58,7 +60,7 @@ export interface AddTool {
   pool?: PoolPreset;
 }
 
-export const ADD_TOOL_SECTIONS: AddToolSection[] = ["structure", "pool", "ground", "plants", "bars", "stages", "seating", "lounge"];
+export const ADD_TOOL_SECTIONS: AddToolSection[] = ["structure", "pool", "ground", "plants", "bars", "stages", "tables", "seating", "lounge"];
 
 export const ADD_TOOL_SECTION_LABEL: Record<AddToolSection, string> = {
   structure: "מבנה",
@@ -67,6 +69,7 @@ export const ADD_TOOL_SECTION_LABEL: Record<AddToolSection, string> = {
   plants: "צמחייה",
   bars: "ברים ומזנונים",
   stages: "במות",
+  tables: "שולחנות",
   seating: "ישיבה",
   lounge: "טרקלין",
   catalog: "מהקטלוג",
@@ -153,6 +156,12 @@ export function addTools(products: Product[] = []): AddTool[] {
   for (const product of products.filter((p) => !p.archived && p.category === PERGOLA_CATEGORY).sort((a, b) => a.name.localeCompare(b.name, "he"))) {
     tools.push({ id: `product:${product.id}`, label: product.name, section: "structure", kind: "pergola", product });
   }
+  // THE VENUE'S DEFAULT TABLE LAYOUT (./venue-table.ts): the studio's own table rows, or — for a
+  // business with none (a venue owner has no catalog) — the base library's standard tables, so every
+  // hall can lay out its usual room. Each lands as a table of the layout, numbered next.
+  const ownTables = products.filter((p) => !p.archived && p.category === TABLE_CATEGORY).sort((a, b) => a.name.localeCompare(b.name, "he"));
+  const tableRows = ownTables.length ? ownTables : STANDARD_TABLES.map((item) => standardProduct(item, `standard:${item.key}`));
+  for (const product of tableRows) tools.push({ id: `table:${product.id}`, label: product.name, section: "tables", kind: "table", product });
   // The ceremony seating in front of a חופה — the venue's own chairs, five rows of five to start.
   const chair = products.find((p) => !p.archived && p.category === "chairs");
   tools.push({ id: "seating", label: FEATURE_KIND_LABEL.seating, section: "seating", kind: "seating", ...(chair ? { chair } : {}) });
@@ -215,7 +224,7 @@ if (isMain(import.meta.url)) {
 
   // An empty catalog is the studio that predates the base library. Every kind is still placeable.
   const empty = addTools([]);
-  assert(empty.length === 18 + POOL_PRESETS.length + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the seventeen plain things — door, window, curtain, a curtain on a rod, an LED strip on a wall or a side, a free one, an LED screen, stairs, ramp, fountain, structure, column, pergola, other, bar, stage, chairs in rows — the billiard table, a pool in each of its shapes, and the planting");
+  assert(empty.length === 18 + STANDARD_TABLES.length + POOL_PRESETS.length + PLANT_SPECIES.length + SURFACE_MATERIALS.length, "an empty catalog offers the seventeen plain things — door, window, curtain, a curtain on a rod, an LED strip on a wall or a side, a free one, an LED screen, stairs, ramp, fountain, structure, column, pergola, other, bar, stage, chairs in rows — the billiard table, a pool in each of its shapes, and the planting");
   const billiard = empty.find((t) => t.section === "lounge");
   assert(!!billiard && billiard.kind === "item" && billiard.product === BILLIARD_TABLE, "the standard billiard table is offered to every business, as the venue's own item");
   assert(findAddTool(empty, "led")?.kind === "led" && findAddTool(empty, "led-run")?.kind === "led" && findAddTool(empty, "screen")?.kind === "screen", "the venue's LED strip (on a wall or a side, or drawn free) and its screen");
@@ -224,7 +233,9 @@ if (isMain(import.meta.url)) {
   assert(pools.map((t) => t.pool).join() === "rect,ellipse,kidney,L,free" && pools.every((t) => t.kind === "pool"), "the pools come shape first: מלבן · אליפסה · כליה · ר · חופשי");
   assert(findAddTool(empty, "pool")?.pool === "ellipse", "…the oval keeping the one pool tool's id");
   assert(empty.find((t) => t.kind === "seating")?.chair === undefined, "…the rows of a dining chair when there is no chair to take");
-  assert(empty.filter((t) => t.product && t.product !== BILLIARD_TABLE).length === 0, "…none of them backed by a row that isn't there");
+  assert(empty.filter((t) => t.product && t.product !== BILLIARD_TABLE && t.kind !== "table").length === 0, "…none of them backed by a row that isn't there");
+  const stdTables = empty.filter((t) => t.section === "tables");
+  assert(stdTables.length === STANDARD_TABLES.length && stdTables.every((t) => t.kind === "table" && t.product?.category === "tables"), "with no tables of its own, a business lays out the base library's standard tables");
   for (const kind of ["bar", "stage"] as const) {
     const t = empty.find((x) => x.id === kind)!;
     assert(!!t && t.kind === kind, `${kind} falls back to the plain kind rather than to an empty section`);
@@ -246,7 +257,8 @@ if (isMain(import.meta.url)) {
   assert(bars.every((t) => t.kind === "bar"), "…and every one of them still lands as a bar on the plan");
   assert(bars[0].label === "בר בצורת ח 360×180", "…in the order a Hebrew reader would look for them");
   assert(!tools.some((t) => t.product?.id === "b3"), "an archived row is off the list (F-4.5)");
-  assert(!tools.some((t) => t.product?.id === "t1"), "a table is not something a venue has built");
+  assert(findAddTool(tools, "table:t1")?.kind === "table" && findAddTool(tools, "table:t1")?.section === "tables", "the studio's own table is a table of the venue's layout");
+  assert(tools.filter((t) => t.section === "tables").length === 1, "…in place of the standard ones, when it has tables of its own");
   assert(tools.filter((t) => t.section === "stages").length === 2, "the stage department is catalog-backed too");
   assert(findAddTool(tools, "product:r1")?.kind === "ramp" && findAddTool(tools, "product:s1")?.kind === "stage", "…and a ramp in it lands as the venue's ramp, a stage as a stage");
   assert(new Set(tools.map((t) => t.id)).size === tools.length, "ids are unique — a drag has to name exactly one tool");

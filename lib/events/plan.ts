@@ -13,8 +13,9 @@
 // caller loaded (venueGeometry() in lib/venues/storage.ts) — this file is pure geometry, and a pure
 // function that secretly fetches is one that cannot be called from a test, cannot be called from
 // the server, and would have to grow an `await` the day the venue store becomes a database.
-import { detectFaces } from "@/lib/venues/faces";
-import { emptyStructure, type VenueStructure } from "@/lib/venues/structure";
+import { detectFaces, pointInPolygon } from "@/lib/venues/faces";
+import { emptyStructure, type StructureFeature, type VenueStructure } from "@/lib/venues/structure";
+import { tablesInside } from "@/lib/venues/venue-table";
 import { resolveZones, zonesBounds, type ResolvedZone } from "@/lib/venues/zone";
 import { outlineBounds, type Bounds } from "@/lib/studio/geometry";
 import type { VenueAccessState, VenueGeometry } from "@/lib/venues/types";
@@ -35,6 +36,10 @@ export interface EventPlan {
    *  property, or because this property was never shared with whoever is looking. Screens render
    *  the difference — see VenueGeometry.access for why an empty plane alone is not enough. */
   access: VenueAccessState;
+  /** The venue's DEFAULT TABLE LAYOUT inside this event's zones (every one when it has none) —
+   *  lib/venues/venue-table.ts. Never in `structure`: they are not the room, they are what a new
+   *  sketch starts with (the studio copies them in as its own tables on a drawing's first open). */
+  layoutTables: StructureFeature[];
 }
 
 export const EMPTY_PLAN: EventPlan = {
@@ -44,6 +49,7 @@ export const EMPTY_PLAN: EventPlan = {
   bounds: { minX: 0, minY: 0, maxX: 0, maxY: 0, widthMm: 0, heightMm: 0 },
   mmPerUnit: 1,
   access: "none",
+  layoutTables: [],
 };
 
 /** The box around every node the structure has — the fallback frame when no zone is selected. */
@@ -59,7 +65,11 @@ export function eventPlan(event: Pick<EventSummary, "venueId" | "zoneIds"> | nul
   // than collapsing into the same EMPTY_PLAN both used to return.
   if (!event?.venueId) return EMPTY_PLAN;
   if (geometry.access === "denied") return { ...EMPTY_PLAN, venueId: event.venueId, access: "denied" };
-  const { structure, zones: allZones, mmPerUnit } = geometry;
+  const { structure: venue, zones: allZones, mmPerUnit } = geometry;
+  // The venue's default tables are not the room: no sketch, sheet or 3D room draws them as the
+  // venue's — they are handed over apart, below, for a new drawing to start from.
+  const tables = venue.features.filter((f) => f.kind === "table");
+  const structure = tables.length ? { ...venue, features: venue.features.filter((f) => f.kind !== "table") } : venue;
   const faces = detectFaces(structure);
   // The VENUE's features, not this event's arrangement of them: a zone is the property's, and one
   // made of a stage stays where the venue has the stage when a sketch nudges it for one evening.
@@ -84,6 +94,7 @@ export function eventPlan(event: Pick<EventSummary, "venueId" | "zoneIds"> | nul
     bounds: framed.widthMm || framed.heightMm ? framed : EMPTY_PLAN.bounds,
     mmPerUnit,
     access: geometry.access,
+    layoutTables: tablesInside(tables, zones.map((z) => z.boundary), pointInPolygon),
   };
 }
 

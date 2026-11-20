@@ -9,6 +9,7 @@ import { isAdditiveClick } from "@/lib/keyboard";
 import { featureFootprint, isWindow, nodeMap, plantSpecies, surfaceMaterial, wallPoints, type StructureFeature, type VenueStructure, featureEdgeItems, featurePlacement } from "@/lib/venues/structure";
 import { ItemSymbol } from "@/components/item-symbol";
 import { VenueItemGlyph, itemHasPicture } from "@/components/venue-item";
+import { VenueTableGlyph } from "@/components/venue-table";
 import { CURTAIN_DEPTH_MM, CURTAIN_FILL, curtainEnds, curtainPieces, type CurtainEnds, type CurtainPiece } from "@/lib/venues/curtain";
 import { ledColour, ledEnds, ledPieces } from "@/lib/venues/led";
 import { LedLine } from "@/components/led-glyph";
@@ -1009,6 +1010,7 @@ function wantsLabel(f: StructureFeature): boolean {
   if (f.kind === "ramp") return true;
   if (featureEdgeItems(f).some((it) => it.kind === "ramp")) return true;
   if (f.kind === "item") return !itemHasPicture(f) && !!f.label;
+  if (f.kind === "table") return false;
   return f.kind !== "plant" && f.kind !== "surface" && f.kind !== "stairs" && !!f.label;
 }
 
@@ -1229,6 +1231,13 @@ const FeatureNode = memo(function FeatureNode({
                     <ItemSymbol kind="fountain" footprint={featureFootprint(f)} count={1} tone={f.style?.fill} ink={selected ? "var(--color-accent)" : undefined} />
                     <FootprintShape footprint={featureFootprint(f)} fill="transparent" stroke={selected ? "var(--color-accent)" : "none"} strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />
                   </>
+                ) : f.kind === "table" ? (
+                  // A table of the venue's default layout (lib/venues/venue-table.ts): its outline,
+                  // its chairs and its number; its footprint is the hit area.
+                  <>
+                    <VenueTableGlyph feature={f} selected={selected} />
+                    <FootprintShape footprint={featureFootprint(f)} fill="transparent" stroke="none" />
+                  </>
                 ) : f.kind === "item" ? (
                   // A catalog item put down in the venue (lib/venues/item.ts): its own row's
                   // picture in its shade, from the copy it keeps; its footprint the hit area, dashed
@@ -1320,7 +1329,7 @@ const FeatureNode = memo(function FeatureNode({
                   <path d={`M ${-mm(2.8)} ${-mm(1)} v ${-mm(1.6)} a ${mm(2.8)} ${mm(2.8)} 0 0 1 ${mm(5.6)} 0 v ${mm(1.6)}`} fill="none" stroke="var(--color-accent)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
                 </g>
               )}
-              {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && f.kind !== "pergola" && f.kind !== "led" && f.kind !== "screen" && !(f.kind === "item" && itemHasPicture(f)) && !isClimb(f.kind) && <text
+              {f.kind !== "plant" && f.kind !== "surface" && f.kind !== "seating" && f.kind !== "column" && f.kind !== "fountain" && f.kind !== "curtain" && f.kind !== "pergola" && f.kind !== "led" && f.kind !== "screen" && f.kind !== "table" && !(f.kind === "item" && itemHasPicture(f)) && !isClimb(f.kind) && <text
                 x={f.x}
                 y={f.y}
                 textAnchor="middle"

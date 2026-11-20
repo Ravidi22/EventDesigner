@@ -561,6 +561,11 @@ export interface DesignDocumentContent {
    *  before this existed — and on every event that simply left the room as the property has it,
    *  which is most of them. See FeaturePlacement. */
   features?: FeaturePlacement[];
+  /** The venue's DEFAULT TABLE LAYOUT has been copied into this drawing (lib/venues/venue-table.ts —
+   *  the studio does it on the first open of an empty drawing in a venue that has one). Set once and
+   *  never cleared, so a sketch cleared of those tables on purpose is never filled again. Absent on
+   *  every drawing that never was. */
+  layoutAdopted?: true;
 }
 
 export function emptyDocument(mmPerUnit = 1): DesignDocumentContent {

@@ -1012,6 +1012,7 @@ export function HallsSelection({
     band !== null && feature.kind === "bar" ? `דלפק ${cmOf(band)} ס״מ` : null,
     column ? `עמוד ⌀ ${cmOf(column.shaftMm)} ס״מ` : null,
     feature.kind === "pergola" ? `${PERGOLA_ROOF_LABEL[pergolaOf(feature).roof]} · ${pergolaPostsWord(pergolaOf(feature))}` : null,
+    feature.kind === "table" && feature.table ? `שולחן ${feature.table.number} · ${feature.table.seats} מקומות` : null,
     !climb && !surface && !seating && feature.heightMm > 0 ? `גובה ${cmOf(feature.heightMm)} ס״מ` : null,
     feature.locked ? "נעול" : null,
   ]
@@ -1433,6 +1434,31 @@ export function HallsSelection({
       ),
     );
   }
+  // A table of the venue's DEFAULT LAYOUT (lib/venues/venue-table.ts): its number and its seats, and
+  // what it is for — every new sketch in this venue starts with it as one of its own tables.
+  if (feature.kind === "table" && feature.table) {
+    const t = feature.table;
+    const setTable = (p: Partial<typeof t>) => patch({ table: { ...t, ...p } });
+    const clash = !!structure?.features.some((o) => o.id !== feature.id && o.table?.number === t.number);
+    kindGroups.push(
+      G(
+        "table",
+        FEATURE_ICON.table,
+        "שולחן",
+        `${t.number ? `שולחן ${t.number}` : "ללא מספר"} · ${t.seats} מקומות`,
+        <>
+          <PanelRow label="מספר השולחן" htmlFor="venue-table-number">
+            <NumberField id="venue-table-number" decimals={0} min={1} max={999} commitOnBlur value={t.number} onChange={(n) => setTable({ number: Math.max(1, Math.round(n)) })} className="w-20" />
+          </PanelRow>
+          {clash && <Note>שולחן אחר כבר נושא את המספר הזה — בסקיצה יקבל אחד מהם את המספר הפנוי הבא.</Note>}
+          <PanelRow label="מקומות ישיבה" htmlFor="venue-table-seats">
+            <NumberField id="venue-table-seats" decimals={0} min={0} max={60} commitOnBlur value={t.seats} onChange={(n) => setTable({ seats: Math.max(0, Math.round(n)) })} className="w-20" />
+          </PanelRow>
+          <Note>פריסת ברירת המחדל של המקום: כל סקיצה חדשה כאן מתחילה עם השולחנות האלה כשולחנות שלה — ממוספרים, עם הכיסאות, וניתנים להזזה ולמחיקה. סקיצות שכבר קיימות לא משתנות.</Note>
+        </>,
+      ),
+    );
+  }
   // A pool's שפה, a surface's edging (lib/venues/rim.ts): a band INSIDE the outline.
   if (takesRim(feature)) {
     const rim = rimSpecOf(feature);
@@ -1533,6 +1559,7 @@ export function HallsSelection({
   // Whether an EVENT may move this in its sketch. Default by kind (featureMovable).
   const sketchGroup =
     feature.kind !== "surface" &&
+    feature.kind !== "table" &&
     G(
       "sketch",
       MousePointer2,
@@ -1556,7 +1583,7 @@ export function HallsSelection({
     !isLed && styleGroup(feature.style, (style) => patch({ style }), surface || feature.kind === "plant" || seating || isCurtain),
     sketchGroup,
     zoneGroup,
-  ], { defaultOpen: surface ? ["material", "shape"] : ["shape", "size", "plant", "climb", "rows", "span", "led"] });
+  ], { defaultOpen: surface ? ["material", "shape"] : ["shape", "size", "plant", "climb", "rows", "span", "led", "table"] });
 }
 
 

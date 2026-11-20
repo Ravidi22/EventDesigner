@@ -13,8 +13,9 @@ import type { AddTool } from "@/lib/venues/add-tools";
 import { pergolaOf } from "@/lib/venues/pergola";
 import { newPoolFeature } from "@/lib/venues/pool";
 import { newSeatingFeature, seatingChair } from "@/lib/venues/seating";
-import { featureFootprint, newFeature, newFeatureFromProduct, newItemFeature, type StructureFeature } from "@/lib/venues/structure";
+import { featureFootprint, newFeature, newFeatureFromProduct, newItemFeature, newTableFeature, type StructureFeature } from "@/lib/venues/structure";
 import { VenueItemGlyph } from "@/components/venue-item";
+import { VenueTableGlyph } from "@/components/venue-table";
 import { useMounted } from "@/lib/use-mounted";
 
 // A rail tile's picture for the things that ARE a shape (2026-11-19, the user, of the /halls rail:
@@ -26,6 +27,8 @@ import { useMounted } from "@/lib/use-mounted";
 // long as it is deep, a flight shows its treads. Everything else keeps its icon or swatch.
 
 const ORIGIN = { x: 0, y: 0 };
+/** Two chairs' depth and their gap from the table — the ring round a table on its tile. */
+const TABLE_CHAIRS_MM = 1300;
 
 /** The box the picture is fitted into, in screen px — wide, because most of what a venue builds
  *  (bars, decks, stairs) is long. */
@@ -37,7 +40,8 @@ type Picture =
   | { kind: "climb"; feature: Omit<StructureFeature, "id"> }
   | { kind: "pergola"; footprint: Footprint; feature: Omit<StructureFeature, "id"> }
   | { kind: "seating"; spec: NonNullable<StructureFeature["seating"]>; w: number; h: number }
-  | { kind: "item"; feature: StructureFeature };
+  | { kind: "item"; feature: StructureFeature }
+  | { kind: "table"; feature: StructureFeature };
 
 /** "ציור חופשי" in water: a pool of no particular shape, traced dashed as the trace draws it. */
 const FREE_OUTLINE = [
@@ -70,6 +74,8 @@ function pictureOf(tool: AddTool): Picture | null {
   if (!tool.product || !tool.kind) return null;
   // A catalog thing put in the venue as itself (./item.ts) — a billiard table — is its picture.
   if (tool.kind === "item") return { kind: "item", feature: { id: `tile:${tool.id}`, ...newItemFeature(tool.product, ORIGIN) } };
+  // A table of the layout with its chairs round it (number 0 = none written on a tile).
+  if (tool.kind === "table") return { kind: "table", feature: { id: `tile:${tool.id}`, ...newTableFeature(tool.product, ORIGIN, 0) } };
   const feature = newFeatureFromProduct(tool.kind, tool.product, ORIGIN);
   if (tool.kind === "stairs" || tool.kind === "ramp") return { kind: "climb", feature };
   return { kind: "outline", footprint: featureFootprint(feature), fill: "var(--color-surface)" };
@@ -88,7 +94,9 @@ export const ToolGlyph = memo(function ToolGlyph({ tool }: { tool: AddTool }) {
   const picture = useMemo(() => (mounted ? pictureOf(tool) : null), [mounted, tool]);
   if (!picture) return <span className="block shrink-0" style={{ width: BOX_W, height: BOX_H }} aria-hidden />;
 
-  const b = picture.kind === "seating" ? { w: picture.w, h: picture.h } : footprintBounds(picture.kind === "climb" || picture.kind === "item" ? featureFootprint(picture.feature) : picture.footprint);
+  const fb = picture.kind === "seating" ? { w: picture.w, h: picture.h } : footprintBounds(picture.kind === "climb" || picture.kind === "item" || picture.kind === "table" ? featureFootprint(picture.feature) : picture.footprint);
+  // A table's chairs stand outside its outline: room for them all round.
+  const b = picture.kind === "table" ? { w: fb.w + TABLE_CHAIRS_MM, h: fb.h + TABLE_CHAIRS_MM } : fb;
   // A deck stored 122 across and 244 deep is the same deck as a 244×122: laid long side across, it
   // fills the tile instead of standing in a third of it.
   const turned = b.h > b.w * 1.1;
@@ -128,6 +136,7 @@ export const ToolGlyph = memo(function ToolGlyph({ tool }: { tool: AddTool }) {
         )}
         {picture.kind === "seating" && <SeatingGlyph spec={picture.spec} ink={stroke} />}
         {picture.kind === "item" && <VenueItemGlyph feature={picture.feature} />}
+        {picture.kind === "table" && <VenueTableGlyph feature={picture.feature} />}
       </g>
     </svg>
   );

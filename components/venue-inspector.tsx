@@ -34,7 +34,7 @@ import { Monitor, Zap } from "lucide-react";
 // A pergola's posts and slats (lib/venues/pergola.ts) — the catalog's own icon for its pergolas.
 import { Columns3 } from "lucide-react";
 // A catalog item put down in the venue (lib/venues/item.ts).
-import { Package } from "lucide-react";
+import { Package, Table2 } from "lucide-react";
 
 import {
   PLANT_SPECIES,
@@ -104,6 +104,7 @@ export const FEATURE_ICON: Record<FeatureKind, LucideIcon> = {
   screen: Monitor,
   pergola: Columns3,
   item: Package,
+  table: Table2,
 };
 
 /** The icon an add-element entry wears, keyed by its feature kind — or by "entrance" for the one

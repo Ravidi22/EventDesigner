@@ -9,6 +9,7 @@ import type { BenchSpec, ChairRows, DesignDocumentContent, DesignTable, Placemen
 import { NEW_BLOCK, chairRowsCount, chairRowsLayout, chairRowsMove, cleanRows } from "@/lib/design-document/chair-rows";
 import { carriedRowsOf, rowsTool, rowsToolId } from "@/lib/studio/drag-payload";
 import { emptyDocument } from "@/lib/design-document/types";
+import { layoutTables } from "@/lib/venues/venue-table";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
 import { saveDocument } from "@/lib/studio/actions";
@@ -496,6 +497,19 @@ export function StudioScreen({
       // What is already on the server, so the first render after a restore doesn't write it
       // straight back. Against localStorage that redundant save was free; it is a round trip now.
       persisted.current = saved;
+    }
+    // THE VENUE'S DEFAULT TABLE LAYOUT (lib/venues/venue-table.ts): an event's drawing that is still
+    // empty — beginEvent writes every new one empty — starts with the venue's tables as its OWN,
+    // matched to this studio's rows, in ONE undo entry (Ctrl+Z takes them away), and marked so a
+    // sketch cleared of them on purpose is never filled again. The scratch drawing has no venue's.
+    const blank = !saved || (saved.tables.length === 0 && saved.placements.length === 0);
+    if (event && blank && !saved?.layoutAdopted && plan.layoutTables.length) {
+      // Marked underneath too: undone, the empty drawing is saved as offered, never filled again.
+      const base = { ...(saved ?? emptyDocument()), layoutAdopted: true as const };
+      const { tables, unmatched } = layoutTables(plan.layoutTables, catalog, { newId: uid, variantOf: defaultVariantId });
+      setHistory(dispatch(initHistory(base), { type: "loadDocument", content: { ...base, tables } }));
+      persisted.current = saved ?? null;
+      showHint(`נטענו ${tables.length} השולחנות של המקום${unmatched ? ` · ${unmatched} בלי פריט תואם בקטלוג` : ""} — Ctrl+Z מבטל`);
     }
     setRestored(true);
     // `plan` is derived from `workspace` (useMemo above), so it is current whenever this runs.

@@ -58,6 +58,7 @@ import {
   newFeature,
   newFeatureFromProduct,
   newItemFeature,
+  newTableFeature,
   removeEntrance,
   removeFeature,
   removeNode,
@@ -139,6 +140,7 @@ import type { StageStair } from "@/lib/design-document/types";
 import { ALIGN_LABEL, alignedCentres, alignGuide, needsThree, type AlignOp } from "@/lib/studio/align";
 import type { SnapBox } from "@/lib/studio/snap";
 import { DRAW_SURFACE_ID, addTools, findAddTool, type AddTool } from "@/lib/venues/add-tools";
+import { nextTableNumber } from "@/lib/venues/venue-table";
 import { useCatalog } from "@/lib/catalog/use-catalog";
 import {
   hitsInBox,
@@ -1614,6 +1616,8 @@ export function HallsScreen() {
         ? newSeatingFeature(p, tool.chair)
         : tool.kind === "item" && tool.product
         ? newItemFeature(tool.product, p)
+        : tool.kind === "table" && tool.product
+        ? newTableFeature(tool.product, p, nextTableNumber(structure.features))
         : tool.product
           ? newFeatureFromProduct(tool.kind, tool.product, p)
           : newFeature(tool.kind, p, tool.plant ?? tool.surface),
