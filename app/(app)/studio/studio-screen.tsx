@@ -92,7 +92,6 @@ import {
   benchSeats,
   rehomeEdgeItems,
   tidyEdgeItems,
-  SEAT_WIDTH_MM,
   stageAreaMm2,
   stageCorners,
   besideNeighbours,
@@ -3222,9 +3221,8 @@ export function StudioScreen({
           seats: shape.seats,
           chairSeats: shape.chairs.length,
           sofaSeats: shape.sofaSeats,
-          autoSeats: Math.floor(shape.widthMm / SEAT_WIDTH_MM),
-          // The two sides as laid (./bench.ts) — a sofa's run and seat included — and whether each
-          // count was typed (benchSideRows).
+          // The two sides as laid (./bench.ts) — a sofa's run and seat included, and what each seats
+          // when nobody typed a count — and whether each count was typed (benchSideRows).
           ...benchSideRows(st, shape.bench),
           dressed: doc.placements.filter((x) => x.perch?.stageId === soleStage.id && x.perch.itemId === st.id).length,
         },
@@ -3553,8 +3551,10 @@ export function StudioScreen({
           const benchOld = st.bench ?? {};
           const legacyBack = benchOld.back ?? (st.seats !== undefined ? { kind: "chairs" as const, seats: st.seats } : undefined);
           let bench: BenchSpec | undefined = st.bench;
-          if (patch.back) bench = patchBenchSide({ ...benchOld, ...(legacyBack ? { back: legacyBack } : {}) }, "back", patch.back);
-          if (patch.front) bench = patchBenchSide({ ...benchOld, ...bench, ...(legacyBack && !bench?.back ? { back: legacyBack } : {}) }, "front", patch.front);
+          // …a sofa's run and seat written as they will be drawn, against the banquette as laid.
+          const laid = patch.back || patch.front ? edgeItemShape(s, st, deckOf)?.bench : undefined;
+          if (patch.back) bench = patchBenchSide({ ...benchOld, ...(legacyBack ? { back: legacyBack } : {}) }, "back", patch.back, laid);
+          if (patch.front) bench = patchBenchSide({ ...benchOld, ...bench, ...(legacyBack && !bench?.back ? { back: legacyBack } : {}) }, "front", patch.front, laid);
           if (patch.sofaHeightMm !== undefined) bench = { ...benchOld, ...bench, sofaHeightMm: Math.round(patch.sofaHeightMm) };
           if (patch.heightMm !== undefined) bench = { ...benchOld, ...bench, heightMm: Math.round(patch.heightMm) };
           if (patch.depthMm !== undefined) bench = { ...benchOld, ...bench, depthMm: Math.round(patch.depthMm) };
@@ -4333,8 +4333,10 @@ export function StudioScreen({
       const p = doc.placements.find((x) => x.id === id);
       if (!p) return;
       let bench: BenchSpec = { ...p.bench };
-      if (patch.back) bench = patchBenchSide(bench, "back", patch.back);
-      if (patch.front) bench = patchBenchSide(bench, "front", patch.front);
+      // …a sofa's run and seat written as they will be drawn, against the banquette as laid.
+      const laid = standaloneBench(p, benchOf) ?? undefined;
+      if (patch.back) bench = patchBenchSide(bench, "back", patch.back, laid);
+      if (patch.front) bench = patchBenchSide(bench, "front", patch.front, laid);
       if (patch.heightMm !== undefined) bench.heightMm = Math.round(patch.heightMm);
       if (patch.sofaHeightMm !== undefined) bench.sofaHeightMm = Math.round(patch.sofaHeightMm);
       if (patch.seated !== undefined) bench.seated = Math.max(0, Math.round(patch.seated));

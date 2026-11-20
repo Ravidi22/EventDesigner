@@ -81,7 +81,7 @@ import { ProductImage } from "../catalog/product-image";
 import type { BenchSideKind, BenchSpec, ChairRows, DesignDocumentContent, DesignTable, Placement, WallSpan } from "@/lib/design-document/types";
 import { ChairRowsPopover } from "@/components/chair-rows-popover";
 import { MAX_PER_ROW, MAX_ROWS } from "@/lib/design-document/chair-rows";
-import { BENCH_SIDE_KINDS, BENCH_SIDE_LABEL, SEAT_WIDTH_MM, type BenchLayout, type BenchSideLayout } from "@/lib/design-document/bench";
+import { BENCH_SIDE_KINDS, BENCH_SIDE_LABEL, BENCH_TOP_RANGE_MM, SOFA_SEAT_RANGE_MM, type BenchLayout, type BenchSideLayout } from "@/lib/design-document/bench";
 import { placementFootprint, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
 import { footprintBounds } from "@/lib/studio/footprint";
 import {
@@ -218,10 +218,8 @@ export interface StageEdgeRow {
   seats: number;
   chairSeats: number;
   sofaSeats: number;
-  /** One per 60cm of its length — what a side seats when nobody typed a count. */
-  autoSeats: number;
-  /** Its two sides — the stage side (`back`) and the room side (`front`) — and whether each count
-   *  was typed. */
+  /** Its two sides — the stage side (`back`) and the room side (`front`) — as laid (each with what it
+   *  seats when nobody typed a count), and whether each count was typed. */
   back: BenchSideRow;
   front: BenchSideRow;
   /** Design items standing on it (a banquette). */
@@ -1617,7 +1615,6 @@ export function Inspector({
                     front={it.front}
                     backLabel="צד הבמה"
                     frontLabel="צד האולם"
-                    autoSeats={it.autoSeats}
                     heightMm={it.heightMm}
                     sofaHeightMm={it.sofaHeightMm}
                     heightNote="מעל הבמה — שולחן לכיסאות שעליה"
@@ -2360,7 +2357,6 @@ export function Inspector({
                 front={{ ...bench.front, set: benchPanel.spec?.front?.seats !== undefined }}
                 backLabel="צד אחורי"
                 frontLabel="צד קדמי"
-                autoSeats={Math.floor(bench.widthMm / SEAT_WIDTH_MM)}
                 heightMm={bench.heightMm}
                 sofaHeightMm={bench.sofaHeightMm}
                 heightNote="מהרצפה — שולחן לכיסאות שלצידו"
@@ -3059,7 +3055,6 @@ function BenchSidesFields({
   front,
   backLabel,
   frontLabel,
-  autoSeats,
   heightMm,
   sofaHeightMm,
   heightNote,
@@ -3075,7 +3070,6 @@ function BenchSidesFields({
   front: BenchSideRow;
   backLabel: string;
   frontLabel: string;
-  autoSeats: number;
   heightMm: number;
   sofaHeightMm: number;
   /** What the top height is measured from, in words. */
@@ -3097,7 +3091,8 @@ function BenchSidesFields({
       <Segmented label={label} value={row.kind} options={BENCH_SIDE_KINDS.map((k) => [k, BENCH_SIDE_LABEL[k]] as const)} onChange={(kind) => onSide(key, { kind })} />
       {row.kind !== "none" && (
         <PanelRow label={row.kind === "chairs" ? "כיסאות" : "מקומות על הספה"} htmlFor={`${idPrefix}-${key}-seats`}>
-          {row.set && row.seats !== autoSeats && <BarButton icon={Undo2} label={`חזרה לאחד לכל 60 ס״מ (${autoSeats})`} onClick={() => onSide(key, { seats: null })} />}
+          {/* Back to one per 60 cm of THIS side's run — a sofa's, not the whole banquette's. */}
+          {row.set && row.seats !== row.autoSeats && <BarButton icon={Undo2} label={`חזרה לאחד לכל 60 ס״מ (${row.autoSeats})`} onClick={() => onSide(key, { seats: null })} />}
           <NumberField id={`${idPrefix}-${key}-seats`} decimals={0} min={0} max={60} value={row.seats} onChange={(n) => onSide(key, { seats: n })} className="w-20" />
         </PanelRow>
       )}
@@ -3110,9 +3105,22 @@ function BenchSidesFields({
             {row.widthMm !== undefined && lengthMm !== undefined && row.widthMm < lengthMm && <BarButton icon={Undo2} label={`לכל האורך (${cmOf(lengthMm)})`} onClick={() => onSide(key, { widthMm: null })} />}
             <NumberField id={`${idPrefix}-${key}-sw`} decimals={0} min={60} max={1200} commitOnBlur value={cmOf(row.widthMm ?? lengthMm ?? 0)} onChange={(cm) => onSide(key, { widthMm: cm * 10 })} className="w-20" />
           </PanelRow>
+          {/* The seat as DRAWN, between a floor no higher than its default and the most the other
+              side leaves (bench.ts sofaSeatMax) — the write is held to the same (QA BQ-2). */}
           <PanelRow label="עומק המושב (ס״מ)" htmlFor={`${idPrefix}-${key}-sd`}>
-            <NumberField id={`${idPrefix}-${key}-sd`} decimals={0} min={20} max={150} commitOnBlur value={cmOf(row.depthMm ?? 0)} onChange={(cm) => onSide(key, { depthMm: cm * 10 })} className="w-20" />
-            <span className="text-xs text-muted">{depthMm !== undefined ? `מתוך ${cmOf(depthMm)} של הבנקט` : "מהקצה פנימה"}</span>
+            <NumberField
+              id={`${idPrefix}-${key}-sd`}
+              decimals={0}
+              min={Math.max(1, Math.min(20, Math.floor((row.depthDefaultMm ?? 200) / 10)))}
+              max={row.depthMaxMm !== undefined ? Math.max(1, cmOf(row.depthMaxMm)) : 150}
+              commitOnBlur
+              value={cmOf(row.depthMm ?? 0)}
+              onChange={(cm) => onSide(key, { depthMm: cm * 10 })}
+              className="w-20"
+            />
+            <span className="text-xs text-muted">
+              {[row.depthMaxMm !== undefined ? `עד ${cmOf(row.depthMaxMm)}` : null, depthMm !== undefined ? `מתוך ${cmOf(depthMm)} של הבנקט` : "מהקצה פנימה"].filter(Boolean).join(" · ")}
+            </span>
           </PanelRow>
         </>
       )}
@@ -3126,13 +3134,13 @@ function BenchSidesFields({
       {side("front", front, frontLabel)}
       {hasChairs && (
         <PanelRow label="גובה המשטח (ס״מ)" htmlFor={`${idPrefix}-h`}>
-          <NumberField id={`${idPrefix}-h`} decimals={0} min={40} max={120} commitOnBlur value={cmOf(heightMm)} onChange={(cm) => onHeight(cm * 10)} className="w-20" />
+          <NumberField id={`${idPrefix}-h`} decimals={0} min={BENCH_TOP_RANGE_MM.min / 10} max={BENCH_TOP_RANGE_MM.max / 10} commitOnBlur value={cmOf(heightMm)} onChange={(cm) => onHeight(cm * 10)} className="w-20" />
           <span className="text-xs text-muted">{heightNote}</span>
         </PanelRow>
       )}
       {hasSofa && (
         <PanelRow label="גובה מושב הספה (ס״מ)" htmlFor={`${idPrefix}-sh`}>
-          <NumberField id={`${idPrefix}-sh`} decimals={0} min={30} max={70} commitOnBlur value={cmOf(sofaHeightMm)} onChange={(cm) => onSofaHeight(cm * 10)} className="w-20" />
+          <NumberField id={`${idPrefix}-sh`} decimals={0} min={SOFA_SEAT_RANGE_MM.min / 10} max={SOFA_SEAT_RANGE_MM.max / 10} commitOnBlur value={cmOf(sofaHeightMm)} onChange={(cm) => onSofaHeight(cm * 10)} className="w-20" />
           <span className="text-xs text-muted">מהרצפה שהיושבים עומדים עליה</span>
         </PanelRow>
       )}
@@ -4499,12 +4507,12 @@ function BenchHeightFields({
   return (
     <>
       <PanelRow label="גובה המשטח" htmlFor="bench-h">
-        <NumberField id="bench-h" decimals={0} min={20} max={150} commitOnBlur value={cm(heightMm)} onChange={(v) => onHeight(v * 10)} className="w-20" />
+        <NumberField id="bench-h" decimals={0} min={BENCH_TOP_RANGE_MM.min / 10} max={BENCH_TOP_RANGE_MM.max / 10} commitOnBlur value={cm(heightMm)} onChange={(v) => onHeight(v * 10)} className="w-20" />
         <span className="text-xs text-muted">ס״מ מהרצפה</span>
       </PanelRow>
       {sofaHeightMm !== undefined && (
         <PanelRow label="גובה מושב הספה" htmlFor="bench-sh">
-          <NumberField id="bench-sh" decimals={0} min={30} max={70} commitOnBlur value={cm(sofaHeightMm)} onChange={(v) => onSofaHeight(v * 10)} className="w-20" />
+          <NumberField id="bench-sh" decimals={0} min={SOFA_SEAT_RANGE_MM.min / 10} max={SOFA_SEAT_RANGE_MM.max / 10} commitOnBlur value={cm(sofaHeightMm)} onChange={(v) => onSofaHeight(v * 10)} className="w-20" />
           <span className="text-xs text-muted">ס״מ מהרצפה</span>
         </PanelRow>
       )}

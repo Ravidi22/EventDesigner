@@ -55,6 +55,35 @@ export const SOFA_SEAT_MM = 460;
 export const SEAT_WIDTH_MM = 600;
 /** A sofa's backrest, drawn as the band between its cushions and the strip's centre line. */
 export const SOFA_BACK_MM = 80;
+/** What a CHAIRS side keeps of the strip for its table when a sofa sits on the other side: a place
+ *  setting's depth — or half a strip shallower than two of them. */
+export const CHAIR_TABLE_MM = 300;
+/** A sofa's seat is never drawn thinner than this — a cushion to see. */
+const SEAT_MIN_MM = 20;
+/** The range a banquette's TOP is typed in — the chairs' table, above the floor they stand on — and a
+ *  sofa side's SEAT; one range for a stage's banquette and a standalone one (QA BQ-10). */
+export const BENCH_TOP_RANGE_MM = { min: 200, max: 1500 } as const;
+export const SOFA_SEAT_RANGE_MM = { min: 300, max: 700 } as const;
+
+/** The backrest band between a sofa side's cushions and the strip's centre line — thinner on a
+ *  shallow strip, so there is always a cushion to see. */
+export function sofaBand(depthMm: number): number {
+  return Math.max(0, Math.min(SOFA_BACK_MM, depthMm / 2 - 100));
+}
+
+/** A sofa side's seat when nobody typed one: its half of the strip less the backrest band. */
+export function sofaSeatDefault(depthMm: number): number {
+  return Math.max(0, depthMm / 2 - sofaBand(depthMm));
+}
+
+/** The deepest a sofa side's seat may be on a strip `depthMm` deep, given the OTHER side: the strip
+ *  less the backrest band and whatever the other side takes — its own seat (a sofa), its table
+ *  (chairs: CHAIR_TABLE_MM, or half a shallow strip), nothing (bare). */
+export function sofaSeatMax(depthMm: number, other: { kind: BenchSideKind; depthMm?: number }): number {
+  const d = Math.max(0, depthMm);
+  const takes = other.kind === "chairs" ? Math.min(CHAIR_TABLE_MM, d / 2) : other.kind === "sofa" ? (other.depthMm ?? sofaSeatDefault(d)) : 0;
+  return Math.max(0, d - sofaBand(d) - takes);
+}
 
 export const BENCH_SIDE_KINDS: BenchSideKind[] = ["chairs", "sofa", "none"];
 export const BENCH_SIDE_LABEL: Record<BenchSideKind, string> = { chairs: "כיסאות", sofa: "ספה", none: "ללא" };
@@ -94,9 +123,17 @@ export function benchSpecOf(item: Pick<StageStair, "bench" | "seats" | "heightMm
 export interface BenchSideLayout {
   kind: BenchSideKind;
   seats: number;
-  /** A sofa side's run and seat depth as laid (typed, else the defaults) — what the bar shows. */
+  /** What it seats when nobody types a count: one per 60 cm of ITS run (a sofa's, else the strip's;
+   *  QA BQ-9), none on a bare side — what "back to automatic" puts back. */
+  autoSeats: number;
+  /** A sofa side's run and seat depth as DRAWN (typed, else the defaults; held to the strip and to
+   *  the other side — QA BQ-2) — what the bar shows. */
   widthMm?: number;
   depthMm?: number;
+  /** …the deepest its seat may be beside the other side as laid, and its seat when nobody typed one —
+   *  the bar's field runs between them. */
+  depthMaxMm?: number;
+  depthDefaultMm?: number;
 }
 
 export interface BenchLayout {
@@ -131,19 +168,44 @@ export function benchLayout(widthMm: number, depthMm: number, spec?: BenchSpec):
   const half = d / 2;
   const backKind = spec?.back?.kind ?? DEFAULT_BACK;
   const frontKind = spec?.front?.kind ?? DEFAULT_FRONT;
-  // A cushion runs from the side's edge toward the centre line, leaving the backrest band — thinner
-  // on a shallow strip, so there is always a cushion to see.
-  const backBand = Math.max(0, Math.min(SOFA_BACK_MM, half - 100));
+  // A cushion runs from the side's edge toward the centre line, leaving the backrest band (sofaBand).
+  const seatDefault = sofaSeatDefault(d);
   const sofaRun = (side: BenchSide | undefined) => (side?.kind === "sofa" && side.widthMm && side.widthMm > 0 ? Math.min(w, Math.round(side.widthMm)) : w);
-  const sofaDepth = (side: BenchSide | undefined) => (side?.kind === "sofa" && side.depthMm && side.depthMm > 0 ? Math.min(d, Math.round(side.depthMm)) : half - backBand);
-  const sideOf = (side: BenchSide | undefined, fallback: BenchSideKind): BenchSideLayout => {
+  // The seat each sofa side asks for — typed, else the default — held to what the strip leaves beside
+  // the other side's kind (sofaSeatMax: never onto the chairs' table, never past the far edge). Two
+  // sofas share the strip less one backrest band, and asking more than it holds between them both
+  // give way in proportion — what the bar writes never asks it (patchBenchSide). QA BQ-2: the seat
+  // shown, drawn and stored used to be three different numbers, and two sides overlapped.
+  const wants = (side: BenchSide | undefined) => (side?.depthMm && side.depthMm > 0 ? Math.round(side.depthMm) : seatDefault);
+  let seatB = backKind === "sofa" ? wants(spec?.back) : 0;
+  let seatF = frontKind === "sofa" ? wants(spec?.front) : 0;
+  if (backKind === "sofa" && frontKind === "sofa") {
+    const room = Math.max(0, d - sofaBand(d));
+    if (seatB + seatF > room) {
+      const k = room / (seatB + seatF);
+      seatB = Math.floor(seatB * k);
+      seatF = Math.floor(seatF * k);
+    }
+  } else {
+    if (backKind === "sofa") seatB = Math.min(seatB, sofaSeatMax(d, { kind: frontKind }));
+    if (frontKind === "sofa") seatF = Math.min(seatF, sofaSeatMax(d, { kind: backKind }));
+  }
+  const seatMin = Math.min(SEAT_MIN_MM, half);
+  if (backKind === "sofa") seatB = Math.max(seatMin, seatB);
+  if (frontKind === "sofa") seatF = Math.max(seatMin, seatF);
+  const sideOf = (side: BenchSide | undefined, fallback: BenchSideKind, seat: number, other: { kind: BenchSideKind; depthMm?: number }): BenchSideLayout => {
     const kind = side?.kind ?? fallback;
-    // A sofa seats along ITS run, not the whole strip's.
+    // A sofa seats along ITS run, not the whole strip's — and goes back to one per 60 cm of it.
     const run = kind === "sofa" ? sofaRun(side) : w;
-    return { kind, seats: sideSeats(run, side, fallback), ...(kind === "sofa" ? { widthMm: run, depthMm: sofaDepth(side) } : {}) };
+    return {
+      kind,
+      seats: sideSeats(run, side, fallback),
+      autoSeats: sideSeats(run, { kind }, fallback),
+      ...(kind === "sofa" ? { widthMm: run, depthMm: seat, depthMaxMm: Math.max(seatMin, sofaSeatMax(d, other)), depthDefaultMm: seatDefault } : {}),
+    };
   };
-  const back = sideOf(spec?.back, DEFAULT_BACK);
-  const front = sideOf(spec?.front, DEFAULT_FRONT);
+  const back = sideOf(spec?.back, DEFAULT_BACK, seatB, { kind: frontKind, ...(frontKind === "sofa" ? { depthMm: seatF } : {}) });
+  const front = sideOf(spec?.front, DEFAULT_FRONT, seatF, { kind: backKind, ...(backKind === "sofa" ? { depthMm: seatB } : {}) });
 
   const chairs: Seat[] = [];
   const cushions: Point[][] = [];
@@ -158,10 +220,10 @@ export function benchLayout(widthMm: number, depthMm: number, spec?: BenchSpec):
       for (let i = 0; i < n; i++) chairs.push({ x: xAt(i + 0.5), y: sign * (half + CHAIR_OFFSET_MM), facingDeg: sign === -1 ? 90 : -90 });
       return;
     }
-    // A sofa: its run centred on the strip, its seat from the edge in, the backrest line at the
-    // seat's inner edge (never past the strip's far edge).
+    // A sofa: its run centred on the strip, its seat from the edge in (as held above), the backrest
+    // line at the seat's inner edge.
     const run = side.widthMm ?? w;
-    const seatDepth = Math.min(d - 20, Math.max(20, side.depthMm ?? half - backBand));
+    const seatDepth = side.depthMm ?? seatDefault;
     const xAt = (i: number) => -run / 2 + (i * run) / n;
     const edge = sign * half;
     const inner = sign * (half - seatDepth);
@@ -315,17 +377,24 @@ export type BenchSideRowOf = BenchSideLayout & { set: boolean };
 export function benchSideRows(item: Pick<StageStair, "bench" | "seats" | "heightMm" | "depthMm">, lay: BenchLayout | undefined): { back: BenchSideRowOf; front: BenchSideRowOf } {
   const spec = benchSpecOf(item);
   return {
-    back: { ...(lay?.back ?? { kind: DEFAULT_BACK, seats: 0 }), set: spec.back?.seats !== undefined },
-    front: { ...(lay?.front ?? { kind: DEFAULT_FRONT, seats: 0 }), set: spec.front?.seats !== undefined },
+    back: { ...(lay?.back ?? { kind: DEFAULT_BACK, seats: 0, autoSeats: 0 }), set: spec.back?.seats !== undefined },
+    front: { ...(lay?.front ?? { kind: DEFAULT_FRONT, seats: 0, autoSeats: 0 }), set: spec.front?.seats !== undefined },
   };
 }
 
 /** A spec with one side patched — kind, count (`seats: null` = back to automatic), and a sofa's run
- *  and seat depth (`null` = back to the whole length / the half strip). */
+ *  and seat depth (`null` = back to the whole length / the half strip).
+ *
+ *  Given the banquette as it is LAID now (its layout — the length and depth it is drawn at, the other
+ *  side as drawn), a sofa's run and seat are WRITTEN as they will be drawn (QA BQ-2): a run as long
+ *  as the banquette or longer is the whole length (so it follows a stretch), and a seat no deeper
+ *  than the other side leaves it (sofaSeatMax) — while a sofa on the other side whose stored seat is
+ *  deeper than it is drawn is written as drawn, so the next edit of either is exactly what is typed. */
 export function patchBenchSide(
   spec: BenchSpec | undefined,
   side: "back" | "front",
   patch: { kind?: BenchSideKind; seats?: number | null; widthMm?: number | null; depthMm?: number | null },
+  laid?: Pick<BenchLayout, "widthMm" | "depthMm" | "back" | "front">,
 ): BenchSpec {
   const cur: BenchSide = spec?.[side] ?? { kind: side === "back" ? DEFAULT_BACK : DEFAULT_FRONT };
   const next: BenchSide = { ...cur, ...(patch.kind !== undefined ? { kind: patch.kind } : {}) };
@@ -335,7 +404,18 @@ export function patchBenchSide(
   else if (patch.widthMm !== undefined) next.widthMm = Math.max(0, Math.round(patch.widthMm));
   if (patch.depthMm === null) delete next.depthMm;
   else if (patch.depthMm !== undefined) next.depthMm = Math.max(0, Math.round(patch.depthMm));
-  return { ...spec, [side]: next };
+  const out: BenchSpec = { ...spec, [side]: next };
+  if (laid && next.kind === "sofa") {
+    if (patch.widthMm != null && next.widthMm !== undefined && next.widthMm >= laid.widthMm - 0.5) delete next.widthMm;
+    if (patch.depthMm != null && next.depthMm !== undefined) {
+      const other = side === "back" ? "front" : "back";
+      const them = laid[other];
+      next.depthMm = Math.min(next.depthMm, Math.floor(sofaSeatMax(laid.depthMm, them)));
+      const theirs = spec?.[other];
+      if (theirs?.kind === "sofa" && theirs.depthMm !== undefined && them.kind === "sofa" && them.depthMm !== undefined && theirs.depthMm > them.depthMm) out[other] = { ...theirs, depthMm: them.depthMm };
+    }
+  }
+  return out;
 }
 
 // ponytail: self-check. Run: npm run check:bench
@@ -440,6 +520,44 @@ if (isMain(import.meta.url)) {
   assert(benchLayout(3000, 600, { back: { kind: "sofa", depthMm: 5000 } }).cushions.every((q) => Math.max(...q.map((p) => p.y)) <= 280), "a seat deeper than the strip stops short of its far edge");
   const widened = patchBenchSide(patchBenchSide(undefined, "back", { kind: "sofa", widthMm: 2000, depthMm: 350 }), "back", { widthMm: null });
   assert(widened.back?.widthMm === undefined && widened.back?.depthMm === 350, "null puts a sofa's run back to the whole length and keeps its depth");
+
+  // ── A sofa's seat is what is DRAWN, and it never runs into the other side (QA BQ-2).
+  //    (a) The default seat on a 45 cm strip is under the old field floor of 20 cm — the bar is told it.
+  const plain45 = benchLayout(3000, 450, { back: { kind: "none" }, front: { kind: "sofa" } });
+  assert(plain45.front.depthMm === 145 && plain45.front.depthDefaultMm === 145, "a 45 cm strip's default seat is 14.5 cm, and the layout says so");
+  //    (b) A seat typed deeper than the strip: the layout says what it draws.
+  const deepSeat = benchLayout(3000, 450, { back: { kind: "none" }, front: { kind: "sofa", depthMm: 800 } });
+  const drawnDepth = (q: Point[]) => Math.max(...q.map((p) => p.y)) - Math.min(...q.map((p) => p.y));
+  assert(deepSeat.front.depthMm === 450 - SOFA_BACK_MM && deepSeat.cushions.every((q) => drawnDepth(q) === deepSeat.front.depthMm), "a seat typed deeper than the strip is drawn to the strip less its backrest — and that is the number read back");
+  assert(deepSeat.front.depthMaxMm === 450 - SOFA_BACK_MM, "…which is the most the bar offers");
+  //    …and WRITTEN as drawn: a deeper strip later never brings back a hidden 80 cm seat.
+  const sofa45: BenchSpec = { back: { kind: "none" }, front: { kind: "sofa" } };
+  const clampedSpec = patchBenchSide(sofa45, "front", { depthMm: 800 }, benchLayout(3000, 450, sofa45));
+  assert(clampedSpec.front?.depthMm === 450 - SOFA_BACK_MM, "a seat deeper than the strip is stored as the deepest it draws");
+  assert(benchLayout(3000, 1000, clampedSpec).front.depthMm === 450 - SOFA_BACK_MM, "…so deepening the banquette keeps the seat that was shown");
+  //    (c) A run as long as the banquette or longer is the whole length — it follows a stretch.
+  const frontSofa: BenchSpec = { front: { kind: "sofa" } };
+  const longRun = patchBenchSide(frontSofa, "front", { widthMm: 4000 }, benchLayout(2400, 600, frontSofa));
+  assert(longRun.front?.widthMm === undefined && benchLayout(6000, 600, longRun).front.widthMm === 6000, "a sofa typed longer than its banquette runs the whole length, and stretches with it");
+  assert(patchBenchSide(frontSofa, "front", { widthMm: 1800 }, benchLayout(2400, 600, frontSofa)).front?.widthMm === 1800, "…a shorter run is kept as typed");
+  //    (d) Two sides share the strip: a sofa never sits on the chairs' table, two sofas never overlap.
+  const besideChairs = benchLayout(3000, 600, { back: { kind: "chairs" }, front: { kind: "sofa", depthMm: 500 } });
+  assert(besideChairs.front.depthMm === 600 - CHAIR_TABLE_MM - SOFA_BACK_MM && besideChairs.cushions.every((q) => q.every((p) => p.y >= 0)), "beside chairs a sofa keeps off their table — a 30 cm place, the backrest between");
+  assert(besideChairs.front.depthMaxMm === besideChairs.front.depthMm, "…and the bar's most is that");
+  assert(benchLayout(3000, 1000, { back: { kind: "chairs" }, front: { kind: "sofa", depthMm: 500 } }).front.depthMm === 500, "…a deeper banquette leaves the sofa room to be deeper");
+  const twoDeep = benchLayout(3000, 600, { back: { kind: "sofa", depthMm: 400 }, front: { kind: "sofa", depthMm: 400 } });
+  const backInner = Math.max(...twoDeep.cushions.slice(0, twoDeep.back.seats).flat().map((p) => p.y));
+  const frontInner = Math.min(...twoDeep.cushions.slice(twoDeep.back.seats).flat().map((p) => p.y));
+  assert(frontInner - backInner >= SOFA_BACK_MM - 1, `two sofas typed 40 cm on a 60 cm strip share it — never overlapping, a backrest between (${backInner}…${frontInner})`);
+  const backToBack: BenchSpec = { back: { kind: "sofa", depthMm: 300 }, front: { kind: "sofa" } };
+  const nextToSofa = patchBenchSide(backToBack, "front", { depthMm: 400 }, benchLayout(3000, 600, backToBack));
+  assert(nextToSofa.front?.depthMm === 600 - SOFA_BACK_MM - 300, "a seat typed beside another sofa is written to what the other leaves");
+  const squeezed: BenchSpec = { back: { kind: "sofa", depthMm: 450 }, front: { kind: "sofa", depthMm: 450 } };
+  const evened = patchBenchSide(squeezed, "front", { depthMm: 200 }, benchLayout(3000, 600, squeezed));
+  assert(evened.back?.depthMm === benchLayout(3000, 600, squeezed).back.depthMm && benchLayout(3000, 600, evened).front.depthMm === 200, "…and a sofa beside it stored deeper than it is drawn is written as drawn, so the next edit is exactly what is typed");
+  // ── A side seats one per 60 cm of ITS run when nobody typed a count (QA BQ-9).
+  assert(benchLayout(6000, 600, { back: { kind: "sofa", widthMm: 2400 } }).back.autoSeats === 4, "a 2.4 m sofa on a 6 m banquette goes back to four, not ten");
+  assert(benchLayout(6000, 600).back.autoSeats === 10 && benchLayout(6000, 600).front.autoSeats === 0, "…a chairs side to one per 60 cm of the banquette, a bare side to none");
 
   // ── The bar's rows for a STAGE banquette (QA BQ-1): its sofa side's run and seat as laid — the
   //    fields read 0 and a blur wrote the field's floor into the drawing — and whether each count
