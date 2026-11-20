@@ -8,7 +8,7 @@ import type { Plane } from "@/lib/studio/planes";
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
 import { seatsAround, seatTransform, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { blockSeats } from "@/lib/design-document/block";
-import { aisleOf, benchOf, chairBlockOf, deckOf, resolve, type Resolved } from "@/lib/studio/catalog-resolver";
+import { aisleOf, benchOf, chairBlockOf, deckOf, resolve, TABLE_SOLID, type Resolved } from "@/lib/studio/catalog-resolver";
 import { ChairBlock } from "@/components/chair-block";
 import { AisleDrawing } from "@/components/placed-piece";
 import { aisleWords } from "@/lib/catalog/aisle";
@@ -749,7 +749,7 @@ export function CanvasStage({
         ? doc.tables.map((t) => ({
             ref: { kind: "table" as const, id: t.id },
             box: { ...t.position, ...turnedExtent(tableFootprint(t), t.rotation ?? 0) },
-            solid: "table",
+            solid: TABLE_SOLID,
           }))
         : [];
       const placed = [

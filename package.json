@@ -44,6 +44,7 @@
     "check:hang-over": "tsx lib/studio/hang-over.ts",
     "check:geometry": "tsx lib/studio/geometry.ts",
     "check:collide": "tsx lib/studio/collide.ts",
+    "check:drag-payload": "tsx lib/studio/drag-payload.ts",
     "check:align": "tsx lib/studio/align.ts",
     "check:snap": "tsx lib/studio/snap.ts",
     "typecheck": "tsc --noEmit",

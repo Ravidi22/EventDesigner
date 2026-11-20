@@ -2,7 +2,8 @@ import type { Product } from "@/lib/catalog/types";
 import type { ChairRows } from "@/lib/design-document/types";
 import { chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { catalogBox, footprintBounds, resolveFootprint } from "./footprint";
-import { solidKind } from "./catalog-resolver";
+import { solidKind, TABLE_SOLID } from "./catalog-resolver";
+import { isMain } from "../self-check";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { isTableSet } from "@/lib/catalog/composition";
 import { isCeilingClothCategory } from "./ceiling-cloth";
@@ -95,4 +96,20 @@ export function dropCarried(): void {
 /** What is being dragged over the canvas right now, if anything. */
 export function carriedItem(): CarriedItem | null {
   return carried;
+}
+
+// Self-check. Run: npm run check:drag-payload
+if (isMain(import.meta.url)) {
+  const assert = (c: boolean, m: string) => {
+    if (!c) throw new Error("FAIL: " + m);
+  };
+  const row = (category: string) =>
+    ({ id: "p", name: "x", category, layer: "floor", dimensions: { widthMm: 1800, depthMm: 900, heightMm: 750 }, categoryFields: {}, styleTags: [], variants: [], appearance: { shape: "rect" } }) as unknown as Product;
+  // The rail's drop pushes what it carries off anything solid OF THE SAME KEY (lib/studio/collide.ts),
+  // and the plan boxes every table under TABLE_SOLID: a table row carried under its category's name
+  // ("tables") matched nothing, and a table let go half on another landed overlapping it (QA MG-8).
+  assert(carriedOf(row("tables")).solid === TABLE_SOLID, "a table carried off the rail is solid as the plan's tables are");
+  assert(carriedOf(row("stage-decks")).solid === "stage" && carriedOf(row("stages")).solid === "stage", "a deck and a stage are one kind of solid");
+  assert(carriedOf(row("sofas")).solid === "sofas", "every other floor category is solid against its own");
+  console.log("drag-payload self-check passed");
 }

@@ -36,10 +36,15 @@ export interface Resolved {
   solid?: string;
 }
 
-/** The two categories whose key has to match a venue FeatureKind, so that the house staging and a
- *  hired deck are the same kind of thing as far as the floor is concerned. Every other category is
- *  its own key, under its own name. */
-const SOLID_BY_CATEGORY: Record<string, string> = { stages: "stage", "stage-decks": "stage", bars: "bar" };
+/** The key every TABLE on the plan is solid under (canvas-stage boxes each DesignTable with it). */
+export const TABLE_SOLID = "table";
+
+/** The categories whose key has to match another name for the same thing: the two that match a
+ *  venue FeatureKind, so that the house staging and a hired deck are the same kind of thing as far
+ *  as the floor is concerned, and a table row, which matches the key the plan's tables are boxed
+ *  under — a table carried off the rail as "tables" was pushed off no table it was let go on. Every
+ *  other category is its own key, under its own name. */
+const SOLID_BY_CATEGORY: Record<string, string> = { stages: "stage", "stage-decks": "stage", bars: "bar", tables: TABLE_SOLID };
 
 /**
  * Which things cannot share the same floor as this one.
