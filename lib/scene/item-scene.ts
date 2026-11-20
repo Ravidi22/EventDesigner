@@ -94,8 +94,15 @@ export function closeUp(focus: Viewpoint, sizeMm: number): Viewpoint {
   return { ...focus, eye: { x: focus.look.x + d.x * k, y: focus.look.y + d.y * k, z: focus.look.z + d.z * k } };
 }
 
+/** The id an UNSAVED row is built under. A new draft's id is "" and, with no shade, so is the variant
+ *  id the drawing points it by — which every table reader (tables.ts, footprint-shape.tsx
+ *  tableFootprint) takes for "no catalog row": a new table was built as a 160×90 timber rectangle at
+ *  75 cm whatever the editor drew (SH-1, QA 2026-11-20). */
+export const DRAFT_ITEM_ID = "shape-editor-draft";
+
 /** The room and the place to look at it from, for `product` as it stands. */
-export function itemScene(product: Product): { scene: Scene; focus: Viewpoint | null } {
+export function itemScene(draft: Product): { scene: Scene; focus: Viewpoint | null } {
+  const product = draft.id ? draft : { ...draft, id: DRAFT_ITEM_ID };
   const doc = itemDocument(product);
   const plan = itemPlan(product);
   return withResolved([product], () => {
@@ -204,6 +211,15 @@ if (isMain(import.meta.url)) {
   assert(bodies.some((b) => b.tag.type === "ground"), "a ground to stand on");
   assert(scene.bounds.widthMm === 3000 + 2 * ITEM_ROOM_MARGIN_MM && scene.bounds.heightMm === 1400 + 2 * ITEM_ROOM_MARGIN_MM, "the floor is the item plus the margin");
   assert(!!focus && focus.look.z > 0 && focus.eye.z > focus.look.z, "a place to look at it from, above it");
+
+  // SH-1 (QA 2026-11-20): a NEW table — no id yet, no shade — is built as drawn. Its variant id was
+  // "", which every table reader reads as "no catalog row", so the room drew a 160×90 timber
+  // rectangle at 75 cm whatever the editor said (a 120 cm hexagon here).
+  const fresh = row({ id: "", name: "", category: "tables", dimensions: { widthMm: 1600, depthMm: 900, heightMm: 1200 }, appearance: { shape: "hexagon", content: "none" } });
+  const freshBody = itemScene(fresh).scene.nodes.find((n): n is BodyNode => n.kind === "body" && n.tag.type === "table")!;
+  const freshTop = freshBody?.parts.find((q): q is Extract<typeof q, { shape: "extrude" }> => q.shape === "extrude");
+  assert(!!freshTop && freshTop.outline.outline.length === 6 && freshTop.at.z === 1200 - 30, `an unsaved table stands as drawn: a hexagon, 120 cm high (${freshTop?.outline.outline.length} corners at ${freshTop?.at.z})`);
+  assert(resolve("") === undefined, "…and nothing of it is left in the resolver");
 
   // A table row seats its chairs round it.
   const table = row({ id: "tbl", name: "עגול 180", category: "tables", dimensions: { diameterMm: 1800, heightMm: 750 }, categoryFields: { seats: 10 } });
