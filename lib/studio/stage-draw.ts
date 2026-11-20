@@ -217,7 +217,11 @@ export const STICK_ALIGN_MM = 300;
 /** Push stages together: every gap between them closed, edges that nearly line up lined up. The
  *  largest stays where it is and the rest join it one at a time, nearest first, each on the side it
  *  is already on. Only stages square to the largest take part (a 30° stage has no side to butt
- *  against a 0° one); the rest are returned where they were. Returns each moved stage's new centre. */
+ *  against a 0° one); the rest are returned where they were. Returns each moved stage's new centre.
+ *  For RECTANGLES only — each item is read as the box it is: the box of an L holds its bite, and a
+ *  deck standing there was thrown out past the box's far edge. Stages of any other shape are pushed
+ *  by their outlines, and sorted by angle first (lib/design-document/stage.ts pushTogether,
+ *  stickTogether). */
 export function stickBoxes(items: readonly StickItem[]): Map<string, Point> {
   const out = new Map<string, Point>();
   if (items.length < 2) return out;

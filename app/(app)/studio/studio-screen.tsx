@@ -97,12 +97,13 @@ import {
   besideNeighbours,
   stageFromPiece,
   trimSeams,
+  stickTogether,
   type EdgeRun,
   type StagePlacement,
 } from "@/lib/design-document/stage";
 import { deleteStageTemplate, fetchStageRules, fetchStageTemplates, saveStageTemplate } from "@/lib/settings/actions";
 import { TableDesignsPanel, type WearMode } from "./table-designs-panel";
-import { cleanOutline, stickBoxes, type AreaShape, type StickItem } from "@/lib/studio/stage-draw";
+import { cleanOutline, type AreaShape } from "@/lib/studio/stage-draw";
 import { MIN_EDGE_ITEM_MM, isRoundPiece, isShapedPiece, pieceOutline, placeEdgeItem, plainRect, pushTogether, settleEdgeItems, shapedRect, shareSide, stageBox, stageShapeOf, stageSide, type Frame } from "@/lib/design-document/stage";
 
 /** The room as a frame: what a stage's pieces are carried into to stand in room coordinates
@@ -3974,42 +3975,38 @@ export function StudioScreen({
     showHint(`${parts.length} במות פורקו ל־${parts.reduce((t, x) => t + x.decks, 0)} פלטות`);
   };
 
-  /** Their turned boxes, as stickBoxes reads them. */
-  const stickItems = useCallback(
-    (list: Placement[]): StickItem[] =>
-      list.map((p) => {
-        if (p.stage) {
-          const xs = p.stage.outline.map((q) => q.x);
-          const ys = p.stage.outline.map((q) => q.y);
-          return { id: p.id, centre: p.position, rotation: p.rotation || 0, widthMm: Math.max(...xs) - Math.min(...xs), depthMm: Math.max(...ys) - Math.min(...ys) };
-        }
-        const product = resolve(p.variantId)?.product;
-        const box = p.sizeMm ?? (product ? catalogBox(product) : { widthMm: 0, depthMm: 0 });
-        const k = p.scale || 1;
-        return { id: p.id, centre: p.position, rotation: p.rotation || 0, widthMm: box.widthMm * k, depthMm: box.depthMm * k };
-      }),
-    [],
-  );
-
+  /** הצמדה: every gap between the selected stages closed on their real outlines — by angle, then
+   *  within a metre of each other (lib/design-document/stage.ts stickTogether); a loose piece as the
+   *  stage it would become, moved by as much. What was left where it stood is said, and why. */
   const stickStages = useCallback(() => {
-    const moves = stickBoxes(stickItems(selectedStages));
-    if (moves.size === 0) {
-      showHint("הבמות כבר צמודות — או שהן בזוויות שונות זו מזו");
+    const before = selectedStages.map((p) => asStage(p)).filter((p): p is StagePlacement => !!p);
+    const { parts: after, angled, far } = stickTogether(before);
+    const moves = after.flatMap((q, i) => {
+      const was = q === before[i] ? undefined : doc.placements.find((x) => x.id === q.id);
+      if (!was) return [];
+      const position = { x: was.position.x + q.position.x - before[i].position.x, y: was.position.y + q.position.y - before[i].position.y };
+      return [{ kind: "placement" as const, id: q.id, position }];
+    });
+    const left = [
+      angled.length ? `${angled.length === 1 ? "במה אחת" : `${angled.length} במות`} בזווית שונה מהשאר — לא הוזזו` : null,
+      far.length ? `${far.length === 1 ? "במה אחת רחוקה" : `${far.length} במות רחוקות`} יותר ממטר מכל במה אחרת — לא הוזזו` : null,
+    ].filter(Boolean);
+    if (moves.length === 0) {
+      showHint(left.length ? left.join(" · ") : "הבמות כבר צמודות");
       return;
     }
-    const after = selectedStages
-      .filter((p): p is StagePlacement => !!p.stage)
-      .map((p) => (moves.has(p.id) ? { ...p, position: moves.get(p.id)! } : p) as StagePlacement);
     const trimmed = trimSeams(after, deckOf);
     batch([
-      { type: "moveMany", moves: [...moves].map(([id, position]) => ({ kind: "placement" as const, id, position })) },
-      ...[...trimmed].map(([id, stairs]) => {
-        const was = after.find((p) => p.id === id)!;
-        return { type: "setPlacementStage" as const, id, stage: { ...was.stage, stairs } };
-      }),
+      { type: "moveMany", moves },
+      ...[...trimmed]
+        .filter(([id]) => doc.placements.some((x) => x.id === id && x.stage))
+        .map(([id, stairs]) => {
+          const was = after.find((p) => p.id === id)!;
+          return { type: "setPlacementStage" as const, id, stage: { ...was.stage, stairs } };
+        }),
     ]);
-    showHint(`הבמות הוצמדו — ${moves.size} הוזזו. ״איחוד לבמה אחת״ יהפוך אותן לבמה אחת עם קצוות משותפים`);
-  }, [selectedStages, stickItems, batch]);
+    showHint([`הבמות הוצמדו — ${moves.length} הוזזו`, ...left, "״איחוד לבמה אחת״ יהפוך אותן לבמה אחת עם קצוות משותפים"].join(" · "));
+  }, [selectedStages, asStage, doc.placements, batch]);
 
   /** Several stages as ONE: pushed together first (so "איחוד" works on stages that merely stand
    *  close), then one outline, one build, one skirt round the outside. The largest keeps its place,

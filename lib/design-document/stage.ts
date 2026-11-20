@@ -34,7 +34,7 @@ import type { Product } from "../catalog/types";
 import { asRect, defaultFront, fillWithDecks, polygonsOverlap, signedArea, type DeckType, type FillResult, type LaidDeck, type MissingPiece } from "../studio/stage-fill";
 import { pieceName, type PieceInfo } from "../studio/stage-rim";
 import { flattenEdge, footprintBounds, footprintOutlines, resolveFootprint, sizedFootprint, type BuiltOutline, type Footprint } from "../studio/footprint";
-import { cleanOutline, halfRoundArea, pushSide, shapeRect, splitSide, stickBoxes, unionOutline, unionShapes, type RectShape, type RoundedAt } from "../studio/stage-draw";
+import { cleanOutline, halfRoundArea, pushSide, shapeRect, splitSide, STICK_ALIGN_MM, stickBoxes, unionOutline, unionShapes, type RectShape, type RoundedAt } from "../studio/stage-draw";
 import { CHAIR_OFFSET_MM, CHAIR_W_MM, type Seat } from "../studio/seating";
 import { BENCH_DEPTH_MM, BENCH_TABLE_DEPTH_MM, BENCH_TOP_MM, SEAT_WIDTH_MM, SOFA_SEAT_MM, benchDefaultDepth, benchLayout, benchSpecOf, type BenchLayout } from "./bench";
 import { slopeOn, walkingLine, walkingPadMm, type ClimbMark } from "../venues/climb";
@@ -2744,19 +2744,86 @@ export interface StageMerge {
 }
 
 /** A stage of square corners only — a rectangle, an L, a T — whose sides run along its own frame's
- *  axes. Two of them square to each other merge on the exact grid (unionOutline), and are pushed
- *  together by their boxes (stickBoxes). */
+ *  axes. Two of them square to each other merge on the exact grid (unionOutline). */
 const squareStage = (p: StagePlacement): boolean =>
   !p.stage.smooth?.length &&
   p.stage.outline.every((a, i) => {
     const b = p.stage.outline[(i + 1) % p.stage.outline.length];
     return Math.abs(a.x - b.x) <= 2 || Math.abs(a.y - b.y) <= 2;
   });
+/** …and of those, a plain RECTANGLE: the one shape its box describes. Only rectangles are judged and
+ *  pushed together by their boxes (stickBoxes); the box of an L holds its bite, the box of a T the
+ *  floor either side of its catwalk, and a deck standing there was read as INSIDE the stage and
+ *  thrown out past the box's far edge. */
+const rectStage = (p: StagePlacement): boolean => p.stage.outline.length === 4 && squareStage(p);
 /** …and two stages turned a whole number of quarter turns from each other. */
 const squareTo = (a: StagePlacement, b: StagePlacement): boolean => {
   const d = ((((a.rotation || 0) - (b.rotation || 0)) % 90) + 90) % 90;
   return Math.min(d, 90 - d) < 0.5;
 };
+
+/** Do two outlines share AREA — more than a side or a corner? Two sides crossing, or a point just
+ *  inside either (the middle of each of its sides, 5mm in) lying inside the other. Not
+ *  polygonsOverlap: its centroid test reads a U's vertex average — which lies in the U's notch — as
+ *  inside a deck standing free in that notch. */
+function outlinesOverlap(a: readonly Point[], b: readonly Point[]): boolean {
+  const cross = (o: Point, p: Point, q: Point) => (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
+  for (let i = 0; i < a.length; i++) {
+    const [p1, p2] = edgeOf(a, i);
+    for (let j = 0; j < b.length; j++) {
+      const [q1, q2] = edgeOf(b, j);
+      const d1 = cross(q1, q2, p1);
+      const d2 = cross(q1, q2, p2);
+      const d3 = cross(p1, p2, q1);
+      const d4 = cross(p1, p2, q2);
+      const eps = len(p1, p2) * len(q1, q2) * 1e-9 + 1;
+      if (((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps)) && ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps))) return true;
+    }
+  }
+  const reachesInto = (p: readonly Point[], q: readonly Point[]) =>
+    p.some((s, i) => {
+      const e = p[(i + 1) % p.length];
+      const L = len(s, e);
+      if (L < 20) return false;
+      const m = { x: (s.x + e.x) / 2, y: (s.y + e.y) / 2 };
+      const n = { x: (-(e.y - s.y) / L) * 5, y: ((e.x - s.x) / L) * 5 };
+      const inward = insidePoly({ x: m.x + n.x, y: m.y + n.y }, p) ? { x: m.x + n.x, y: m.y + n.y } : { x: m.x - n.x, y: m.y - n.y };
+      return insidePoly(inward, q) && !onBoundary(inward, q, 1);
+    });
+  return reachesInto(a, b) || reachesInto(b, a);
+}
+
+/** How far `b` can travel along the unit `dir` — at most `maxMm` — before it meets one of `as`;
+ *  Infinity when it does not. Each one's corners are run against the other's sides, and every place
+ *  a corner reaches a side is a candidate; the first one where going 2mm further would take `b`
+ *  INTO one of them is the contact (a corner that only grazes the end of a side — the T's outer
+ *  corner, passed along its front — is no contact at all). */
+function travelAlong(as: readonly (readonly Point[])[], b: readonly Point[], dir: Point, maxMm: number): number {
+  const hit = (o: Point, d: Point, s: Point, e: Point): number => {
+    const ex = e.x - s.x;
+    const ey = e.y - s.y;
+    const den = d.x * ey - d.y * ex;
+    // A side running along the travel is slid along, never met.
+    if (Math.abs(den) < 1e-9 * Math.hypot(ex, ey)) return Infinity;
+    const wx = s.x - o.x;
+    const wy = s.y - o.y;
+    const t = (wx * ey - wy * ex) / den;
+    const u = (wx * d.y - wy * d.x) / den;
+    return t >= -0.5 && u >= -1e-6 && u <= 1 + 1e-6 ? Math.max(0, t) : Infinity;
+  };
+  const back = { x: -dir.x, y: -dir.y };
+  const hits: number[] = [];
+  for (const a of as) {
+    for (const q of b) for (let i = 0; i < a.length; i++) hits.push(hit(q, dir, ...edgeOf(a, i)));
+    for (const q of a) for (let i = 0; i < b.length; i++) hits.push(hit(q, back, ...edgeOf(b, i)));
+  }
+  const at = (s: number) => b.map((q) => ({ x: q.x + dir.x * s, y: q.y + dir.y * s }));
+  for (const t of [...new Set(hits.filter((h) => h <= maxMm).map((h) => Math.round(h * 10) / 10))].sort((x, y) => x - y)) {
+    const past = at(t + 2);
+    if (as.some((a) => outlinesOverlap(a, past))) return t;
+  }
+  return Infinity;
+}
 
 /** The shortest move that puts `b` against `a` — from b's point nearest a to a's point nearest b —
  *  and how long it is. Read off corners against sides, both ways round. */
@@ -2804,21 +2871,23 @@ function sharedRimMm(a: readonly Point[], b: readonly Point[]): number {
   return shared;
 }
 
-/** Two stages standing against each other. Square ones square to each other: their boxes within
+/** Two stages standing against each other. Two RECTANGLES square to each other: their boxes within
  *  `tolMm` in the first one's frame, overlapping along the side they meet on by STAGE_TOUCH_MM at
- *  least. Any other pair (a curve, an angle): they overlap, or — pushed the last few centimetres
- *  together — share at least STAGE_TOUCH_MM of rim. A disc against a straight side touches it along
- *  one chord, which is not a side two stages share. */
+ *  least; two stages of square corners at different angles never are. Any other pair — an L, a T, a
+ *  U (whose box holds its bite: a deck standing free in a U's notch is not against it), a curve, an
+ *  angle — by their outlines: they overlap, or, pushed the last few centimetres together, share at
+ *  least STAGE_TOUCH_MM of rim. A disc against a straight side touches it along one chord, which is
+ *  not a side two stages share. */
 function stagesTouch(a: StagePlacement, b: StagePlacement, tolMm: number): boolean {
-  if (!squareStage(a) || !squareStage(b)) {
+  if (squareStage(a) && squareStage(b) && !squareTo(a, b)) return false;
+  if (!rectStage(a) || !rectStage(b)) {
     const A = stageOutlineInRoom(a);
     const B = stageOutlineInRoom(b);
-    if (polygonsOverlap(A, B)) return true;
+    if (outlinesOverlap(A, B)) return true;
     const gap = closestApproach(A, B);
     if (gap.d > tolMm) return false;
     return sharedRimMm(A, B.map((q) => ({ x: q.x + gap.move.x, y: q.y + gap.move.y }))) >= STAGE_TOUCH_MM;
   }
-  if (!squareTo(a, b)) return false;
   const box = (p: StagePlacement) => {
     const pts = p.stage.outline.map((q) => toStageFrame(a, toRoom(p, q)));
     const xs = pts.map((q) => q.x);
@@ -2870,14 +2939,16 @@ export function mergeTouching(stages: readonly StagePlacement[], opts: { deckOf?
   return { merged, loose };
 }
 
-/** Stages pushed together, ready to merge: square ones square to each other by their boxes
+/** Stages pushed together, ready to merge: RECTANGLES square to each other by their boxes
  *  (stickBoxes — gaps closed, edges nearly in line lined up), as "איחוד" always did; any other set
- *  one at a time onto what is already placed, largest first, each by the shortest move that puts it
- *  against them — and not at all when it already overlaps or touches them (a half-round laid over
- *  the front of a stage is where the designer put it). */
+ *  — an L, a T, a U among them, whose boxes hold their bites — by their OUTLINES, one at a time onto
+ *  what is already placed, largest first, each by the shortest move that puts it against them and
+ *  then slid along that side into a corner it nearly fills (slideHome) — and not at all when it
+ *  already overlaps or touches them (a half-round laid over the front of a stage, a deck already in
+ *  an L's bite, is where the designer put it). */
 export function pushTogether(parts: readonly StagePlacement[]): StagePlacement[] {
   if (parts.length < 2) return [...parts];
-  if (parts.every((p) => squareStage(p) && squareTo(parts[0], p))) {
+  if (parts.every((p) => rectStage(p) && squareTo(parts[0], p))) {
     const moves = stickBoxes(
       parts.map((p) => {
         const xs = p.stage.outline.map((q) => q.x);
@@ -2898,7 +2969,7 @@ export function pushTogether(parts: readonly StagePlacement[]): StagePlacement[]
       const near = placed
         .map((o) => {
           const A = stageOutlineInRoom(o);
-          return polygonsOverlap(A, B) ? { d: 0, move: { x: 0, y: 0 } } : closestApproach(A, B);
+          return outlinesOverlap(A, B) ? { d: 0, move: { x: 0, y: 0 } } : closestApproach(A, B);
         })
         .sort((x, y) => x.d - y.d)[0];
       return { p, near };
@@ -2906,11 +2977,112 @@ export function pushTogether(parts: readonly StagePlacement[]): StagePlacement[]
     gaps.sort((x, y) => x.near.d - y.near.d);
     const { p, near } = gaps[0];
     rest.splice(rest.indexOf(p), 1);
-    const at = near.d > 0.5 ? { ...p, position: { x: Math.round(p.position.x + near.move.x), y: Math.round(p.position.y + near.move.y) } } : p;
+    const at = near.d > 0.5 ? slideHome(placed, { ...p, position: { x: Math.round(p.position.x + near.move.x), y: Math.round(p.position.y + near.move.y) } }, near.move) : p;
     if (at !== p) moved.set(p.id, at);
     placed.push(at);
   }
   return parts.map((p) => moved.get(p.id) ?? p);
+}
+
+/** A stage just pushed against `placed` along `move`, slid along the side it came to rest on to close
+ *  the last STICK_ALIGN_MM of a gap to a side across the way — a deck dragged roughly into an L's
+ *  bite goes into the bite, not 10cm short of its far side; what the box path does by lining up
+ *  edges nearly in line. Not when it only met a corner, and never so that it shares less side than
+ *  it did. */
+function slideHome(placed: readonly StagePlacement[], at: StagePlacement, move: Point): StagePlacement {
+  const L = Math.hypot(move.x, move.y);
+  if (L < 0.5) return at;
+  const A = placed.map(stageOutlineInRoom);
+  const rim = (q: StagePlacement) => {
+    const B = stageOutlineInRoom(q);
+    return A.reduce((s, a) => s + sharedRimMm(a, B), 0);
+  };
+  const before = rim(at);
+  if (before < 20) return at;
+  const B = stageOutlineInRoom(at);
+  const along = { x: -move.y / L, y: move.x / L };
+  const options = [along, { x: -along.x, y: -along.y }]
+    .map((dir) => ({ dir, s: travelAlong(A, B, dir, STICK_ALIGN_MM) }))
+    .filter((o) => o.s > 0.5 && o.s <= STICK_ALIGN_MM)
+    .sort((x, y) => x.s - y.s);
+  for (const o of options) {
+    const next = { ...at, position: { x: Math.round(at.position.x + o.dir.x * o.s), y: Math.round(at.position.y + o.dir.y * o.s) } };
+    if (rim(next) >= before) return next;
+  }
+  return at;
+}
+
+/** How far הצמדה reaches: a stage more than this from every other one selected is left where it
+ *  stands. A metre — under a walkway: the printed sheets flag a passage under 1.20m as tight
+ *  (lib/outputs/measurements.ts), so a gap of a metre or more between two stages is a passage left
+ *  on purpose, and anything under it is a gap a drag left. Without a reach a deck across the room
+ *  was pulled 9m to the stage, and diagonal neighbours ended up meeting at one corner. */
+export const STICK_REACH_MM = 1000;
+
+/** הצמדה (the stage group's magnet) over a selection: what was moved, and what was left and why. */
+export interface StickResult {
+  /** The stages, in the order given, each where it now stands — the same object when it did not
+   *  move. */
+  parts: StagePlacement[];
+  /** Left where they stood because no other stage selected stands at their angle (a 30° stage among
+   *  square ones, a deck turned 0.6°): there is no side to butt against. */
+  angled: string[];
+  /** …or because no other stage at their angle stands within STICK_REACH_MM of them. */
+  far: string[];
+}
+
+/** הצמדה: every gap between the selected stages closed — by ANGLE first, each set of stages square
+ *  to each other stuck among themselves (a round one, which has every angle, with its nearest
+ *  neighbour), then by REACH, each cluster within STICK_REACH_MM of one another pushed together as
+ *  Ctrl+G pushes before it merges (pushTogether: rectangles by their boxes, anything else by its
+ *  outline, what already shares a side left where it is). It used to box every stage by its
+ *  outline's extent — a sheet flush on a T's front beside its catwalk was "inside" the T's box and
+ *  was thrown 3m out past the catwalk's tip — and to stick only what was square to the LARGEST,
+ *  so one big stage at an angle stopped everything, silently. */
+export function stickTogether(stages: readonly StagePlacement[], reachMm = STICK_REACH_MM): StickResult {
+  const rooms = stages.map(stageOutlineInRoom);
+  const gapOf = (i: number, j: number) => (outlinesOverlap(rooms[i], rooms[j]) ? 0 : closestApproach(rooms[i], rooms[j]).d);
+  const clusters = (among: number[], joined: (i: number, j: number) => boolean): number[][] => {
+    const parent = new Map(among.map((i) => [i, i]));
+    const find = (i: number): number => (parent.get(i) === i ? i : find(parent.get(i)!));
+    for (let x = 0; x < among.length; x++)
+      for (let y = x + 1; y < among.length; y++) if (joined(among[x], among[y])) parent.set(find(among[y]), find(among[x]));
+    const out = new Map<number, number[]>();
+    for (const i of among) out.set(find(i), [...(out.get(find(i)) ?? []), i]);
+    return [...out.values()];
+  };
+  const all = stages.map((_, i) => i);
+  const round = stages.map((p) => stageIsRound(p.stage));
+  const angular = all.filter((i) => !round[i]);
+  // A round stage takes the angle of the nearest stage that has one (or, among discs alone, of the
+  // nearest disc).
+  const angleOf = new Map<number, number>();
+  for (const i of all.filter((k) => round[k])) {
+    const pool = angular.length ? angular : all.filter((k) => k !== i);
+    if (pool.length) angleOf.set(i, pool.reduce((best, k) => (gapOf(i, k) < gapOf(i, best) ? k : best)));
+  }
+  const sameAngle = (i: number, j: number) =>
+    !round[i] && !round[j] ? squareTo(stages[i], stages[j]) : angleOf.get(i) === j || angleOf.get(j) === i || (angleOf.has(i) && angleOf.get(i) === angleOf.get(j));
+  const moved = new Map<string, StagePlacement>();
+  const angled: string[] = [];
+  const far: string[] = [];
+  for (const group of clusters(all, sameAngle)) {
+    if (group.length < 2) {
+      angled.push(stages[group[0]].id);
+      continue;
+    }
+    for (const near of clusters(group, (i, j) => gapOf(i, j) <= reachMm)) {
+      if (near.length < 2) {
+        far.push(stages[near[0]].id);
+        continue;
+      }
+      const parts = pushTogether(near.map((i) => stages[i]));
+      parts.forEach((q, k) => {
+        if (q !== stages[near[k]]) moved.set(q.id, q);
+      });
+    }
+  }
+  return { parts: stages.map((p) => moved.get(p.id) ?? p), angled, far };
 }
 
 if (isMain(import.meta.url)) {
@@ -3403,6 +3575,49 @@ if (isMain(import.meta.url)) {
   assert(mergeTouching([s1, laySheet("s6", 3660, 610 + 1220)]).merged.length === 0, "…and one meeting it only at a corner too");
   assert(mergeTouching([s1, { ...s2, rotation: 30 }]).merged.length === 0, "…and one at 30° to it");
   assert(touchingStages([s1, s2, s3]).flat().length === 3, "every stage is in exactly one cluster");
+
+  // ── A deck in an L's bite, in a U's notch, beside a T's catwalk (QA MG-1/MG-2): a stage of square
+  // corners that is not a rectangle is judged and pushed by its OUTLINE. By its box, the deck stood
+  // "inside" the L and was pushed out past the box's far edge — grouped instead of merged, or merged
+  // two metres off on the far side of a U, or thrown 3m out past a T's catwalk by הצמדה.
+  const named = (id: string, area: Point[], front: number): StagePlacement => ({ ...place(area, front), id });
+  const pts = (...xy: number[]): Point[] => xy.filter((_, i) => i % 2 === 0).map((x, i) => ({ x, y: xy[2 * i + 1] }));
+  const L = named("L", pts(0, 0, 4000, 0, 4000, 2000, 6000, 2000, 6000, 4000, 0, 4000), 4);
+  const inBite = mergeTouching([L, named("bite", rect(4000, 0, 2000, 2000), 2)]);
+  assert(inBite.merged.length === 1 && inBite.loose.length === 0, "a deck flush in an L's bite is MERGED with it, not grouped");
+  assert(stageRect(inBite.merged[0].stage)?.widthMm === 6000 && stageRect(inBite.merged[0].stage)?.depthMm === 4000, "…filling the bite: one 6×4 rectangle");
+  const U = named("U", pts(0, 0, 2000, 0, 2000, 2000, 4000, 2000, 4000, 0, 6000, 0, 6000, 4000, 0, 4000), 6);
+  const inNotch = mergeTouching([U, named("notch", rect(2000, 0, 2000, 2000), 2)]);
+  assert(inNotch.merged.length === 1 && stageRect(inNotch.merged[0].stage)?.widthMm === 6000 && stageRect(inNotch.merged[0].stage)?.depthMm === 4000, "a deck flush in a U's notch is merged INTO the notch — the stage does not grow 2m");
+  const wideU = named("wideU", pts(0, 0, 1000, 0, 1000, 2000, 5000, 2000, 5000, 0, 6000, 0, 6000, 4000, 0, 4000), 6);
+  assert(mergeTouching([wideU, named("free", rect(2500, 500, 1000, 1000), 2)]).merged.length === 0, "a deck standing FREE in a U's notch, half a metre off every side, is left apart");
+  const T = named("T", pts(0, 0, 6000, 0, 6000, 3000, 3500, 3000, 3500, 6000, 2500, 6000, 2500, 3000, 0, 3000), 4);
+  const beside = named("beside", rect(3500, 3000, 2440, 1220), 2);
+  const withT = mergeTouching([T, beside]);
+  assert(withT.merged.length === 1, "a sheet flush on a T's front beside its catwalk merges with it");
+  assert(Math.abs(stageAreaMm2(withT.merged[0].stage) - (6000 * 3000 + 1000 * 3000 + 2440 * 1220)) < 2000, "…where it stood");
+  // הצמדה: what already shares a side with the T stays; one 20cm off is closed onto its front and
+  // slid the last 4cm into the corner it nearly fills — never thrown past the catwalk.
+  assert(stickTogether([T, beside]).parts.every((p, i) => p === [T, beside][i]), "הצמדה leaves a sheet already flush beside a catwalk where it is");
+  const off = named("off", rect(3540, 3200, 2440, 1220), 2);
+  const stuck = stickTogether([T, off]).parts[1];
+  const offRoom = stageOutlineInRoom(stuck);
+  assert(Math.round(Math.min(...offRoom.map((q) => q.x))) === 3500 && Math.round(Math.min(...offRoom.map((q) => q.y))) === 3000, "…one 20cm off the front and 4cm off the catwalk goes into the corner");
+  // QA MG-7: stages at another angle are stuck among themselves, and the one alone at its angle is
+  // left — and named, rather than nothing moving because the LARGEST was the odd one out.
+  const big: StagePlacement = { ...named("big", rect(0, 5000, 8000, 4000), 2), rotation: 30 };
+  const d1 = named("d1", rect(10000, 0, 2440, 1220), 2);
+  const d2 = named("d2", rect(12640, 0, 2440, 1220), 2);
+  const mixed = stickTogether([big, d1, d2]);
+  assert(mixed.parts[0] === big && mixed.angled.length === 1 && mixed.angled[0] === "big", "a big stage at 30° among 0° decks is left, and said so");
+  const d2Room = stageOutlineInRoom(mixed.parts[2]);
+  assert(Math.round(Math.min(...d2Room.map((q) => q.x))) === 12440 || Math.round(Math.min(...stageOutlineInRoom(mixed.parts[1]).map((q) => q.x))) === 10200, "…while the two decks 20cm apart are pushed together");
+  const tilted: StagePlacement = { ...named("tilt", rect(10000, 3000, 2440, 1220), 2), rotation: 0.6 };
+  assert(stickTogether([d1, d2, tilted]).angled.includes("tilt"), "a deck turned 0.6° is left out, and said so");
+  // QA MG-15: a stage more than STICK_REACH_MM from every other is not pulled across the room.
+  const farPair = [d1, named("away", rect(10000, 9000, 2440, 1220), 2)];
+  const away = stickTogether(farPair);
+  assert(away.parts.every((p, i) => p === farPair[i]) && away.far.length === 2, "a deck 9m off is not pulled across the room, and said so");
 
   // ── A piece of ANY shape: a half-round platform the studio owns (D244 — 2.44 across, 1.22 deep).
   const halfProduct = {
