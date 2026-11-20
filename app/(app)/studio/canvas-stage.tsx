@@ -60,12 +60,12 @@ import { PlanCanvas, RotateHandle, rotateKnobPoint, type CanvasFocus, type Canva
 import { IconButton } from "@/components/icon-button";
 import { ShieldAlert } from "lucide-react";
 import { lengthSnapper, type LengthSnap, type MissingPiece } from "@/lib/studio/stage-fill";
-import { clipToWalls, crossesWalls, wallPolylines } from "@/lib/studio/wall-clip";
+import { clipToWalls, crossesWalls, wallAt, wallPolylines } from "@/lib/studio/wall-clip";
 import { boundsOf, deckBox, snapDeck } from "@/lib/studio/deck-move";
 import { sameDeckRef, type DeckRef } from "./stage-fill-panel";
 import type { StageDeck, StageHole } from "@/lib/design-document/stage";
 import { STAGE_SETTLE_MS, useSettled } from "./use-settled";
-import { constrainNext, cornerAngle, DRAW_ANGLE_STEP_DEG, ellipseArea, firstSideAngles, halfRoundArea, laterSideAngles, moveVertex, pushSide, removeVertex, selfIntersects, setCornerAngle, setSideLength, splitSide, squareUp, wallFrameDeg, type AreaShape, type DrawAngles } from "@/lib/studio/stage-draw";
+import { constrainNext, cornerAngle, DRAW_ANGLE_STEP_DEG, ellipseArea, firstSideAngles, halfRoundArea, laterSideAngles, moveVertex, pushSide, removeVertex, selfIntersects, setCornerAngle, setSideLength, splitSide, squareUp, typedSideLength, wallFrameDeg, type AreaShape, type DrawAngles } from "@/lib/studio/stage-draw";
 import {
   benchInRoom,
   edgeGaps,
@@ -894,6 +894,8 @@ export function CanvasStage({
   /** A length being typed, in cm — "340" then Enter lays the next side 3.40m along the pointer. */
   const [areaTyped, setAreaTyped] = useState("");
   const areaCtx = useRef<CanvasLayerContext | null>(null);
+  /** The venue's walls as polylines in the room — what a stage being drawn or reshaped may not cross. */
+  const walls = useMemo(() => wallPolylines(plan.structure), [plan.structure]);
   const finishArea = useCallback(
     (pts: Point[]) => {
       if (pts.length < 3) return;
@@ -908,13 +910,20 @@ export function CanvasStage({
         onAreaRefused?.("הקווים חוצים זה את זה — סמנו את הפינות לפי הסדר, מסביב לבמה");
         return;
       }
+      // The closed area is judged against the walls as a whole (lib/studio/wall-clip.ts): the closing
+      // side is never clipped, nor a wall meeting the first side from the stage's side — the drawing
+      // did not yet know which side that was.
+      if (walls.length && crossesWalls(clean, walls)) {
+        onAreaRefused?.("הבמה עוברת דרך קיר — Backspace מחזיר את הפינה האחרונה, והקיר נשאר מחוץ לבמה");
+        return;
+      }
       areaCtx.current?.endSnap();
       setAreaPts([]);
       setAreaCursor(null);
       setAreaTyped("");
       onArea(clean);
     },
-    [onArea, onAreaRefused],
+    [onArea, onAreaRefused, walls],
   );
   /** The round shape the pointer is drawing (areaShape other than corners), and its size in words. */
   const [roundDraft, setRoundDraft] = useState<{ outline: Point[]; smooth: number[]; label: string } | null>(null);
@@ -929,8 +938,6 @@ export function CanvasStage({
     setAreaTyped("");
     setRoundDraft(null);
   }
-  /** The venue's walls as polylines in the room — what a stage being drawn or reshaped may not cross. */
-  const walls = useMemo(() => wallPolylines(plan.structure), [plan.structure]);
   /** Where the next corner goes, from the pointer: the first corner snaps to walls and items like
    *  any drag; the first SIDE is held to the room's 45° grid (and along or square to a genuinely
    *  angled wall beside it — firstSideLock), every later one to that grid and along or square to
@@ -951,8 +958,13 @@ export function CanvasStage({
       snapLength: areaLengthSnap ? (mm) => areaLengthSnap(mm, { magnetMm: ctx.mm(8), gridMm: 100 }) : undefined,
     });
     // A side never crosses a wall: it stops on the first one in its way (lib/studio/wall-clip.ts) —
-    // a typed length and an Alt-drawn side too; a stage through a wall is never meant.
-    const inRoom = (q: Point) => (walls.length ? clipToWalls(last, q, walls) : q);
+    // a typed length and an Alt-drawn side too; a stage through a wall is never meant. Once the
+    // corners so far enclose an area, its sign says which side of this side the stage is on, and a
+    // wall meeting the side from THERE (a partition) stops it too; one meeting it from beyond (where
+    // a garden wall meets the hall) does not.
+    const enclosed = areaPts.length >= 2 ? signedArea([...areaPts, c]) : 0;
+    const inside = enclosed > 0 ? 1 : enclosed < 0 ? -1 : undefined;
+    const inRoom = (q: Point) => (walls.length ? clipToWalls(last, q, walls, inside) : q);
     if (free || typedMm) return inRoom(c);
     const len = Math.hypot(c.x - last.x, c.y - last.y) || 1;
     const u = { x: (c.x - last.x) / len, y: (c.y - last.y) / len };
@@ -1049,6 +1061,10 @@ export function CanvasStage({
     const finishing = areaShape === "half" ? areaPts.length === 2 : areaPts.length === 1;
     if (finishing) {
       if (!r.shape) return;
+      if (walls.length && crossesWalls(r.shape.outline, walls)) {
+        onAreaRefused?.("הבמה עוברת דרך קיר — הקיר צריך להישאר מחוץ לבמה");
+        return;
+      }
       ctx.endSnap();
       setAreaPts([]);
       setRoundDraft(null);
@@ -1073,14 +1089,16 @@ export function CanvasStage({
       if (/^[0-9.]$/.test(e.key) && areaPts.length > 0) {
         setAreaTyped((t) => (t.length < 6 ? t + e.key : t));
       } else if (e.key === "Enter" && areaShape !== "corners") {
-        const cm = parseFloat(areaTyped);
+        // Centimetres, or metres for a number no stage is in centimetres ("5.5") — the same reading
+        // as a side's typed length (lib/studio/stage-draw.ts typedSideLength), said as it is typed.
+        const typed = typedSideLength(areaTyped);
         const at = areaPointer.current;
-        if (at && areaCtx.current) roundStep(areaCtx.current, at.x, at.y, at.alt, !!at.shift, areaTyped && cm > 0 ? cm * 10 : undefined);
+        if (at && areaCtx.current) roundStep(areaCtx.current, at.x, at.y, at.alt, !!at.shift, typed?.mm);
       } else if (e.key === "Enter") {
-        const cm = parseFloat(areaTyped);
+        const typed = typedSideLength(areaTyped);
         const at = areaPointer.current;
-        if (areaTyped && cm > 0 && at && areaCtx.current) {
-          const p = nextCorner(areaCtx.current, at.x, at.y, at.alt, cm * 10);
+        if (typed && at && areaCtx.current) {
+          const p = nextCorner(areaCtx.current, at.x, at.y, at.alt, typed.mm);
           setAreaPts((cur) => [...cur, p]);
           setAreaTyped("");
         } else finishArea(areaPts);
@@ -2525,6 +2543,7 @@ export function CanvasStage({
                 shapingFrom.current = null;
                 onEndDrag();
               }}
+              onRefused={onAreaRefused}
             />
           )}
 
@@ -2745,7 +2764,7 @@ export function CanvasStage({
               const xs = shape?.outline.map((q) => q.x) ?? [];
               const ys = shape?.outline.map((q) => q.y) ?? [];
               const mid = shape ? { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 } : null;
-              const text = areaTyped ? `${areaTyped} ס״מ` : (shape?.label ?? "");
+              const text = areaTyped ? `${areaTyped} ${typedSideLength(areaTyped)?.metres ? "מ׳" : "ס״מ"}` : (shape?.label ?? "");
               const w = font * (text.length * 0.62 + 1.2);
               return (
                 <g>
@@ -2817,7 +2836,7 @@ export function CanvasStage({
                 const L = Math.hypot(b.x - a.x, b.y - a.y);
                 if (L < 1) return null;
                 const live = i === pts.length - 2 && !!areaCursor;
-                const text = live && areaTyped ? `${areaTyped} ס״מ` : `${(L / 1000).toFixed(2)} מ׳`;
+                const text = live && areaTyped ? `${areaTyped} ${typedSideLength(areaTyped)?.metres ? "מ׳" : "ס״מ"}` : `${(L / 1000).toFixed(2)} מ׳`;
                 const n = { x: -(b.y - a.y) / L, y: (b.x - a.x) / L };
                 const at = { x: (a.x + b.x) / 2 + n.x * ctx.mm(14), y: (a.y + b.y) / 2 + n.y * ctx.mm(14) };
                 const w = font * (text.length * 0.62 + 1.2);
@@ -2849,6 +2868,12 @@ export function CanvasStage({
                         finishArea(areaPts);
                         return;
                       }
+                      // A click ON the corner just put adds nothing — it is the first half of the
+                      // double-click that finishes there, and a side is never shorter than 10cm, so it
+                      // used to add a 10cm stub at 45° the close then refused (QA 2026-11-20, ST-6).
+                      const last = areaPts[areaPts.length - 1];
+                      const raw = ctx.clientToMm(e.clientX, e.clientY);
+                      if (last && Math.hypot(raw.x - last.x, raw.y - last.y) < ctx.mm(6)) return;
                       setAreaTyped("");
                       setAreaPts((cur) => [...cur, p]);
                     }}
@@ -3141,8 +3166,13 @@ export function CanvasStage({
                       }}
                       onRemove={(k) => {
                         const r = removeVertex(poly, areaPreview.front, k);
-                        if (r.outline.length >= 3 && !selfIntersects(r.outline)) onAreaReshape(r.outline, r.front);
+                        if (r.outline.length < 3) return;
+                        if (selfIntersects(r.outline)) onAreaRefused?.("קווי הבמה יחצו זה את זה");
+                        // The side the two corners make may cut through a wall the corner went round.
+                        else if (walls.length && crossesWalls(r.outline, walls, poly)) onAreaRefused?.("הבמה תעבור דרך קיר");
+                        else onAreaReshape(r.outline, r.front);
                       }}
+                      onRefused={onAreaRefused}
                     />
                   );
                 })()}
@@ -5282,7 +5312,9 @@ function FigurePill({ at, px, label, tone, aria, title, onOpen }: { at: Point; p
     >
       <title>{title}</title>
       <rect x={-w / 2} y={-10.5} width={w} height={21} rx={10.5} fill="var(--color-surface)" stroke={tone === "accent" ? "var(--color-accent)" : "var(--color-border)"} strokeWidth={1} vectorEffect="non-scaling-stroke" />
-      <text textAnchor="middle" dominantBaseline="central" direction="ltr" fill={ink} className="nums" style={{ fontSize: size, fontWeight: 600 }}>
+      {/* A figure with its unit ("6.00 מ׳") reads right to left, as the area tool's side labels do;
+          a bare angle stays left to right, or "90°" would print as "°90". */}
+      <text textAnchor="middle" dominantBaseline="central" direction={/[֐-׿]/.test(label) ? "rtl" : "ltr"} fill={ink} className="nums" style={{ fontSize: size, fontWeight: 600 }}>
         {label}
       </text>
     </g>
@@ -5290,14 +5322,18 @@ function FigurePill({ at, px, label, tone, aria, title, onOpen }: { at: Point; p
 }
 
 /** The box a figure is typed into, in place of its pill. Enter takes it, Tab takes it and moves on
- *  (`onCommit(viaTab, backward)`), Escape closes; a refused figure is marked and the box stays. */
-function TypedBox({ at, px, unit, label, text, refused, onText, onCommit, onClose, onBlur }: {
+ *  (`onCommit(viaTab, backward)`), Escape closes; a refused figure is marked and the box stays — and
+ *  says WHY under it (QA 2026-11-20, ST-4: a box that only turned red was the user's "I type a stage
+ *  length and it turns red, I don't know why"). */
+function TypedBox({ at, px, unit, label, text, refused, reason, onText, onCommit, onClose, onBlur }: {
   at: Point;
   px: number;
   unit: string;
   label: string;
   text: string;
   refused?: boolean;
+  /** Why the figure was refused, in words — under the box. */
+  reason?: string;
   onText: (text: string) => void;
   onCommit: (viaTab: boolean, backward: boolean) => void;
   onClose: () => void;
@@ -5305,10 +5341,12 @@ function TypedBox({ at, px, unit, label, text, refused, onText, onCommit, onClos
 }) {
   return (
     <g transform={`translate(${at.x} ${at.y}) scale(${px})`}>
-      <foreignObject x={-58} y={-15} width={116} height={30}>
+      {/* Wider than the box, for the reason under it; only the box and the reason take the pointer. */}
+      <foreignObject x={-110} y={-15} width={220} height={reason ? 58 : 30} className="pointer-events-none">
+        <div className="flex flex-col items-center gap-1">
         <div
           dir="ltr"
-          className={`control-group flex h-[30px] items-center gap-1 rounded-full border bg-surface px-2.5 shadow-floating ${refused ? "border-alert" : "border-accent"}`}
+          className={`control-group pointer-events-auto flex h-[30px] w-[116px] items-center gap-1 rounded-full border bg-surface px-2.5 shadow-floating ${refused ? "border-alert" : "border-accent"}`}
           onPointerDown={(e) => e.stopPropagation()}
         >
           <input
@@ -5337,6 +5375,12 @@ function TypedBox({ at, px, unit, label, text, refused, onText, onCommit, onClos
           />
           <span className="text-[11px] text-muted">{unit}</span>
         </div>
+        {reason && (
+          <div role="alert" dir="rtl" title={reason} className="pointer-events-auto max-w-[220px] truncate rounded-full border border-alert bg-surface px-2 py-0.5 text-[11px] font-semibold text-alert-ink shadow-floating">
+            {reason}
+          </div>
+        )}
+        </div>
       </foreignObject>
     </g>
   );
@@ -5355,16 +5399,24 @@ function TypedBox({ at, px, unit, label, text, refused, onText, onCommit, onClos
  *  the pointer back into it. `refDeg` is the direction of the front in that frame.
  *
  *  Every side also wears its LENGTH, outside it, and the length is a button: click it (or Enter on
- *  it), type centimetres, Enter — the side is that long (setSideLength). Tab takes the typed length
- *  and opens the next side, so a whole outline can be typed round. The end that stays is the one
- *  whose side beyond stands against a wall (`wallDistance`), else the side's first corner.
+ *  it), type centimetres — or metres, for a number no side is in centimetres ("6", "5.5":
+ *  typedSideLength; the box says which it read as it is typed) — Enter, and the side is that long
+ *  (setSideLength). Tab takes the typed length and opens the next side, so a whole outline can be
+ *  typed round. The end that stays is the one whose side beyond is nearer a wall (`wallDistance`) —
+ *  a stage beside a wall grows away from it — else the side's first corner; and when the outline
+ *  cannot take the length that way, the other end moves instead (QA 2026-11-20, ST-2: which end
+ *  moved hung on the order the corners were clicked in).
  *
  *  And every corner wears its ANGLE — the angle inside the outline, 90° at a square corner — which
  *  is a button the same way (2026-10-30, the user: "define the angles of the sides"): type degrees,
  *  Enter, and one of the two sides meeting the corner turns about it to make that angle, its length
- *  kept (setCornerAngle). The side that turns is the one leaving the corner, unless that side is the
- *  `front` or stands against a wall and the one arriving does not — so a trapezoid is typed from its
- *  front corners without the front moving. Tab goes round the corners. */
+ *  kept (setCornerAngle) — unless its far corner stands on a wall, which it then slides along (ST-7).
+ *  The side that turns is the one leaving the corner, unless that side is the `front` or stands
+ *  against a wall and the one arriving does not — so a trapezoid is typed from its front corners
+ *  without the front moving. Tab goes round the corners.
+ *
+ *  A figure or a grip the outline cannot take says why (`onRefused`, once per gesture for a grip; and
+ *  under the box for a typed figure): through a wall, a side under 10cm, or the lines crossing. */
 function OutlineHandles({
   outline,
   refDeg,
@@ -5380,6 +5432,7 @@ function OutlineHandles({
   onRemove,
   onBegin,
   onEnd,
+  onRefused,
 }: {
   outline: Point[];
   refDeg: number;
@@ -5402,24 +5455,40 @@ function OutlineHandles({
    *  outlines in THAT frame (a stage re-centres under the pointer as it is reshaped). */
   onBegin?: () => void;
   onEnd?: () => void;
+  /** Why a grip held or a typed figure was refused, in words (the studio's hint). */
+  onRefused?: (why: string) => void;
 }) {
   const start = useRef<{ outline: Point[]; fromRoom: (q: Point) => Point } | null>(null);
-  /** The one box open for typing: a side's length (cm) or a corner's angle (degrees). */
-  const [typing, setTyping] = useState<{ kind: "length" | "angle"; at: number; text: string; refused?: boolean } | null>(null);
+  /** The grip being dragged has already said why it holds — once a gesture, never once a frame. */
+  const saidWhy = useRef(false);
+  /** The one box open for typing: a side's length or a corner's angle (degrees) — and, once refused,
+   *  why. */
+  const [typing, setTyping] = useState<{ kind: "length" | "angle"; at: number; text: string; refused?: boolean; why?: string } | null>(null);
   const s = ctx.mm(5);
   const px = ctx.mm(1);
   const pull = (e: { altKey: boolean }) => (snap && !e.altKey ? (mm: number) => snap(mm, ctx.mm(8)) : (mm: number) => Math.max(10, Math.round(mm / 10) * 10));
-  const take = (next: Point[]) => {
+  /** Why `next` — an edit of `base`, in the same frame — is not an outline to take; null when it is.
+   *  A wall is judged on what the edit made WORSE (lib/studio/wall-clip.ts): an outline already
+   *  touching or reaching into a wall is never refused for it again, only for going deeper. */
+  const refusal = (next: readonly Point[], base: readonly Point[]): string | null => {
     const short = next.some((v, k) => {
       const w = next[(k + 1) % next.length];
       const L = Math.hypot(w.x - v.x, w.y - v.y);
       return L >= 1 && L < 100;
     });
-    if (short || selfIntersects(next)) return false;
-    // Through a wall is refused as a fold is: the grip stops where the last good outline was.
-    if (walls?.length && crossesWalls(next.map(toRoomOf), walls)) return false;
-    onChange(next);
-    return true;
+    if (short) return "צד של הבמה יהיה קצר מ־10 ס״מ";
+    if (selfIntersects(next)) return "קווי הבמה יחצו זה את זה";
+    if (walls?.length && crossesWalls(next.map(toRoomOf), walls, base.map(toRoomOf))) return "הבמה תעבור דרך קיר";
+    return null;
+  };
+  /** A grip's frame: taken — or, refused, the grip holds where the last good outline was and says why
+   *  (once a gesture). */
+  const take = (next: Point[], base: readonly Point[]) => {
+    const why = refusal(next, base);
+    if (!why) return onChange(next);
+    if (saidWhy.current) return;
+    saidWhy.current = true;
+    onRefused?.(why);
   };
   const n = outline.length;
   const sideLength = (i: number) => {
@@ -5427,39 +5496,60 @@ function OutlineHandles({
     const b = outline[(i + 1) % n];
     return Math.hypot(b.x - a.x, b.y - a.y);
   };
-  /** Side `k` stands against a wall — a side a typed figure keeps where it is when it can. */
-  const hugs = (k: number) => {
-    if (!wallDistance) return false;
+  /** How far side `k`'s middle stands from the nearest wall. */
+  const wallGap = (k: number) => {
+    if (!wallDistance) return Infinity;
     const a = outline[k];
     const b = outline[(k + 1) % n];
-    return wallDistance(toRoomOf({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })) <= WALL_HUG_MM;
+    return wallDistance(toRoomOf({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }));
   };
-  /** A typed figure applied: the outline it makes, or null when it is not one the outline can take (a
-   *  shape that folds over itself, or a side under 10cm) — the box then stays open, marked. */
-  const applyTyped = (next: Point[] | null) => {
-    if (!next) return null;
-    onBegin?.();
-    const ok = take(next);
-    onEnd?.();
-    return ok ? next : null;
+  /** Side `k` stands against a wall — a side a typed figure keeps where it is when it can. */
+  const hugs = (k: number) => wallGap(k) <= WALL_HUG_MM;
+  type Typed = { outline: Point[] } | { why: string };
+  /** A typed figure applied: the first of `tries` the outline can take — or, when it can take none,
+   *  why the first could not (the box then stays open, marked, saying so). */
+  const applyTyped = (tries: Point[][]): Typed => {
+    let why: string | null = null;
+    for (const next of tries) {
+      const no = refusal(next, outline);
+      if (no) {
+        why ??= no;
+        continue;
+      }
+      onBegin?.();
+      onChange(next);
+      onEnd?.();
+      return { outline: next };
+    }
+    return { why: why ?? "הבמה לא יכולה לקבל את המידה הזו" };
   };
-  /** Side `i` typed `text` cm long. The end kept is the one whose side beyond stands against a wall. */
-  const typedLength = (i: number, text: string) => {
-    const cm = Number(text.replace(",", "."));
-    if (!(cm > 0)) return null;
-    if (Math.abs(cm * 10 - sideLength(i)) < 1) return outline;
-    const keep = hugs((i + 1) % n) && !hugs((i - 1 + n) % n) ? "end" : "start";
-    return applyTyped(setSideLength(outline, i, Math.round(cm * 10), keep));
+  /** Side `i` typed as `text` (centimetres, or metres for a number no side is in centimetres —
+   *  typedSideLength). The end kept is the one whose side beyond is nearer a wall; when the outline
+   *  cannot take that, the other end moves (ST-2). */
+  const typedLength = (i: number, text: string): Typed => {
+    const typed = typedSideLength(text);
+    if (!typed) return { why: "הקלידו אורך — 600 (ס״מ) או 6 (מ׳)" };
+    if (Math.abs(typed.mm - sideLength(i)) < 1) return { outline };
+    const first = wallGap((i + 1) % n) < wallGap((i - 1 + n) % n) ? "end" : "start";
+    const ends = first === "end" ? (["end", "start"] as const) : (["start", "end"] as const);
+    return applyTyped(ends.map((keep) => setSideLength(outline, i, typed.mm, keep)));
   };
   /** Corner `k` typed `text` degrees inside. The side leaving the corner turns, unless it is the front
-   *  or stands against a wall and the side arriving does not — then that one turns instead. */
-  const typedAngle = (k: number, text: string) => {
+   *  or stands against a wall and the side arriving does not — then that one turns instead. The far
+   *  corner of the side that turns, standing on a wall, slides along it (ST-7). */
+  const typedAngle = (k: number, text: string): Typed => {
     const a = Number(text.replace(",", "."));
-    if (!(a > 0 && a < 360)) return null;
-    if (Math.abs(a - cornerAngle(outline, k)) < 0.05) return outline;
+    if (!(a > 0 && a < 360)) return { why: "זווית בין 0° ל־360°" };
+    if (Math.abs(a - cornerAngle(outline, k)) < 0.05) return { outline };
     const fixed = (i: number) => i === front || hugs(i);
     const turn = fixed(k) && !fixed((k - 1 + n) % n) ? "prev" : "next";
-    return applyTyped(setCornerAngle(outline, k, a, turn));
+    const far = turn === "next" ? (k + 1) % n : (k - 1 + n) % n;
+    const beyond = turn === "next" ? (far + 1) % n : (far - 1 + n) % n;
+    const rf = toRoomOf(outline[far]);
+    const rb = toRoomOf(outline[beyond]);
+    // The wall the far corner stands on — of two (a corner of the room), the one its other side runs along.
+    const wall = walls?.length ? wallAt(rf, walls, { x: rb.x - rf.x, y: rb.y - rf.y }) : null;
+    return applyTyped([setCornerAngle(outline, k, a, turn, wall ? [fromRoom(wall[0]), fromRoom(wall[1])] : undefined)]);
   };
   const openLength = (i: number, on: readonly Point[] = outline) => {
     const a = on[i];
@@ -5468,14 +5558,18 @@ function OutlineHandles({
   };
   const openAngle = (k: number, on: readonly Point[] = outline) => setTyping({ kind: "angle", at: k, text: String(Math.round(cornerAngle(on, k))) });
   /** Enter or Tab in the open box: the figure taken, then the box closed — or, on Tab, the next side's
-   *  or corner's opened (Shift+Tab the one before), read off the outline as it is NOW. */
+   *  or corner's opened (Shift+Tab the one before), read off the outline as it is NOW. Refused, the box
+   *  stays, marked, with the reason under it and in the hint. */
   const commitTyping = (t: NonNullable<typeof typing>, viaTab: boolean, backward: boolean) => {
-    const next = t.kind === "length" ? typedLength(t.at, t.text) : typedAngle(t.at, t.text);
-    if (!next) return setTyping({ ...t, refused: true });
+    const r = t.kind === "length" ? typedLength(t.at, t.text) : typedAngle(t.at, t.text);
+    if ("why" in r) {
+      onRefused?.(r.why);
+      return setTyping({ ...t, refused: true, why: r.why });
+    }
     if (!viaTab) return setTyping(null);
     const at = (t.at + (backward ? n - 1 : 1)) % n;
-    if (t.kind === "length") openLength(at, next);
-    else openAngle(at, next);
+    if (t.kind === "length") openLength(at, r.outline);
+    else openAngle(at, r.outline);
   };
   const roomOutline = outline.map(toRoomOf);
   const outward = signedArea(roomOutline) >= 0 ? 1 : -1;
@@ -5485,6 +5579,7 @@ function OutlineHandles({
     e.stopPropagation();
     const was = { outline, fromRoom };
     start.current = was;
+    saidWhy.current = false;
     onBegin?.();
     startPointerGesture(e, {
       onMove: (ev) => onMove(ev, was),
@@ -5531,7 +5626,7 @@ function OutlineHandles({
                 const n = { x: (sgn * (eb.y - ea.y)) / len, y: (-sgn * (eb.x - ea.x)) / len };
                 const q = was.fromRoom(ctx.clientToMm(ev.clientX, ev.clientY));
                 const d = (q.x - (ea.x + eb.x) / 2) * n.x + (q.y - (ea.y + eb.y) / 2) * n.y;
-                take(pushSide(base, i, Math.round(d / 10) * 10, pull(ev)));
+                take(pushSide(base, i, Math.round(d / 10) * 10, pull(ev)), base);
               })
             }
             onDoubleClick={(e) => {
@@ -5550,17 +5645,21 @@ function OutlineHandles({
         const rl = Math.hypot(rb.x - ra.x, rb.y - ra.y) || 1;
         // Outside the side, clear of its grip: the pill is drawn in screen pixels (scale px).
         const at = { x: (ra.x + rb.x) / 2 + ((outward * (rb.y - ra.y)) / rl) * px * 22, y: (ra.y + rb.y) / 2 + ((-outward * (rb.x - ra.x)) / rl) * px * 22 };
-        const label = (L / 1000).toFixed(2);
+        // The figure says its unit, and the box says how it reads what is typed — centimetres, or metres
+        // for a number no side is in centimetres (QA 2026-11-20, ST-4: the pill said "6.00", the box
+        // took 600, and "6" was read as six centimetres and refused).
+        const label = `${(L / 1000).toFixed(2)} מ׳`;
         if (typing?.kind === "length" && typing.at === i)
           return (
             <TypedBox
               key={`len-${i}`}
               at={at}
               px={px}
-              unit="ס״מ"
-              label="אורך הצד בסנטימטרים"
+              unit={typedSideLength(typing.text)?.metres ? "מ׳" : "ס״מ"}
+              label="אורך הצד — בסנטימטרים, או במטרים (6 או 5.5)"
               text={typing.text}
               refused={typing.refused}
+              reason={typing.why}
               onText={(text) => setTyping({ ...typing, text })}
               onCommit={(viaTab, backward) => commitTyping(typing, viaTab, backward)}
               onClose={() => setTyping(null)}
@@ -5574,7 +5673,7 @@ function OutlineHandles({
             px={px}
             label={label}
             tone="accent"
-            aria={`אורך הצד ${label} מ׳ — לחיצה להקלדת אורך`}
+            aria={`אורך הצד ${label} — לחיצה להקלדת אורך`}
             title="לחיצה להקלדת אורך הצד"
             onOpen={() => openLength(i)}
           />
@@ -5609,6 +5708,7 @@ function OutlineHandles({
               label="הזווית בפינה במעלות"
               text={typing.text}
               refused={typing.refused}
+              reason={typing.why}
               onText={(text) => setTyping({ ...typing, text })}
               onCommit={(viaTab, backward) => commitTyping(typing, viaTab, backward)}
               onClose={() => setTyping(null)}
@@ -5647,7 +5747,7 @@ function OutlineHandles({
             onPointerDown={(e) =>
               grab(e, (ev, was) => {
                 const q = was.fromRoom(ctx.clientToMm(ev.clientX, ev.clientY));
-                take(moveVertex(was.outline, i, q, refDeg, pull(ev), ev.shiftKey));
+                take(moveVertex(was.outline, i, q, refDeg, pull(ev), ev.shiftKey), was.outline);
               })
             }
             onDoubleClick={(e) => {

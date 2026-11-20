@@ -960,6 +960,22 @@ export function setSideLength(poly: readonly Point[], i: number, lengthMm: numbe
   return poly.map((v, k) => (moved.includes(k) ? { x: Math.round(v.x + u.x * d), y: Math.round(v.y + u.y * d) } : { ...v }));
 }
 
+/** A side's length as TYPED into its box (QA 2026-11-20, ST-4). The box is in centimetres — the unit
+ *  it shows, and the one the area tool's typed lengths take — except for a number that cannot be
+ *  meant as centimetres of a stage side: one under 10 (no side is shorter than 10cm) or a decimal
+ *  under 100 ("5.5", "12.20" — nobody types a fraction of a centimetre of stage). That is METRES, the
+ *  unit the side's own figure is written in on the plan, so "600", "6" and "6.00" are all six metres.
+ *  `metres` says which reading was taken, for the box to show its unit as it is typed; null when the
+ *  text is no positive number. */
+export function typedSideLength(text: string): { mm: number; metres: boolean } | null {
+  const t = text.trim().replace(",", ".");
+  if (!/^\d*\.?\d*$/.test(t) || !/\d/.test(t)) return null;
+  const v = Number(t);
+  if (!(v > 0)) return null;
+  const metres = v < 10 || (t.includes(".") && v < 100);
+  return { mm: Math.round(metres ? v * 1000 : v * 10), metres };
+}
+
 const dirDeg = (a: Point, b: Point) => deg(Math.atan2(b.y - a.y, b.x - a.x));
 /** A turn folded into (−180, 180]. */
 const foldDeg = (d: number) => {
@@ -986,8 +1002,14 @@ export function cornerAngle(poly: readonly Point[], k: number): number {
  *  moves (the side beyond leans to meet it, as it does when a corner is dragged): `turn: "next"` turns
  *  the side LEAVING the corner, `"prev"` the side ARRIVING at it — the caller keeps the front, or a
  *  side against a wall, where it is by turning the other one. An angle that is not between 0 and 360
- *  leaves the outline alone. */
-export function setCornerAngle(poly: readonly Point[], k: number, angleDeg: number, turn: "next" | "prev" = "next"): Point[] {
+ *  leaves the outline alone.
+ *
+ *  `slideOn`: the line of a wall the far corner of that side stands on. The corner then SLIDES along
+ *  it — it goes where the turned side meets the wall, the side taking the length that needs — rather
+ *  than lift off it and tilt the side beyond (QA 2026-11-20, ST-7: a 6×4 stage against a wall typed
+ *  100° at a front corner took its back corner 61 mm off the wall). A turned side that runs along the
+ *  wall, or would meet it absurdly far off, keeps its length as before. */
+export function setCornerAngle(poly: readonly Point[], k: number, angleDeg: number, turn: "next" | "prev" = "next", slideOn?: readonly [Point, Point]): Point[] {
   const n = poly.length;
   if (n < 3 || !(angleDeg > 0 && angleDeg < 360)) return [...poly];
   const ip = (k - 1 + n) % n;
@@ -998,16 +1020,30 @@ export function setCornerAngle(poly: readonly Point[], k: number, angleDeg: numb
   const s = areaOf(poly) >= 0 ? 1 : -1;
   const want = s * (180 - angleDeg);
   const out = poly.map((v) => ({ ...v }));
+  /** How far from the corner, along (ux, uy), the far corner goes: onto the wall it stood on, else
+   *  as far as it was. */
+  const reach = (ux: number, uy: number, len: number) => {
+    if (!slideOn) return len;
+    const [a, b] = slideOn;
+    const wx = b.x - a.x;
+    const wy = b.y - a.y;
+    const den = ux * wy - uy * wx;
+    if (Math.abs(den) < 1e-6 * Math.hypot(wx, wy)) return len;
+    const t = ((a.x - c.x) * wy - (a.y - c.y) * wx) / den;
+    return t > 1 && t < len * 10 ? t : len;
+  };
   if (turn === "next") {
     const len = Math.hypot(q.x - c.x, q.y - c.y);
     if (len < 1) return [...poly];
     const d = rad(dirDeg(p, c) + want);
-    out[inx] = { x: Math.round(c.x + Math.cos(d) * len), y: Math.round(c.y + Math.sin(d) * len) };
+    const r = reach(Math.cos(d), Math.sin(d), len);
+    out[inx] = { x: Math.round(c.x + Math.cos(d) * r), y: Math.round(c.y + Math.sin(d) * r) };
   } else {
     const len = Math.hypot(c.x - p.x, c.y - p.y);
     if (len < 1) return [...poly];
     const d = rad(dirDeg(c, q) - want);
-    out[ip] = { x: Math.round(c.x - Math.cos(d) * len), y: Math.round(c.y - Math.sin(d) * len) };
+    const r = reach(-Math.cos(d), -Math.sin(d), len);
+    out[ip] = { x: Math.round(c.x - Math.cos(d) * r), y: Math.round(c.y - Math.sin(d) * r) };
   }
   return out;
 }
@@ -1355,6 +1391,30 @@ if (isMain(import.meta.url)) {
     const mirrored = setCornerAngle([...r4].reverse(), 3, 60);
     assert(near(cornerAngle(mirrored, 3), 60, 0.05), "an outline running the other way round takes the same inside angle");
     assert(setCornerAngle(r4, 1, 0).every((v, k) => v.x === r4[k].x) && setCornerAngle(r4, 1, 360).every((v, k) => v.x === r4[k].x), "0° and 360° are no angle: refused");
+    // QA 2026-11-20 ST-7: the back against a wall (y = 3000). The side that turns keeps its far corner
+    // ON the wall — sliding along it, the side taking the length that needs — instead of lifting it
+    // 61 mm off and tilting the back.
+    const wall: [Point, Point] = [{ x: -10000, y: 3000 }, { x: 20000, y: 3000 }];
+    const slid = setCornerAngle(r4, 1, 100, "next", wall);
+    assert(slid[2].y === 3000 && slid[3].x === 0 && slid[3].y === 3000, "a typed 100° slides the back corner along the wall it stands on");
+    assert(near(cornerAngle(slid, 1), 100, 0.05) && near(Math.hypot(slid[2].x - slid[1].x, slid[2].y - slid[1].y), 3000 / Math.cos(rad(10)), 1), "…the angle made, the side as long as reaching the wall takes");
+    const slidPrev = setCornerAngle(r4, 0, 100, "prev", wall);
+    assert(slidPrev[3].y === 3000 && slidPrev[1].x === 6000 && near(cornerAngle(slidPrev, 0), 100, 0.05), "…and the same turning the side arriving at the corner");
+    const lifted = setCornerAngle(r4, 1, 100);
+    assert(near(lifted[2].y, 3000 * Math.cos(rad(10)), 1), "with no wall, the side keeps its length (the old rule)");
+    const parallel = setCornerAngle(r4, 1, 90.0001, "next", [{ x: 6000, y: -10000 }, { x: 6000, y: 20000 }]);
+    assert(near(Math.hypot(parallel[2].x - parallel[1].x, parallel[2].y - parallel[1].y), 3000, 1), "a wall the turned side runs along is no wall to slide on: its length is kept");
+  }
+  // QA 2026-11-20 ST-4: a side's length as typed — centimetres, as the box says, but a number that
+  // cannot be centimetres of a stage side is metres, as the side's own figure on the plan is.
+  {
+    const mm = (t: string) => typedSideLength(t)?.mm ?? null;
+    assert(mm("600") === 6000 && typedSideLength("600")!.metres === false, "600 is centimetres");
+    assert(mm("6") === 6000 && typedSideLength("6")!.metres, "6 is six metres — no side is 6cm");
+    assert(mm("5.5") === 5500 && mm("5,5") === 5500, "5.5 (or 5,5) is five and a half metres");
+    assert(mm("12.20") === 12200 && mm("6.00") === 6000, "a decimal under a hundred is metres");
+    assert(mm("60") === 600 && mm("488") === 4880 && mm("600.5") === 6005, "a whole number from 10, or a decimal from 100, is centimetres");
+    assert(mm("") === null && mm("0") === null && mm(".") === null && mm("abc") === null && mm("-5") === null, "nothing, nought or no number is no length");
   }
   console.log("stage-draw self-check passed");
 }
