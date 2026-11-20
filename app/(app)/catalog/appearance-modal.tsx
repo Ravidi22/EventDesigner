@@ -1883,6 +1883,11 @@ function DrawingBar({ ed, isNew, onCancel, onFinish }: { ed: OutlineEditor; isNe
   const b = one?.kind === "wall" ? ed.outline[(idx + 1) % n] : undefined;
   const len = a && b ? wallLengthMm(a, b) : 0;
   const locked = one?.kind === "wall" && !!ed.lockedEdges[idx];
+  // Which end of the side stays put when its length is typed (SH-5) — each end named by where it lies
+  // on the screen, as a door's corners are at /halls.
+  const [keep, setKeep] = useState<"start" | "end">("start");
+  const endName = (p: { x: number; y: number }, q: { x: number; y: number }) =>
+    Math.abs(q.x - p.x) >= Math.abs(q.y - p.y) ? (p.x > q.x ? "הימני" : "השמאלי") : p.y > q.y ? "התחתון" : "העליון";
   const facts =
     ed.mode === "draw"
       ? n === 0
@@ -1901,8 +1906,20 @@ function DrawingBar({ ed, isNew, onCancel, onFinish }: { ed: OutlineEditor; isNe
         <>
           <Popover label="אורך" icon={Ruler} value={ltr(`${Math.round(len / 10)}`)}>
             <PanelRow label="אורך (ס״מ)" htmlFor="drawing-len">
-              <NumberField id="drawing-len" decimals={1} min={0.1} commitOnBlur disabled={locked} value={len / 10} onChange={(v) => ed.setWallLength(idx, v / 100)} className="w-20" />
+              <NumberField id="drawing-len" decimals={1} min={0.1} commitOnBlur disabled={locked} value={len / 10} onChange={(v) => ed.setWallLength(idx, v / 100, keep)} className="w-20" />
             </PanelRow>
+            <div className="mt-2.5">
+              <Segmented
+                label="הקצה שנשאר במקומו"
+                value={keep}
+                options={[
+                  ["start", `הקצה ${endName(a, b)}`],
+                  ["end", `הקצה ${endName(b, a)}`],
+                ]}
+                onChange={setKeep}
+              />
+            </div>
+            <Note>במלבן הצלע שמנגד נמתחת איתה והפינות נשארות ישרות; בכל צורה אחרת זז רק הקצה השני, והצלע הסמוכה לו משתנה.</Note>
             {locked && <Note>האורך נעול — שחררו אותו כדי לשנות.</Note>}
           </Popover>
           <Popover label="זווית" icon={DraftingCompass} value={ltr(`${Math.round(wallAngleDeg(a, b))}°`)}>

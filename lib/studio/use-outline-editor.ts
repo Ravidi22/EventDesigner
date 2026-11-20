@@ -107,11 +107,78 @@ function withVertexMoved(s: OutlineState, idx: number, p: Point): OutlineState {
 // Folded through withVertexMoved one end at a time, so a locked neighbour still clamps the end it
 // shares — the canvas works out the two points from where the press started and where the pointer
 // is, and reports them absolutely every frame, as a vertex drag does.
+//
+// The side moves PARALLEL to itself and each end slides along its neighbour's own line (an offset
+// side — SH-6, QA 2026-11-20): pushed straight along the normal, a hexagon's 120° corners sheared to
+// 105°/136°. A neighbour square to the side (a rectangle, an L) is slid along exactly as before; one
+// nearly in line with the side (no corner to slide along) takes the push as it comes.
 function withWallMoved(s: OutlineState, edgeIdx: number, a: Point, b: Point): OutlineState {
   const n = s.outline.length;
   if (n < 3 || edgeIdx < 0 || edgeIdx >= n) return s;
-  const moved = withVertexMoved(withVertexMoved(s, edgeIdx, a), (edgeIdx + 1) % n, b);
+  const i1 = (edgeIdx + 1) % n;
+  const along = (from: Point, to: Point, at: Point) => slideAlong(from, to, at, { x: b.x - a.x, y: b.y - a.y }) ?? at;
+  const na = along(s.outline[(edgeIdx - 1 + n) % n], s.outline[edgeIdx], a);
+  const nb = along(s.outline[(i1 + 1) % n], s.outline[i1], b);
+  const moved = withVertexMoved(withVertexMoved(s, edgeIdx, na), i1, nb);
   return withOutlineReplaced(moved, moved.outline); // the neighbours changed length: re-fit their bows and doors
+}
+
+/** Where the line through `from`→`to` (a neighbouring side) meets the line through `at` running `dir`
+ *  (the side moved parallel to itself). Null when the two are within 5° of parallel. */
+function slideAlong(from: Point, to: Point, at: Point, dir: Point): Point | null {
+  const d = { x: to.x - from.x, y: to.y - from.y };
+  const den = d.x * dir.y - d.y * dir.x;
+  const lens = Math.hypot(d.x, d.y) * Math.hypot(dir.x, dir.y);
+  if (!lens || Math.abs(den) < Math.sin((5 * Math.PI) / 180) * lens) return null;
+  const t = ((at.x - from.x) * dir.y - (at.y - from.y) * dir.x) / den;
+  return { x: from.x + d.x * t, y: from.y + d.y * t };
+}
+
+/** The outline walked the other way round — side k is the old side n−k−1, its bow turned over. An
+ *  involution: what one end of a side does, done to the other end. */
+function reversed(s: OutlineState): OutlineState {
+  const n = s.outline.length;
+  const old = (k: number) => (n - k - 1 + n) % n;
+  return {
+    ...s,
+    outline: s.outline.map((_, k) => s.outline[(n - k) % n]),
+    edgeCurves: s.outline.map((_, k) => {
+      const c = s.edgeCurves[old(k)];
+      return c ? { c1: c.c2, c2: c.c1 } : null;
+    }),
+    lockedEdges: s.outline.map((_, k) => s.lockedEdges[old(k)] ?? false),
+    entrances: s.entrances.map((e) => ({ ...e, wallIndex: old(e.wallIndex), distanceMm: wallLengthMm(s.outline[e.wallIndex], s.outline[(e.wallIndex + 1) % n]) - e.distanceMm })),
+  };
+}
+
+/** Side `edgeIdx` typed `lengthMm` long along its own line, its START kept (or its END, `keep`). SH-5
+ *  (QA 2026-11-20): on a rectangle or an L the far side is carried square, as it always was; on any
+ *  other shape the moving end slides along the side alone and only the next side gives — a regular
+ *  hexagon's side typed 1200 made its sides 1200/400/1200/800/800/800. */
+export function withSideLength(s: OutlineState, edgeIdx: number, lengthMm: number, keep: "start" | "end" = "start"): OutlineState {
+  const n = s.outline.length;
+  if (keep === "end") return reversed(withSideLength(reversed(s), (n - edgeIdx - 1 + n) % n, lengthMm, "start"));
+  const a = s.outline[edgeIdx];
+  const b = s.outline[(edgeIdx + 1) % n];
+  return withEdgeReshaped(s, edgeIdx, endpointFromLengthAngle(a, Math.max(1, lengthMm), wallAngleDeg(a, b)));
+}
+
+/** Whether the corner at the side's END is square and the side after next runs with the side — the
+ *  rectangle the angle-keeping solve was written for (reshapeEdgeKeepingAngles). */
+function squareAfter(outline: readonly Point[], edgeIdx: number): boolean {
+  const n = outline.length;
+  if (n < 4) return false;
+  const dir = (i: number) => {
+    const p = outline[i % n];
+    const q = outline[(i + 1) % n];
+    const l = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+    return { x: (q.x - p.x) / l, y: (q.y - p.y) / l };
+  };
+  const u = dir(edgeIdx);
+  const v = dir(edgeIdx + 1);
+  const w = dir(edgeIdx + 2);
+  const tol = Math.sin((1 * Math.PI) / 180);
+  return Math.abs(u.x * v.x + u.y * v.y) < tol && Math.abs(u.x * w.y - u.y * w.x) < tol;
 }
 
 // Closing a drawn outline. The sides were held to 45° steps while drawing, but the closing side is
@@ -194,7 +261,8 @@ function withEdgeReshaped(s: OutlineState, edgeIdx: number, newB: Point): Outlin
   const n = s.outline.length;
   const bIdx = (edgeIdx + 1) % n;
   const cIdx = (edgeIdx + 2) % n;
-  const solved = reshapeEdgeKeepingAngles(s.outline, edgeIdx, newB);
+  // Only where the shape is a rectangle there (SH-5): elsewhere the end moves alone.
+  const solved = squareAfter(s.outline, edgeIdx) ? reshapeEdgeKeepingAngles(s.outline, edgeIdx, newB) : null;
   const spoilsLock =
     solved &&
     ((s.lockedEdges[bIdx] && Math.abs(wallLengthMm(solved.b, solved.c) - wallLengthMm(s.outline[bIdx], s.outline[cIdx])) > 1e-6) ||
@@ -554,14 +622,10 @@ export function useOutlineEditor(init: OutlineEditorInit, options?: { enabled?: 
 
   // Numeric wall editing: length/angle move the wall's end vertex through the same transform a
   // drag would use; bulge depth writes through the same edgeCurves.
+  // `keep` — which end of the side stays where it is (SH-5): its start, as always, or its end.
   const setWallLength = useCallback(
-    (edgeIdx: number, meters: number) =>
-      edit((s) => {
-        const n = s.outline.length;
-        const a = s.outline[edgeIdx];
-        const b = s.outline[(edgeIdx + 1) % n];
-        return withEdgeReshaped(s, edgeIdx, endpointFromLengthAngle(a, Math.max(1, meters * 1000), wallAngleDeg(a, b)));
-      }, `wallLength:${edgeIdx}`),
+    (edgeIdx: number, meters: number, keep: "start" | "end" = "start") =>
+      edit((s) => (s.lockedEdges[edgeIdx] ? s : withSideLength(s, edgeIdx, meters * 1000, keep)), `wallLength:${edgeIdx}`),
     [edit],
   );
   const setWallAngle = useCallback(
@@ -731,6 +795,35 @@ if (isMain(import.meta.url)) {
   const pushedIntoLock = withWallMoved({ ...base, lockedEdges: [false, true, false, false] }, 0, { x: 0, y: -200 }, { x: 1000, y: -200 });
   assert(Math.abs(wallLengthMm(pushedIntoLock.outline[1], pushedIntoLock.outline[2]) - 1000) < 1e-6, "a locked neighbour keeps its length under a push");
   assert(withWallMoved(base, 7, { x: 0, y: 0 }, { x: 1, y: 1 }) === base, "a side the outline does not have is a no-op");
+
+  // SH-5/SH-6 (QA 2026-11-20): a side of a shape that is not a rectangle. A regular hexagon's side
+  // typed 1200 used to make its sides 1200/400/1200/800/800/800; pushing a side sheared its 120°
+  // corners to 105°/136°.
+  const hexPts: Point[] = Array.from({ length: 6 }, (_, k) => ({ x: 800 * Math.cos((k * Math.PI) / 3), y: 800 * Math.sin((k * Math.PI) / 3) }));
+  const hex: OutlineState = { ...base, outline: hexPts, edgeCurves: hexPts.map(() => null), lockedEdges: hexPts.map(() => false) };
+  const sidesOf = (s: OutlineState) => s.outline.map((v, i) => Math.round(wallLengthMm(v, s.outline[(i + 1) % s.outline.length])));
+  const typed = withSideLength(hex, 0, 1200);
+  assert(sidesOf(typed)[0] === 1200 && sidesOf(typed).slice(2).every((l) => l === 800), `a hexagon's side typed: it and the next side change, no side further on (${sidesOf(typed)})`);
+  assert(typed.outline[0].x === hexPts[0].x && typed.outline[0].y === hexPts[0].y, "…its start stays where it was");
+  const fromEnd = withSideLength(hex, 0, 1200, "end");
+  assert(sidesOf(fromEnd)[0] === 1200 && fromEnd.outline[1].x === hexPts[1].x && fromEnd.outline[1].y === hexPts[1].y && sidesOf(fromEnd).slice(1, 5).every((l) => l === 800), `…or its END stays, and the side before it gives (${sidesOf(fromEnd)})`);
+  const rectTyped = withSideLength(base, 0, 1400);
+  assert(rectTyped.outline[1].x === 1400 && rectTyped.outline[2].x === 1400 && rectTyped.outline[2].y === 1000, "a rectangle's side typed keeps its right angles, the far side grows with it");
+  const rectFromEnd = withSideLength(base, 0, 1400, "end");
+  assert(rectFromEnd.outline[0].x === -400 && rectFromEnd.outline[3].x === -400 && rectFromEnd.outline[1].x === 1000, "…from its end too: the start and the corner before it move out together");
+  const angleOf = (s: OutlineState, i: number) => {
+    const n = s.outline.length;
+    const p = s.outline[(i - 1 + n) % n];
+    const v = s.outline[i];
+    const q = s.outline[(i + 1) % n];
+    const d = Math.atan2(q.y - v.y, q.x - v.x) - Math.atan2(p.y - v.y, p.x - v.x);
+    return Math.round(((((d * 180) / Math.PI) % 360) + 360) % 360);
+  };
+  // Pushed outward along its normal by 200: an offset side, every corner as it was.
+  const nrm = { x: (hexPts[1].y - hexPts[0].y) / 800, y: -(hexPts[1].x - hexPts[0].x) / 800 };
+  const pushedHex = withWallMoved(hex, 0, { x: hexPts[0].x - nrm.x * 200, y: hexPts[0].y - nrm.y * 200 }, { x: hexPts[1].x - nrm.x * 200, y: hexPts[1].y - nrm.y * 200 });
+  assert([0, 1, 2, 3, 4, 5].every((i) => angleOf(pushedHex, i) === angleOf(hex, i)), `a hexagon's side pushed keeps every corner (${[0, 1, 2, 3, 4, 5].map((i) => angleOf(pushedHex, i))})`);
+  assert(pushedHex.outline.slice(2).every((v, i) => v === hexPts[i + 2]), "…and moves no other corner");
 
   // Closing: the near-square is made square, duplicate corners go, a bow-tie is refused in words.
   const skewed: Point[] = [{ x: 0, y: 0 }, { x: 1200, y: 0 }, { x: 1205, y: 598 }, { x: 2, y: 602 }];
