@@ -1290,6 +1290,22 @@ function closedBand(outer: readonly Piece[], inner: readonly Piece[], spec: Holl
   return emitOutline(path);
 }
 
+/** Whether an inner edge runs the way the sides it was cut from run (buildHollow, SH-12). A side
+ *  offset in by less than its own radius keeps its direction; a round side offset past its own
+ *  centre comes out on the far side running BACKWARDS — the circle's band then closes on itself the
+ *  wrong way round and draws a "diamond" as big as the shape, area and all. Read by the chord of
+ *  each offset piece against its own side's chord, so a long ellipse's tips — which swallow a little
+ *  of the band where they are sharpest, while the rest runs true — are not mistaken for it. */
+function runsTrue(inner: readonly Piece[], outer: readonly Piece[]): boolean {
+  return inner.every((p) => {
+    const side = p.src >= 0 ? outer[p.src] : undefined;
+    if (!side) return true;
+    const d = vSub(p.to, p.from);
+    const s = vSub(side.to, side.from);
+    return vDot(d, d) < 1 || vDot(s, s) < 1 || vDot(d, s) > 0;
+  });
+}
+
 /** A shape's outline cut into a band `spec.bandMm` deep, inside it (see "Hollow" above) — the
  *  outlines it is drawn as, in the outline's own frame: one keyhole for a band that runs all the way
  *  round, one outline per run of closed sides between open ones, or the outline itself, solid, when
@@ -1310,6 +1326,10 @@ export function buildHollow(base: BuiltOutline, spec: HollowSpec): BuiltOutline[
   const inner = loopPieces(segs);
   // Nothing left inside — or the inner edge turned itself inside out: the band is the whole shape.
   if (shoelace(piecesRing(inner)) * sgn <= 0.02 * Math.abs(outerArea)) return [base];
+  // …or was pushed THROUGH the shape and kept its area (SH-12, QA 2026-11-20): a round side offset
+  // past its own centre flips over, and a ⌀60 circle with a 53 cm band drew a self-crossing "diamond"
+  // hole nearly its own size.
+  if (!runsTrue(inner, outer)) return [base];
   // An open side the band closed off before reaching it (its moved line was swallowed) is no longer
   // a way out: it is walked as part of the band beside it.
   const opens = inner.flatMap((p, k) => (p.src >= 0 && open.has(p.src) ? [k] : []));
@@ -2631,6 +2651,26 @@ if (isMain(import.meta.url)) {
     const yStart = sizedShapes("rect", counter, [shelf({ x: "end", y: "start" })], { widthMm: 4000, depthMm: 1600 });
     const baseY = yStart.kind === "multi" ? sampledBounds(yStart.parts.filter((p, i) => pieceOf(p, i) === 0)) : sampledBounds([]);
     near(baseY.minY - box(yStart).minY, 300, "pinned to the start in y: the shelf keeps its 30 cm beyond the counter's top edge");
+  }
+
+  // SH-12 (QA 2026-11-20): a band as deep as the shape's inradius or deeper is the solid shape. A ⌀60
+  // circle with a 53 cm band drew a self-crossing "diamond" hole (its quarter arcs offset past their
+  // own centre run backwards) while the panel said "חלול · 53"; so did a half-circle, a capsule and
+  // an ellipse well past theirs. A band short of the inradius is still a band — a long oval's tips
+  // pinch where they are sharpest, and it stays hollow.
+  {
+    const solidOf = (shape: MapShape, d: ShapeDims) => shapePieces(shape, d).length === 1 && shapePieces(shape, d)[0].outline.length === shapePieces(shape, { ...d, hollow: undefined })[0].outline.length;
+    assert(solidOf("circle", { diameterMm: 600, hollow: { bandMm: 530 } }), "a ⌀60 circle with a 53 cm band is solid, never a diamond hole");
+    assert(!solidOf("circle", { diameterMm: 600, hollow: { bandMm: 200 } }), "…a 20 cm band leaves its ring");
+    for (const [shape, d, inradius] of [
+      ["circle", { diameterMm: 3000 }, 1500],
+      ["half-circle", { diameterMm: 1200 }, 300],
+      ["stadium", { widthMm: 1200, depthMm: 600 }, 300],
+      ["ellipse", { widthMm: 1200, depthMm: 600 }, 300],
+    ] as [MapShape, ShapeDims, number][]) {
+      for (const k of [1, 1.2, 1.5, 2, 3]) assert(solidOf(shape, { ...d, hollow: { bandMm: Math.round(inradius * k) } }), `${shape} ${JSON.stringify(d)}: a band ${k}× its inradius is solid`);
+    }
+    assert(!solidOf("ellipse", { widthMm: 4000, depthMm: 1000, hollow: { bandMm: 333 } }), "a 4 m × 1 m oval keeps its default band (a third of its depth)");
   }
 
   console.log("footprint self-check passed");

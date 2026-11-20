@@ -223,6 +223,20 @@ function seed(box: Box, cell: (x: number, y: number, h: number) => Cell): Cell[]
   return cells;
 }
 
+/** How deep the deepest point inside an outline is — the radius of the largest circle it holds. A
+ *  band cut that deep or deeper leaves nothing inside, and is drawn as the solid shape
+ *  (lib/studio/footprint.ts buildHollow); the shape editor stops its band field there (SH-12). */
+export function inradiusOf(ring: Point[]): number {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of ring) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const box: Box = { minX, minY, w: maxX - minX, h: maxY - minY };
+  if (!(Math.min(box.w, box.h) > 0)) return 0;
+  return Math.max(0, deepest(ring, box, Math.max(0.5, Math.max(box.w, box.h) / 400)).d);
+}
+
 /** The point farthest from any edge, to within `precision` of the true depth. A cell is opened only
  *  while a point in it could still be deeper than the best so far — inside a cell, depth grows by at
  *  most h√2 — so most of the box is never looked at. */
@@ -388,6 +402,13 @@ if (isMain(import.meta.url)) {
 
   // Deterministic, and the same object the second time round.
   assert(labelAnchor(half) === onHalf, "the answer is kept per footprint");
+
+  // The inradius — how deep a band may be cut before nothing is left inside (SH-12).
+  const within = (a: number, b: number) => Math.abs(a - b) <= Math.max(2, b * 0.01);
+  assert(within(inradiusOf(ringOf({ kind: "circle", diameterMm: 600 })), 300), "a ⌀60 circle holds a circle 30 cm in radius");
+  assert(within(inradiusOf(ringOf({ kind: "rect", widthMm: 1200, depthMm: 600 })), 300), "a 120×60 rectangle, half its depth");
+  assert(within(inradiusOf(ringOf(L)), (1000 * Math.SQRT2) / (1 + Math.SQRT2)), "an L, at its elbow — deeper than half its limbs");
+  assert(within(inradiusOf(ringOf(half)), 150), "a half ring 30 cm deep, half its band");
 
   console.log("label-anchor self-check passed");
 }

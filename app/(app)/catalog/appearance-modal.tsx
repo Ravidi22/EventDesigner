@@ -53,6 +53,7 @@ import { LINE_MM, drawnBounds, drawnPieces, flipShapes, hollowAcross, lookOf, pa
 import type { EdgeCurve } from "@/lib/studio/hall";
 import {
   arcSpecOf,
+  buildHollow,
   customShapeBounds,
   defaultHollowBand,
   footprintBounds,
@@ -116,7 +117,7 @@ import { CurtainStyleTiles } from "@/components/curtain-style-tiles";
 import { curtainStyleOf } from "@/lib/catalog/symbols";
 import { pergolaPostOf } from "@/lib/venues/pergola";
 import { AppearancePreview, PlanContent } from "./appearance-preview";
-import { labelAnchor } from "@/lib/studio/label-anchor";
+import { flatRing, inradiusOf, labelAnchor } from "@/lib/studio/label-anchor";
 import { IconPicker } from "./icon-picker";
 import { CloseButton } from "@/components/close-button";
 import { SwitchRow } from "@/components/toggle";
@@ -382,7 +383,12 @@ const GAP_ALONG = [
 ] as const;
 
 /** What the "מילוי" chip reads on a bar. */
-const hollowValue = (h: HollowSpec | undefined) => (h ? `חלול · ${mmToCm(h.bandMm)} ס״מ` : "מלא");
+const hollowValue = (h: HollowSpec | undefined, swallowed = false) => (h ? (swallowed ? `מלא · רצועה ${mmToCm(h.bandMm)} עמוקה מהצורה` : `חלול · ${mmToCm(h.bandMm)} ס״מ`) : "מלא");
+
+/** Whether a band this deep leaves nothing inside the shape, which is then drawn solid
+ *  (lib/studio/footprint.ts buildHollow — SH-12: a ⌀60 circle with a 53 cm band drew a "diamond" hole
+ *  while the panel said "חלול · 53"). */
+const bandSwallows = (outer: BuiltOutline, hollow: HollowSpec | undefined) => !!hollow && buildHollow(outer, hollow)[0] === outer;
 
 /** Solid or hollow (HollowSpec), and how hollow: the band's depth, the sides left open, and — on a
  *  band that runs all the way round — an entrance cut through it. Shared by the base shape and a
@@ -405,6 +411,10 @@ function HollowFields({
   // Only sides this outline has — a spec from before a corner was taken away may name one that is gone.
   const open = (hollow?.openSides ?? []).filter((i) => i < names.length);
   const gap = hollow?.gapMm ?? 0;
+  // A band as deep as the largest circle the shape holds leaves nothing inside (SH-12): the field
+  // stops there, and a band already past it says the shape is drawn solid.
+  const maxBandCm = Math.max(1, Math.floor(inradiusOf(flatRing(outer)) / 10));
+  const swallowed = bandSwallows(outer, hollow);
   return (
     <div className="space-y-2.5">
       <Segmented
@@ -421,6 +431,7 @@ function HollowFields({
               id={`${idPrefix}-band`}
               decimals={0}
               min={1}
+              max={maxBandCm}
               commitOnBlur
               value={mmToCm(hollow.bandMm)}
               onChange={(v) => {
@@ -429,6 +440,7 @@ function HollowFields({
               className="w-20"
             />
           </PanelRow>
+          {swallowed && <Note>{`הרצועה עמוקה כמו הצורה עצמה ולא נשאר בה חלל — הצורה מצוירת מלאה. רצועה חלולה בצורה הזו: עד ${maxBandCm} ס״מ.`}</Note>}
           <div>
             <span className={fieldLabelClassName}>צדדים פתוחים</span>
             <div className="grid grid-cols-2 gap-1" role="group" aria-label="צדדים פתוחים">
@@ -1572,6 +1584,8 @@ function ShapePanel({
   // ring — do not apply to a face.
   const ringShape = front ? null : ringShapeOf(part.shape);
   const ringSpec = ringShape ? ringSpecOf(part.widthMm || DEFAULT_PRESET_MM.w, part.depthMm || DEFAULT_PRESET_MM.h, part.ring, ringShape) : null;
+  // The outline a band is cut in: the shape as it stands on the canvas — a front shape's FACE (a frame).
+  const fillOuter = front ? frontFace(part.shape, { ...part, hollow: undefined }).pieces[0] : placedPartOutline(part);
   return (
     <>
       {front && (
@@ -1825,12 +1839,11 @@ function ShapePanel({
         </FoldRow>
       )}
       {canHollow(part.shape) && !part.open && !part.revolve && (
-        <FoldRow {...group(groups, "fill")} icon={Donut} title="מילוי" summary={hollowValue(part.hollow)}>
+        <FoldRow {...group(groups, "fill")} icon={Donut} title="מילוי" summary={hollowValue(part.hollow, bandSwallows(fillOuter, part.hollow))}>
           {/* The shape's sides named as it stands on the canvas, turn included. */}
           <HollowFields
             idPrefix={`${id}-hollow`}
-            // A front shape's band is cut in its FACE (a frame), so its sides are the face's.
-            outer={front ? frontFace(part.shape, { ...part, hollow: undefined }).pieces[0] : placedPartOutline(part)}
+            outer={fillOuter}
             hollow={part.hollow}
             defaultBand={(() => {
               const b = front ? frontFace(part.shape, { ...part, hollow: undefined }) : sampledBounds([hollowOuter(part.shape, part)]);
