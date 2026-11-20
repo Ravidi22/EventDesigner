@@ -26,6 +26,9 @@ export interface CarriedItem {
   widthMm: number;
   depthMm: number;
   solid?: string;
+  /** Its footprint is a circle — held off other things as one (lib/studio/collide.ts), not as the
+   *  square round it. */
+  round?: boolean;
   /** Where it lands is decided by what is UNDER the pointer — a centrepiece by the table, a drape by
    *  the wall — so its drop point must not be pulled onto an alignment line first: a candlestick let
    *  go near the seam of a head table was snapped onto the neighbouring table's edge and landed on
@@ -40,11 +43,12 @@ let carried: CarriedItem | null = null;
 /** What the canvas needs to know about an item it is about to receive — by drag, or by the click
  *  of an item armed on the rail, which asks the same questions of the same product. */
 export function carriedOf(product: Product): CarriedItem {
-  const b = footprintBounds(resolveFootprint(product));
+  const f = resolveFootprint(product);
+  const b = footprintBounds(f);
   // `solid` rides along for the same reason the size does: the DROP is the first moment the canvas
   // could otherwise know what it is being handed, and by then the deck has already landed on top of
   // another one (lib/studio/collide.ts).
-  return { productId: product.id, widthMm: b.w, depthMm: b.h, solid: solidKind(product), landing: landingOf(product) };
+  return { productId: product.id, widthMm: b.w, depthMm: b.h, solid: solidKind(product), landing: landingOf(product), ...(f.kind === "circle" ? { round: true } : {}) };
 }
 
 /** See CarriedItem.landing. A composite lands as its parts about the point, like anything free. */
@@ -111,5 +115,7 @@ if (isMain(import.meta.url)) {
   assert(carriedOf(row("tables")).solid === TABLE_SOLID, "a table carried off the rail is solid as the plan's tables are");
   assert(carriedOf(row("stage-decks")).solid === "stage" && carriedOf(row("stages")).solid === "stage", "a deck and a stage are one kind of solid");
   assert(carriedOf(row("sofas")).solid === "sofas", "every other floor category is solid against its own");
+  const round = { ...row("tables"), dimensions: { diameterMm: 1800, heightMm: 750 }, appearance: { shape: "circle" } } as unknown as Product;
+  assert(carriedOf(round).round === true && !carriedOf(row("tables")).round, "a round table is carried as round — held off the others as a circle");
   console.log("drag-payload self-check passed");
 }

@@ -1484,7 +1484,15 @@ export function CanvasStage({
    *  no history, so nothing is exempt: it may not land overlapping at all. */
   const clearedDrop = (p: Point, carried: CarriedItem | null = carriedItem()): Point => {
     if (!carried?.solid) return p;
-    const box: SolidBox = { x: p.x, y: p.y, widthMm: carried.widthMm, depthMm: carried.depthMm, solid: carried.solid };
+    const box: SolidBox = {
+      x: p.x,
+      y: p.y,
+      widthMm: carried.widthMm,
+      depthMm: carried.depthMm,
+      solid: carried.solid,
+      // A round one is held off as the circle it is, not as the square round it.
+      ...(carried.round ? { shape: { round: true, rotation: 0, widthMm: carried.widthMm, depthMm: carried.depthMm } } : {}),
+    };
     const clear = pushApart([box], solidObstacles([]));
     return { x: p.x + clear.x, y: p.y + clear.y };
   };
