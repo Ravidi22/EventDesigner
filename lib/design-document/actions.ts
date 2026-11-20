@@ -352,7 +352,7 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
         ...doc,
         tables: doc.tables.map((t) => {
           if (t.id !== action.id) return t;
-          const { diameterMm: _d, widthMm: _w, depthMm: _dp, seats: _s, sizeMm: _z, blockedSides: _b, ...kept } = t;
+          const { diameterMm: _d, widthMm: _w, depthMm: _dp, seats: _s, sizeMm: _z, blockedSides: _b, footprint: _f, ...kept } = t;
           return { ...kept, ...action.table, ...(action.position ? { position: action.position } : {}) };
         }),
       };
@@ -1751,7 +1751,7 @@ if (isMain(import.meta.url)) {
     // A swap keeps the table and replaces only what described its old catalog row.
     const dressed: DesignDocumentContent = {
       ...wide,
-      tables: [{ ...wide.tables[0], number: 7, seats: 10, seated: 8, blockedSides: [0], groupId: "g", style: { fill: "#fff" } }],
+      tables: [{ ...wide.tables[0], number: 7, seats: 10, seated: 8, blockedSides: [0], groupId: "g", style: { fill: "#fff" }, footprint: { kind: "ellipse", widthMm: 2400, depthMm: 1200 } }],
     };
     const round = apply(dressed, {
       type: "retypeTable",
@@ -1760,6 +1760,7 @@ if (isMain(import.meta.url)) {
     }).tables[0];
     assert(round.type === "עגול 150" && round.variantId === "round-150" && round.diameterMm === 1500, "a swap takes the new row's type and size");
     assert(round.seats === 12 && !("widthMm" in round) && !("sizeMm" in round) && !("blockedSides" in round), "…drops the old row's size, stretch and blocked sides");
+    assert(!("footprint" in round), "…and a row-less table's own shape (a venue table no row matched): its row draws it now");
     assert(round.number === 7 && round.seated === 8 && round.groupId === "g" && round.style?.fill === "#fff", "…and keeps its number, occupancy, group and look");
     const seatless = apply(dressed, { type: "retypeTable", id: "t", table: { type: "בר", variantId: "bar", widthMm: 600, depthMm: 600 } });
     assert(!("seats" in seatless.tables[0]), "a row with no seats leaves no stale chair count behind");

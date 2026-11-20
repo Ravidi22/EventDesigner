@@ -9,7 +9,7 @@ import type { BenchSpec, ChairRows, DesignDocumentContent, DesignTable, Placemen
 import { NEW_BLOCK, chairRowsCount, chairRowsLayout, chairRowsMove, cleanRows } from "@/lib/design-document/chair-rows";
 import { carriedRowsOf, rowsTool, rowsToolId } from "@/lib/studio/drag-payload";
 import { emptyDocument } from "@/lib/design-document/types";
-import { layoutTables } from "@/lib/venues/venue-table";
+import { wantsLayout, withLayout } from "@/lib/venues/venue-table";
 import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
 import { saveDocument } from "@/lib/studio/actions";
@@ -302,7 +302,7 @@ export function StudioScreen({
 }) {
   // Held once here, for the whole studio: it fills the rail below AND primes the synchronous cache
   // that the canvas's resolver and dropProduct() read during render and mid-drag.
-  const { products: catalog, installStageBasics, installStageParts, save: saveProduct, remove: removeCatalogRow } = useCatalog(initialProducts);
+  const { products: catalog, ready: catalogReady, error: catalogError, installStageBasics, installStageParts, save: saveProduct, remove: removeCatalogRow } = useCatalog(initialProducts);
   // A new catalog item made from the rail (its "+"), so a client asking for something the catalog
   // lacks does not end the meeting. The form is the catalog's own drawer; in the meeting's passes it
   // opens without anything a client must not see, and offers only the categories this pass's rail
@@ -513,22 +513,31 @@ export function StudioScreen({
     // What is already on the server, so the first render after a restore doesn't write it straight
     // back. Against localStorage that redundant save was free; it is a round trip now.
     saves.restore(saved ?? null);
-    // THE VENUE'S DEFAULT TABLE LAYOUT (lib/venues/venue-table.ts): an event's drawing that is still
-    // empty — beginEvent writes every new one empty — starts with the venue's tables as its OWN,
-    // matched to this studio's rows, in ONE undo entry (Ctrl+Z takes them away), and marked so a
-    // sketch cleared of them on purpose is never filled again. The scratch drawing has no venue's.
-    const blank = !saved || (saved.tables.length === 0 && saved.placements.length === 0);
-    if (event && blank && !saved?.layoutAdopted && plan.layoutTables.length) {
-      // Marked underneath too: undone, the empty drawing is saved as offered, never filled again.
-      const base = { ...(saved ?? emptyDocument()), layoutAdopted: true as const };
-      const { tables, unmatched } = layoutTables(plan.layoutTables, catalog, { newId: uid, variantOf: defaultVariantId });
-      setHistory(dispatch(initHistory(base), { type: "loadDocument", content: { ...base, tables } }));
-      showHint(`נטענו ${tables.length} השולחנות של המקום${unmatched ? ` · ${unmatched} בלי פריט תואם בקטלוג` : ""} — Ctrl+Z מבטל`);
-    }
     setRestored(true);
     // `plan` is derived from `workspace` (useMemo above), so it is current whenever this runs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, workspace]);
+
+  // THE VENUE'S DEFAULT TABLE LAYOUT (lib/venues/venue-table.ts) for a drawing never offered it — a
+  // new event's is seeded with it on the server (beginEvent); this is an event from before that, or
+  // one whose venue was picked since. The venue's tables become the drawing's OWN, matched to this
+  // studio's rows, in ONE undo entry (Ctrl+Z takes them away), marked underneath too, so a sketch
+  // cleared of them on purpose — or undone — is never filled again. Only once the catalog has really
+  // been READ (SK-4): matched against one still loading, or one that failed, every table arrived
+  // unmatched and the mark kept it from ever being matched again. Once per screen, on the drawing as
+  // it stands then. The scratch drawing has no venue's.
+  const layoutOffered = useRef(false);
+  useEffect(() => {
+    if (!restored || layoutOffered.current || !catalogReady || catalogError) return;
+    layoutOffered.current = true;
+    const event = workspace?.event;
+    if (!event || !plan.layoutTables.length || !wantsLayout(doc)) return;
+    const { base, content, unmatched } = withLayout(doc, plan.layoutTables, catalog, { newId: uid, shades: event.shades, footprintOf: featureFootprint });
+    setHistory(dispatch(initHistory(base), { type: "loadDocument", content }));
+    showHint(`נטענו ${content.tables.length} השולחנות של המקום${unmatched ? ` · ${unmatched} בלי פריט תואם בקטלוג` : ""} — Ctrl+Z מבטל`);
+    // Run when the drawing is restored or the catalog lands — not on every edit after.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restored, catalogReady, catalogError]);
 
   // גווני האירוע: every default shade on this screen (defaultVariantId — a drop, a swap, a table)
   // prefers the event's palette. Cleared on the way out so another event never inherits it.

@@ -9,6 +9,7 @@ import type { Rail } from "../studio/rail";
 import type { Border } from "../catalog/border";
 import type { AislePlacement } from "../catalog/aisle";
 import type { EdgeCurve } from "../studio/hall";
+import type { Footprint } from "../studio/footprint";
 
 export type Layer = "table" | "floor" | "ceiling";
 
@@ -64,6 +65,12 @@ export interface DesignTable {
    *  (Product.resize) — a banquet run laid out to the length of the room. The bounding box of its
    *  shape, like Placement.sizeMm. Absent = the catalog's size, which is every table ever drawn. */
   sizeMm?: { widthMm: number; depthMm: number };
+  /** The shape a table with NO catalog row is drawn, seated and hit as — a venue's half-round, oval or
+   *  hand-drawn table that matched none of the studio's rows (lib/venues/venue-table.ts), in its own
+   *  frame, its box `widthMm` × `depthMm`. Absent = the circle or rectangle its numbers describe, which
+   *  is every other row-less table; a table WITH a row is always drawn by its row (and a swap to one
+   *  drops this). */
+  footprint?: Footprint;
   /** The group this table belongs to, if the designer pushed several together and said they are one
    *  table now. A grouped table draws NO number of its own — the group carries the one number they
    *  share — and the chairs go round the outside of the lot rather than into the seam between two

@@ -152,6 +152,8 @@ export function tableFootprint(table: DesignTable): Footprint {
   // At the size it was stretched to, when its catalog row allows that (Product.resize) — the
   // chairs, the snap box and the printed map all read the table through here.
   if (product) return sizedFootprint(product, table.sizeMm);
+  // A venue's shaped table no row matched keeps the shape it was drawn in (lib/venues/venue-table.ts).
+  if (table.footprint) return table.footprint;
   if (table.diameterMm) return { kind: "circle", diameterMm: table.diameterMm };
   return { kind: "rect", widthMm: table.widthMm ?? 0, depthMm: table.depthMm ?? 0 };
 }
