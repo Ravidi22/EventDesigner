@@ -7,6 +7,8 @@ import { useMemo, useState } from "react";
 import { CanvasStage, type SelectionRef } from "@/app/(app)/studio/canvas-stage";
 import { eventPlan } from "@/lib/events/plan";
 import { primeCatalog } from "@/lib/catalog/storage";
+import { seatLookups } from "@/lib/studio/catalog-resolver";
+import { seatCount } from "@/lib/design-document/seat-count";
 import { ALL_PLANES_VISIBLE } from "@/lib/studio/planes";
 import type { HallSketch } from "@/lib/event-links/types";
 
@@ -21,7 +23,8 @@ export function HallSketchView({ sketch }: { sketch: HallSketch }) {
     return true;
   });
   const plan = useMemo(() => eventPlan({ venueId: sketch.venueId ?? undefined, zoneIds: sketch.zoneIds }, sketch.geometry), [sketch]);
-  const seats = sketch.content.tables.reduce((n, t) => n + (t.seats ?? 0), 0);
+  // Everyone who sits — at the tables, on the banquettes, on the sofas (lib/design-document/seat-count.ts).
+  const seats = seatCount(sketch.content, seatLookups).total;
 
   return (
     <div className="relative min-h-[70dvh] flex-1 overflow-hidden rounded-md bg-surface shadow-floating">

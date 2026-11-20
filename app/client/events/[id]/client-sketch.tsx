@@ -22,7 +22,8 @@ import type { DesignDocumentContent, DesignTable, Point } from "@/lib/design-doc
 import { eventPlan } from "@/lib/events/plan";
 import { primeCatalog } from "@/lib/catalog/storage";
 import type { Product } from "@/lib/catalog/types";
-import { defaultVariantId, resolve } from "@/lib/studio/catalog-resolver";
+import { defaultVariantId, resolve, seatLookups } from "@/lib/studio/catalog-resolver";
+import { seatCount } from "@/lib/design-document/seat-count";
 import { copySelection, pasteInto } from "@/lib/studio/clipboard";
 import { ALL_PLANES_VISIBLE } from "@/lib/studio/planes";
 import { tableBox } from "@/components/footprint-shape";
@@ -179,7 +180,8 @@ export function ClientSketchView({ sketch }: { sketch: ClientSketch }) {
   const marks = useMemo(() => (showDelta && proposal ? deltaMarks(changes, doc, { focused }) : []), [showDelta, proposal, changes, doc, focused]);
   const extraOverlay = useCallback((ctx: { mm: (px: number) => number }) => (marks.length ? <SketchDelta marks={marks} mm={ctx.mm} /> : null), [marks]);
 
-  const seats = doc.tables.reduce((n, t) => n + (t.seats ?? 0), 0);
+  // Everyone who sits — at the tables, on the banquettes, on the sofas (lib/design-document/seat-count.ts).
+  const seats = seatCount(doc, seatLookups).total;
   const twice = useMemo(() => duplicateNumbers(doc), [doc]);
 
   // ── selection ───────────────────────────────────────────────────────────────────────────────

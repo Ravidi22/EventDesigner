@@ -20,9 +20,9 @@ import { ALL_PLANES_VISIBLE, PLANES, type Plane } from "@/lib/studio/planes";
 import type { Point } from "@/lib/studio/hall";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { benchOf, coverOn, deckOf, defaultVariantId, firstVariantId, primeEventShades, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
-import { BENCH_TABLE_DEPTH_MM, benchIsNumbered, benchSideRows, patchBenchSide, standaloneBench, standaloneBenchSeats } from "@/lib/design-document/bench";
-import { sofaSeats } from "@/lib/catalog/sofa";
-import { sofaOf } from "@/lib/studio/catalog-resolver";
+import { BENCH_TABLE_DEPTH_MM, benchIsNumbered, benchSideRows, patchBenchSide, standaloneBench } from "@/lib/design-document/bench";
+import { seatLookups } from "@/lib/studio/catalog-resolver";
+import { seatCount } from "@/lib/design-document/seat-count";
 import { productById } from "@/lib/catalog/storage";
 import type { Composition, Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
@@ -91,7 +91,6 @@ import {
   edgeKind,
   fillGaps,
   itemAt,
-  benchSeats,
   rehomeEdgeItems,
   tidyEdgeItems,
   stageAreaMm2,
@@ -3815,29 +3814,9 @@ export function StudioScreen({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [armedId]);
 
-  /** Everyone the plan seats: at its tables (a group of tables as the one table it is), on its
-   *  banquettes — the stages' and the standalone ones, chairs and sofa seats alike — and on its sofas
-   *  (lib/catalog/sofa.ts); a sofa, or a banquette's sofa side, that is not seating is left out. */
-  const seating = useMemo(() => {
-    let tables = 0;
-    // …and how many of the tables' places are spoken for — a block's as the one table it is.
-    let seated = 0;
-    for (const u of numberedUnits(doc)) {
-      if (u.kind === "group") {
-        tables += groupSeats(doc, u.id);
-        seated += groupSeated(doc, u.id);
-      } else if (u.kind === "table") {
-        const t = doc.tables.find((x) => x.id === u.tableIds[0]);
-        tables += t?.seats ?? 0;
-        seated += t?.seated ?? 0;
-      }
-    }
-    // A standalone banquette's own typed note (BenchSpec.seated) — its seats are in the places below,
-    // so its people are in `seated` too, or the summary reads two bases. (A stage's edge banquette
-    // carries no such note: `seated` is a standalone banquette's only.)
-    for (const p of doc.placements) if (p.bench?.seated && standaloneBench(p, benchOf)) seated += p.bench.seated;
-    return { tables, seated, benches: benchSeats(doc.placements, deckOf) + standaloneBenchSeats(doc.placements, benchOf), sofas: sofaSeats(doc.placements, sofaOf) };
-  }, [doc]);
+  /** Everyone the plan seats — at its tables, on its banquettes, on its sofas — as every sheet and the
+   *  quote count them (lib/design-document/seat-count.ts). */
+  const seating = useMemo(() => seatCount(doc, seatLookups), [doc]);
 
   /** Every bare stretch of open edge covered with `kind` — a flight or a banquette where there is
    *  floor in front of it, else a barrier. */
@@ -6309,10 +6288,10 @@ export function StudioScreen({
                     key: "seating",
                     icon: Armchair,
                     title: "ישיבה",
-                    summary: `${seating.seated}/${seating.tables + seating.benches + seating.sofas} מושבים`,
+                    summary: `${seating.seated}/${seating.total} מושבים`,
                     body: (
                       <>
-                        <FactRow label="מקומות ישיבה" value={seating.tables + seating.benches + seating.sofas} />
+                        <FactRow label="מקומות ישיבה" value={seating.total} />
                         {seating.benches > 0 && <FactRow label="מהם על בנקטים" value={seating.benches} />}
                         {seating.sofas > 0 && <FactRow label="מהם על ספות" value={seating.sofas} />}
                         <FactRow label="שולחנות" value={doc.tables.length} />

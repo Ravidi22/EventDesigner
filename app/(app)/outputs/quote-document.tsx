@@ -95,7 +95,8 @@ export interface QuoteDocumentProps {
   /** A page's own photo (COVER_PHOTO…), chosen or picked by default; null = none. */
   pagePhoto: (key: string) => QuotePhoto | null;
   palette: QuotePalette;
-  /** Tables as the client counts them (a joined block is one) and the seats round them. */
+  /** Tables as the client counts them (a joined block is one) and everyone who sits — at the tables,
+   *  on the banquettes, on the sofas (lib/design-document/seat-count.ts). */
   seating: { tables: number; seats: number };
   sketches: QuoteSketch[];
   /** "A1B2C3-4" once issued; null = not issued (nothing printed in its place). */
@@ -266,7 +267,7 @@ function eventFacts({ event, venueName, seating }: Parts) {
   const zones = event?.zonesLabel ?? "";
   const place = [venueName, zones && zones !== venueName ? zones : null].filter(Boolean).join(" · ");
   const guests = event?.guests ?? 0;
-  const tables = seating.tables > 0 ? `${seating.tables} ${seating.tables === 1 ? "שולחן" : "שולחנות"}${seating.seats > 0 ? ` · ${seating.seats} מקומות` : ""}` : "";
+  const tables = [seating.tables > 0 ? `${seating.tables} ${seating.tables === 1 ? "שולחן" : "שולחנות"}` : "", seating.seats > 0 ? `${seating.seats} מקומות` : ""].filter(Boolean).join(" · ");
   return {
     client: event?.clientName?.trim() ?? "",
     date,
@@ -671,7 +672,7 @@ function StudioCover({ t, g, photo, ...p }: CoverProps) {
       ["מקום", f.venue],
       ["אזורים", p.event?.zonesLabel && p.event.zonesLabel !== f.venue ? p.event.zonesLabel : ""],
       ["אורחים", p.event?.guests ? String(p.event.guests) : ""],
-      ["שולחנות", f.tables],
+      [p.seating.tables > 0 ? "שולחנות" : "מקומות", f.tables],
     ] as [string, string][]
   ).filter(([, v]) => v);
   const lines = nameLines(f.client || "");

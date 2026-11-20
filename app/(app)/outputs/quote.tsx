@@ -39,7 +39,8 @@ import { loadProducts } from "@/lib/catalog/storage";
 import { chairOf, defaultChair } from "@/lib/catalog/chairs";
 import { catalogShades, shadeKey } from "@/lib/catalog/shades";
 import { isRunner } from "@/lib/catalog/categories";
-import { resolve } from "@/lib/studio/catalog-resolver";
+import { resolve, seatLookups } from "@/lib/studio/catalog-resolver";
+import { seatCount } from "@/lib/design-document/seat-count";
 import { formatPrice } from "@/lib/catalog/format";
 import { panelGroup as G, type PanelGroup } from "@/components/end-panel";
 import { GroupLine } from "@/components/doc-shell";
@@ -222,7 +223,8 @@ export function Quote({
     vatIncluded: settings?.pricesIncludeVat ?? true,
     hidden: hiddenCount,
   });
-  const seating = useMemo(() => ({ tables: numberedUnits(doc).length, seats: doc.tables.reduce((n, t) => n + (t.seats ?? 0), 0) }), [doc]);
+  // Everyone who sits — at the tables, on the banquettes, on the sofas (lib/design-document/seat-count.ts).
+  const seating = useMemo(() => ({ tables: numberedUnits(doc).length, seats: seatCount(doc, seatLookups).total }), [doc]);
 
   // ── The sketch: one drawing per zone with something in it ─────────────────────────────────────
   const sketches: QuoteSketch[] = useMemo(() => {

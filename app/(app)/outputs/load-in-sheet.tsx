@@ -8,6 +8,7 @@ import { fetchLoadIn, type LoadInFacts } from "@/lib/production/actions";
 import { packingList } from "@/lib/outputs/aggregate";
 import { itemLookup } from "@/lib/outputs/lookup";
 import { seatingSummary } from "@/lib/outputs/table-kits";
+import { seatLookups } from "@/lib/studio/catalog-resolver";
 import { chairOf, defaultChair } from "@/lib/catalog/chairs";
 import { formatAmount } from "@/lib/catalog/format";
 import { useVenues } from "@/lib/venues/use-venues";
@@ -80,12 +81,13 @@ export function LoadInSheet({
     ...(event.contact2Name || event.contact2Phone ? [{ name: event.contact2Name || "איש קשר נוסף", phone: event.contact2Phone ?? "" }] : []),
   ].filter((c) => c.phone || c.name);
 
+  const seated = seatingSummary(doc, seatLookups, { detail: true });
   const facts2: [string, string][] = [
     ["תאריך האירוע", event.date ? `${formatEventDate(event.date)}${event.time ? ` · ${event.time}` : ""}` : "טרם נקבע"],
     ["יום ההקמה", event.setupDate ? formatEventDate(event.setupDate) : "ביום האירוע"],
     ["מקום", place || "—"],
     ["אורחים", event.guests ? String(event.guests) : "—"],
-    ...(seatingSummary(doc) ? ([["שולחנות ומקומות", seatingSummary(doc)]] as [string, string][]) : []),
+    ...(seated ? ([["שולחנות ומקומות", seated]] as [string, string][]) : []),
     ...(event.eventType ? ([["סוג האירוע", event.eventType]] as [string, string][]) : []),
   ];
 

@@ -30,7 +30,7 @@ import { EMPTY_PLAN, eventPlan, type EventPlan } from "@/lib/events/plan";
 import { useEventWorkspace } from "@/lib/events/use-workspace";
 import { recordExport, type ExportType, type Spares } from "@/lib/outputs/actions";
 import { PLAN_SHEETS, sheetHasContent } from "@/lib/outputs/sheets";
-import { resolve } from "@/lib/studio/catalog-resolver";
+import { resolve, seatLookups } from "@/lib/studio/catalog-resolver";
 import { vesselOf } from "@/lib/catalog/vessel";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { useCatalog } from "@/lib/catalog/use-catalog";
@@ -716,7 +716,7 @@ export function OutputsScreen({
             eventDate={event?.date ? new Date(event.date).toLocaleDateString("he-IL", { day: "numeric", month: "long", year: "numeric" }) : undefined}
             zones={event ? zonesLabelOf(event) : ""}
             guests={event?.guests}
-            summary={seatingSummary(doc)}
+            summary={seatingSummary(doc, seatLookups, { detail: true })}
             kits={kits.length}
             version={version}
             printed={today}
@@ -751,7 +751,7 @@ export function OutputsScreen({
             sheetNumber={pg.n}
             railingAboveMm={railingAboveMm}
             letters={sheet.tables === "full" ? letters : undefined}
-            summary={sheet.tables === "full" ? seatingSummary(z.doc) || undefined : undefined}
+            summary={sheet.tables === "full" ? seatingSummary(z.doc, seatLookups) || undefined : undefined}
             mono={mono}
             // Colour = every element filled by its kind, named in the sheet's legend (KEY in
             // placement-map.tsx); B&W = the same by grey.

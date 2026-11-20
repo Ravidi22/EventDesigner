@@ -6,12 +6,12 @@
 // lib/scene/floor-kinds.ts, both draw them by `sofaCushionCount` from here, so the number a sofa is
 // counted by is the number of cushions anyone can see on it).
 //
-// WHO COUNTS THEM. The studio's seating readout ("ישיבה" in the sketch's panel) adds every sofa
-// standing on the plan to the tables' and the banquettes' places — unless the placement says it is
-// not seating (Placement.notSeating, the bar's "לא נספר כישיבה": a lounge corner the guests are not
-// seated at). Opting out changes the COUNT only. A sofa packs no chairs and is quoted as the one row
-// it is, as before; the outputs' seating summary and the quote's cover count tables only (the user's
-// call whether they should count sofas and banquettes too).
+// WHO COUNTS THEM. Every count of the people a drawing seats (lib/design-document/seat-count.ts: the
+// studio's "ישיבה" readout, the sheets' seating summary, the quote's cover, the client's and the
+// venue's sketch pages) adds every sofa standing on the plan to the tables' and the banquettes' places
+// — unless the placement says it is not seating (Placement.notSeating, the bar's "לא נספר כישיבה": a
+// lounge corner the guests are not seated at). Opting out changes the COUNT only. A sofa packs no
+// chairs and is quoted as the one row it is, as before.
 //
 // Pure, no DOM, self-checked: `npm run check:sofa`.
 import type { Placement } from "@/lib/design-document/types";

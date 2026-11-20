@@ -14,6 +14,7 @@ import { tableAreaMm2 } from "./geometry";
 import { catalogBox, sizedFootprint } from "./footprint";
 import { deckTypeOf, type DeckLookup } from "@/lib/design-document/stage";
 import type { BenchLookup } from "@/lib/design-document/bench";
+import type { SeatLookups } from "@/lib/design-document/seat-count";
 import { SOFA_CATEGORY, sofaSeatsOf, type SofaLookup } from "@/lib/catalog/sofa";
 import { isRailed } from "./rail";
 import { AISLE_CATEGORY, AISLE_PIECE_FIELD, aisleLayout, aisleRowBox, aisleSpecOf, canBeAislePiece, mergedAisle, type AisleLayout, type AislePlacement, type AisleSpec } from "@/lib/catalog/aisle";
@@ -92,6 +93,10 @@ export const sofaOf: SofaLookup = (p) => {
   if (!r || r.product.category !== SOFA_CATEGORY) return null;
   return sofaSeatsOf(r.product, p.sizeMm ?? catalogBox(r.product));
 };
+
+/** The catalog as the seat count asks it (lib/design-document/seat-count.ts) — every surface that
+ *  says how many sit in a drawing passes this, so the studio, the sheets and the quote agree. */
+export const seatLookups: SeatLookups = { deckOf, benchOf, sofaOf };
 
 /** Which placements are BLOCKS OF CHAIRS IN ROWS (Placement.rows, lib/design-document/chair-rows.ts):
  *  a `chairs` row standing on the floor — not on a table, a stage or a banquette — with rows set. And

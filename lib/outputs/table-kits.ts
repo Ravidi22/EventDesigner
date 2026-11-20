@@ -13,6 +13,7 @@
 import type { DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";
 import { byUnitOrder, numberedUnits, type NumberedUnit } from "../design-document/groups";
 import { isMain } from "../self-check";
+import { besideTablesWords, seatCount, type SeatLookups } from "../design-document/seat-count";
 
 export const KIT_LETTERS = "אבגדהוזחטיכלמנסעפצקרשת";
 
@@ -82,14 +83,19 @@ export function tableKits(doc: DesignDocumentContent, vesselOf?: (p: Placement) 
     }));
 }
 
-/** "24 שולחנות · 240 מקומות" — counted over numbered units (a block is one table) and the tables'
- *  own seat counts, which is what the chairs on the plan are drawn from. Empty when there are no
- *  tables, so a sheet with nothing to count prints no cell for it. */
-export function seatingSummary(doc: DesignDocumentContent): string {
+/** "24 שולחנות · 240 מקומות" — the tables counted over numbered units (a block is one table), the
+ *  places as everyone who sits in the drawing (lib/design-document/seat-count.ts: the tables, the
+ *  banquettes and the sofas — the studio's readout's number). `detail` adds where the places that are
+ *  not at a table are, "(מהם 20 על ספות ובנקטים)" — for a sheet with room for it, never a title-block
+ *  cell. Empty when nobody sits and there are no tables, so a sheet with nothing to count prints no
+ *  cell for it. */
+export function seatingSummary(doc: DesignDocumentContent, lookups: SeatLookups, opts: { detail?: boolean } = {}): string {
   const units = numberedUnits(doc).length;
-  if (units === 0) return "";
-  const seats = doc.tables.reduce((n, t) => n + (t.seats ?? 0), 0);
-  return `${units} ${units === 1 ? "שולחן" : "שולחנות"}${seats ? ` · ${seats} מקומות` : ""}`;
+  const c = seatCount(doc, lookups);
+  if (units === 0 && c.total === 0) return "";
+  const rest = c.benches + c.sofas;
+  const places = c.total ? `${c.total} מקומות${opts.detail && rest > 0 ? ` (מהם ${rest} ${besideTablesWords(c)})` : ""}` : "";
+  return [units ? `${units} ${units === 1 ? "שולחן" : "שולחנות"}` : "", places].filter(Boolean).join(" · ");
 }
 
 const num = (n: number) => (n === 0 ? "ראש" : String(n));
@@ -154,6 +160,7 @@ if (isMain(import.meta.url)) {
       chip("8", "g1", "vase", 2),
     ],
   } as unknown as DesignDocumentContent;
+  const NO_CATALOG: SeatLookups = { deckOf: () => undefined, benchOf: () => null, sofaOf: () => null };
   const kits = tableKits(doc);
   const head = kits.find((k) => k.units.some((u) => u.number === 0))!;
   assert(head.letter === "א" && head.recommended, "the head table (number 0) sorts first and is suggested for a detail");
@@ -166,8 +173,27 @@ if (isMain(import.meta.url)) {
   const letters = kitLetters(kits);
   assert(letters.get("a") === letters.get("b") && letters.get("g2") === letters.get("g1"), "a kit's letter lands on every member table");
   assert(new Set(kits.map((k) => k.letter)).size === kits.length, "letters are unique");
-  assert(seatingSummary(doc) === "6 שולחנות", "a block counts as one table");
-  assert(seatingSummary({ ...doc, tables: [] }) === "", "no tables, no summary");
+  assert(seatingSummary(doc, NO_CATALOG) === "6 שולחנות", "a block counts as one table");
+  assert(seatingSummary({ ...doc, tables: [] }, NO_CATALOG) === "", "no tables, no summary");
+
+  // Everyone who sits is counted — at the tables, on the banquettes, on the sofas (seat-count.ts), the
+  // same number as the studio's readout; a printed line may say where the rest sit.
+  {
+    const seats: SeatLookups = {
+      deckOf: () => undefined,
+      benchOf: (p) => (p.variantId === "bench" ? { widthMm: 3000, depthMm: 450 } : null),
+      sofaOf: (p) => (p.variantId === "sofa" ? 3 : null),
+    };
+    const floor = (id: string, variantId: string, extra = {}) => ({ id, layer: "floor", variantId, quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1, ...extra });
+    const lounge = {
+      ...doc,
+      tables: [t("a", 1, { seats: 10 })],
+      placements: [floor("b", "bench"), floor("s", "sofa", { quantity: 2 }), floor("x", "sofa", { notSeating: true })],
+    } as unknown as DesignDocumentContent;
+    assert(seatingSummary(lounge, seats) === "1 שולחן · 21 מקומות", "a table, a banquette and two sofas are 21 places");
+    assert(seatingSummary(lounge, seats, { detail: true }) === "1 שולחן · 21 מקומות (מהם 11 על ספות ובנקטים)", "…and the detailed line says where 11 of them sit");
+    assert(seatingSummary({ ...lounge, tables: [] }, seats) === "11 מקומות", "no tables but sofas: the places alone");
+  }
 
   // A table out of the numbering: still a table, in a kit, counted — never a head table, never a number.
   {
@@ -176,7 +202,7 @@ if (isMain(import.meta.url)) {
     const vaseKit = gk.find((k) => k.units.some((u) => u.tableIds.includes("gift")))!;
     assert(vaseKit.units[vaseKit.units.length - 1].unnumbered === true, "an unnumbered table joins the kit its dressing matches, listed last");
     assert(!gk.find((k) => k.letter === "א")!.units.some((u) => u.unnumbered), "…and its stored 0 does not make it the head table");
-    assert(seatingSummary(gift) === "7 שולחנות", "…and it is counted as a table");
+    assert(seatingSummary(gift, NO_CATALOG) === "7 שולחנות", "…and it is counted as a table");
     assert(tablesPhrase(vaseKit.units) === "שולחן 3 ועוד אחד ללא מספר", "its phrase counts it rather than numbering it");
   }
 

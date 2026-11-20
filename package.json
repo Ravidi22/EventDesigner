@@ -92,6 +92,7 @@
     "check:stage": "tsx lib/design-document/stage.ts",
     "check:bench": "tsx lib/design-document/bench.ts",
     "check:sofa": "tsx lib/catalog/sofa.ts",
+    "check:seat-count": "tsx lib/design-document/seat-count.ts",
     "check:stage-draw": "tsx lib/studio/stage-draw.ts",
     "check:edge-runs": "tsx lib/design-document/edge-runs.ts",
     "db:seed": "tsx lib/db/seed.ts",
