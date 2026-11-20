@@ -2073,7 +2073,11 @@ export function stageCorners(stage: StageBuild, deckOf: DeckLookup): CornerPiece
         for (let k = treadMm; k < d - 1; k += treadMm) {
           treads.push([at(k, 0), at(k, k)], [at(0, k), at(k, k)]);
         }
-      out.push({ kind, level, polygon: [c, at(d, 0), at(d, d), at(0, d)], treads, depthMm: d, treadMm, ...(s1.outer ? { outer: true } : {}) });
+      // A banquette corner is as deep as EACH run it meets — out along each normal by that run's own
+      // depth — so two of different depths leave no notch (QA BQ-10). `depthMm` stays the lesser, the
+      // figure the quote adds.
+      const [d1, d2] = kind === "bench" ? [s1.depthMm, s2.depthMm] : [d, d];
+      out.push({ kind, level, polygon: [c, at(d1, 0), at(d1, d2), at(0, d2)], treads, depthMm: d, treadMm, ...(s1.outer ? { outer: true } : {}) });
     }
   }
   return out;
@@ -3335,6 +3339,14 @@ if (isMain(import.meta.url)) {
     "a corner between stairs and a banquette stays open",
   );
   assert(corners[0].polygon.every((q) => Math.abs(q.x) >= 2999 || Math.abs(q.y) >= 1999), "…and a corner piece stands outside the stage");
+  // QA BQ-10: two banquettes of different depths meet at a corner piece as deep as EACH of them —
+  // no notch where the deeper one stops.
+  const twoDepths = { ...down.stage, stairs: [0, 1].map((e) => ({ id: `b${e}`, kind: "bench" as const, edge: e, t: 0.5, widthMm: 0, full: true, bench: { depthMm: e === 0 ? 600 : 900 } })) };
+  const deepCorner = stageCorners(twoDepths, deckOf);
+  assert(deepCorner.length === 1, "two banquettes meeting outside a corner get one corner piece");
+  const cp = deepCorner[0].polygon;
+  const sideLens = cp.map((q, i) => Math.round(Math.hypot(cp[(i + 1) % 4].x - q.x, cp[(i + 1) % 4].y - q.y))).sort((a, b) => a - b);
+  assert(sideLens.join(",") === "600,600,900,900", `…its sides the two banquettes' depths, 60 and 90 (${sideLens.join(",")})`);
   assert(stageAreaMm2(down.stage) === 24e6, "a 6×4 stage is 24m² of deck");
 
   // ── Drawn, or built by hand: the same stage.
