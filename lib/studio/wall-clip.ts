@@ -41,6 +41,30 @@ export const WALL_CLIP_TOL_MM = 2;
  *  13 m hall, and a stage drawn square to the room beside it reaches that far into its line. */
 export const WALL_TOUCH_MM = 25;
 
+/** A wall within this of a stage side's direction is the SAME LINE traced a hair off, however long
+ *  the side: the band along that side grows by what the wall can drift over it (side length ×
+ *  tan of this). A fixed millimetre band works only for the venue it was measured on — a 30 m wall
+ *  traced 0.1° off drifts 52 mm. Measured 2026-11-20 on every venue in develop: tracing errors are all
+ *  under 0.1°, the walls drawn at a real angle 4° or more, so 0.5° sits clear of both. A wall at a
+ *  real angle keeps the strict WALL_TOUCH_MM band. */
+export const WALL_TRACE_TOL_DEG = 0.5;
+const TRACE_TAN = Math.tan((WALL_TRACE_TOL_DEG * Math.PI) / 180);
+
+/** How much wider the touching band along the side p→q is for the wall a→b: the drift a wall
+ *  traced within WALL_TRACE_TOL_DEG of the side can make over its length, else nothing. */
+function traceSlack(p: Point, q: Point, a: Point, b: Point): number {
+  const sx = q.x - p.x;
+  const sy = q.y - p.y;
+  const wx = b.x - a.x;
+  const wy = b.y - a.y;
+  const ls = Math.hypot(sx, sy);
+  const lw = Math.hypot(wx, wy);
+  if (ls < 1e-9 || lw < 1e-9) return 0;
+  // |sin| of the angle between the two lines, either way round.
+  const sin = Math.abs(sx * wy - sy * wx) / (ls * lw);
+  return sin <= Math.sin((WALL_TRACE_TOL_DEG * Math.PI) / 180) ? ls * TRACE_TAN : 0;
+}
+
 /** Every wall of the venue as a polyline in the room: a straight wall its two ends, a bowed wall its
  *  curve cut into chords. A zone's "edge" line is a boundary on paper, not a wall (nearestWall skips
  *  it too). */
@@ -88,10 +112,11 @@ export function clipToWalls(from: Point, to: Point, walls: readonly (readonly Po
   const uy = (to.y - from.y) / len;
   const along = (p: Point) => (p.x - from.x) * ux + (p.y - from.y) * uy;
   const across = (p: Point) => ux * (p.y - from.y) - uy * (p.x - from.x);
-  const band = WALL_TOUCH_MM;
   let best = Infinity;
   for (const w of walls) {
     for (let i = 0; i + 1 < w.length; i++) {
+      // A wall traced a hair off the side's line drifts along it: the band widens with the side.
+      const band = WALL_TOUCH_MM + traceSlack(from, to, w[i], w[i + 1]);
       const sa = along(w[i]);
       const sb = along(w[i + 1]);
       const ha = across(w[i]);
@@ -267,7 +292,9 @@ function reachesIn(outline: readonly Point[], a: Point, b: Point, r: number): bo
   const n = outline.length;
   const near: [number, number][] = [];
   for (let k = 0; k < n; k++) {
-    const s = nearStretch(a, b, outline[k], outline[(k + 1) % n], r);
+    const p = outline[k];
+    const q = outline[(k + 1) % n];
+    const s = nearStretch(a, b, p, q, r + traceSlack(p, q, a, b));
     if (s) near.push(s);
   }
   near.sort((x, y) => x[0] - y[0]);
@@ -355,6 +382,16 @@ if (isMain(import.meta.url)) {
     assert(c.x === q.x && c.y === q.y, `a side drawn along a 50° wall from a corner rounded onto it is not cut short (start ${k})`);
   }
   assert(crossesWalls([{ x: 0, y: 0 }, { x: 3000, y: 0 }, { x: 3000, y: 6000 }, { x: 0, y: 6000 }], [[{ x: 0, y: 0 }, { x: 105, y: 6000 }]]), "a wall a whole degree off square, 10 cm into the stage, still crosses it");
+
+  // ── WORKS FOR EVERY VENUE (2026-11-20, the user: "should work to all"): the band along a side a
+  // wall is traced a hair off grows with the side, so no fixed millimetre figure has to fit them all.
+  const long: Point[][] = [[{ x: 0, y: 0 }, { x: Math.round(30000 * Math.tan((0.3 * Math.PI) / 180)), y: 30000 }]]; // 157 mm over 30 m
+  assert(!crossesWalls([{ x: 0, y: 0 }, { x: 5000, y: 0 }, { x: 5000, y: 30000 }, { x: 0, y: 30000 }], long), "a 30 m stage along a wall traced 0.3° off (157 mm) does not cross it");
+  const alongLong = clipToWalls({ x: 0, y: 0 }, { x: 0, y: 30000 }, long, -1);
+  assert(alongLong.y === 30000, `…and a side drawn all along it is not cut short (${alongLong.y})`);
+  const real4: Point[][] = [[{ x: 0, y: 0 }, { x: Math.round(9100 * Math.tan((4 * Math.PI) / 180)), y: 9100 }]]; // אמרה's 4° wall
+  assert(crossesWalls([{ x: 0, y: 0 }, { x: 3000, y: 0 }, { x: 3000, y: 9100 }, { x: 0, y: 9100 }], real4), "a wall at a real angle (4°) still crosses a stage drawn square past it");
+  assert(crossesWalls([{ x: 0, y: 0 }, { x: 4000, y: 0 }, { x: 4000, y: 10000 }, { x: 0, y: 10000 }], [[{ x: 500, y: 1000 }, { x: 500, y: 9000 }]]), "a wall parallel to a side but half a metre inside the stage still crosses it");
 
   // A wall that ENDS on a side — a T, as where a garden wall meets the hall — touches the stage when
   // it comes from outside, and crosses it only when its body goes in.
