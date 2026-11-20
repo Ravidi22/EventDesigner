@@ -54,6 +54,9 @@ export interface ScenePaneProps {
   onClose: () => void;
   /** What the pane says with no subject. */
   emptyText: string;
+  /** How far above the canvas's foot the pane stands, px — the host's bar below it, measured, so the
+   *  pane never covers the bar's end and its ✕ (SH-15). Absent = 64, as before. */
+  bottomPx?: number;
 }
 
 /** The room a subject builds, once it has SETTLED: the subject is held as a snapshot that changes
@@ -71,7 +74,7 @@ export function useSettledScene(subject: SceneSubject | null): { scene: Scene | 
   return { scene: built?.scene ?? null, focus: built?.focus ?? null, pending: !!subject && settled.key !== key };
 }
 
-export function ScenePane({ subject, open, onClose, emptyText }: ScenePaneProps) {
+export function ScenePane({ subject, open, onClose, emptyText, bottomPx = 64 }: ScenePaneProps) {
   const { scene, focus, pending } = useSettledScene(subject);
   const [device] = useState(() => (typeof window !== "undefined" ? detectDevice() : undefined));
   const viewpoints = useMemo(() => (focus ? [focus] : []), [focus]);
@@ -123,8 +126,8 @@ export function ScenePane({ subject, open, onClose, emptyText }: ScenePaneProps)
   return (
     <div
       ref={box}
-      className={"absolute bottom-16 end-3 z-30 overflow-hidden rounded-md border border-border bg-surface shadow-floating " + (open ? "" : "invisible pointer-events-none")}
-      style={{ width: widthPx, height: Math.round(widthPx * ASPECT) }}
+      className={"absolute end-3 z-30 overflow-hidden rounded-md border border-border bg-surface shadow-floating " + (open ? "" : "invisible pointer-events-none")}
+      style={{ width: widthPx, height: Math.round(widthPx * ASPECT), bottom: bottomPx }}
       aria-hidden={!open}
       data-scene-pane={open ? "open" : "hidden"}
     >

@@ -2055,6 +2055,17 @@ export function AppearanceModal({
   // its shaders compile once for this editing session.
   const [scene3d, setScene3d] = useState(false);
   const [sceneMounted, setSceneMounted] = useState(false);
+  // The quick bar's height, so the 3D pane stands above it and never covers its end and its ✕ — a
+  // wide bar wraps to two rows (SH-15). Measured on resize only, never per pointer move.
+  const barRef = useRef<HTMLDivElement>(null);
+  const [barH, setBarH] = useState(44);
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setBarH(Math.round(el.getBoundingClientRect().height)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const toggleScene = () => {
     setSceneMounted(true);
     setScene3d((v) => !v);
@@ -2605,6 +2616,10 @@ export function AppearanceModal({
     e.stopPropagation();
   };
 
+  // The 3D pane sees a shape being redrawn point by point as it is now (SH-4) — it showed the points
+  // only after סיום. The pane lets the subject settle before it builds, so a point dragged builds once.
+  const sceneShapes = drawingPart && !stretch ? shapesWithDrawing() : shapes;
+  const scenePreview: Product = sceneShapes === shapes ? preview : sceneShapes.length ? { ...draft, ...lookOf(draft, sceneShapes) } : draft;
   const missing = !stretch && shapes.length === 0;
   const save = () => {
     const list = drawingPart ? shapesWithDrawing() : shapes;
@@ -3385,10 +3400,11 @@ export function AppearanceModal({
                 its popovers (z-40). Hidden, never unmounted, once opened. */}
             {sceneMounted && !stretch && (
               <ScenePane
-                subject={shapes.length ? { key: itemSceneKey(preview), build: () => itemScene(preview) } : null}
+                subject={sceneShapes.length ? { key: itemSceneKey(scenePreview), build: () => itemScene(scenePreview) } : null}
                 open={scene3d}
                 onClose={() => setScene3d(false)}
                 emptyText="אין עדיין צורה להציג"
+                bottomPx={Math.max(64, 16 + barH + 8)}
               />
             )}
 
@@ -3397,7 +3413,7 @@ export function AppearanceModal({
                 selected — the item itself: the first shape's size and the item's height, the same
                 numbers as the form. Everything else about a selection is in the side panel. */}
             <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center">
-              <div className="pointer-events-auto max-w-full">
+              <div ref={barRef} className="pointer-events-auto max-w-full">
                 {drawingPart ? (
                   <DrawingBar ed={partEd} isNew={drawingPart.isNew} onCancel={cancelDrawing} onFinish={finishDrawing} />
                 ) : one && side ? (
