@@ -20,6 +20,8 @@ import {
   type SketchTemplateSummary,
 } from "@/lib/studio/sketches";
 import { fetchVenueGeometry, fetchVenues } from "@/lib/venues/actions";
+import { featureFootprint } from "@/lib/venues/structure";
+import { wantsLayout, withLayout } from "@/lib/venues/venue-table";
 import type { VenueGeometry } from "@/lib/venues/types";
 import type { PlanSheet } from "@/lib/outputs/sheets";
 import { PlacementMap } from "@/app/(app)/outputs/placement-map";
@@ -75,6 +77,18 @@ export function SketchPickStage({ onDone }: { onDone: () => void }) {
   const venueId = event?.venueId ?? null;
   const current = workspace?.document?.content ?? null;
   const hasDrawing = !isEmpty(current);
+  // THE VENUE'S TABLES (lib/venues/venue-table.ts) for a drawing never offered them — a new event's
+  // is seeded with them already; this is one made before that, or whose venue was picked since. The
+  // first card shows them and says so, and "המשך" writes that very drawing (QA 2026-11-20, SK-9: it
+  // promised "דף חלק — מתחילים מאפס" and wrote nothing, and the hall stage then filled itself with
+  // the venue's tables). Only off a catalog that was really read — the studio's own rule.
+  const venueLayout = useMemo(() => {
+    if (!event || !workspace || !catalog.ready || catalog.error || !wantsLayout(current)) return null;
+    const plan = eventPlan(event, workspace.geometry);
+    if (!plan.layoutTables.length) return null;
+    const base = current ?? emptyDocument(workspace.geometry.mmPerUnit);
+    return withLayout(base, plan.layoutTables, catalog.products, { newId: () => crypto.randomUUID(), shades: event.shades, footprintOf: featureFootprint }).content;
+  }, [event, workspace, current, catalog.ready, catalog.error, catalog.products]);
 
   useEffect(() => {
     let live = true;
@@ -155,13 +169,16 @@ export function SketchPickStage({ onDone }: { onDone: () => void }) {
 
   const write = async () => {
     if (!event) return;
-    if (!sketch) return onDone();
-    if (!result) return;
+    const calibration = current?.calibration ?? { mmPerUnit: workspace?.geometry.mmPerUnit ?? 1 };
+    // A picked sketch, as its boxes leave it — or, on the first card, the venue's tables it shows.
+    // Anything already drawn is kept as it is: nothing to write.
+    const doc = sketch ? (result ? { ...result, calibration } : null) : venueLayout;
+    if (sketch && !doc) return;
+    if (!doc) return onDone();
     setBusy(true);
     setError(null);
     try {
-      const calibration = current?.calibration ?? { mmPerUnit: workspace?.geometry.mmPerUnit ?? 1 };
-      await saveDocument(event.id, { ...result, calibration });
+      await saveDocument(event.id, doc);
       onDone();
     } catch {
       setError("לא ניתן לשמור את הסקיצה. נסו שוב.");
@@ -176,7 +193,9 @@ export function SketchPickStage({ onDone }: { onDone: () => void }) {
 
   // The stage renders only once the catalog is in (below), and categoryOf reads its primed cache —
   // so the memos above that classify placements need no catalog dependency.
-  const firstDoc = current && hasDrawing ? current : emptyDocument();
+  const firstDoc = venueLayout ?? (current && hasDrawing ? current : emptyDocument());
+  // What the first card is: the drawing as it stands, the venue's tables, or a blank page.
+  const firstTitle = hasDrawing ? "הסקיצה הנוכחית" : venueLayout ? "שולחנות המתחם" : "דף חלק";
   const elsewhere = !!(sketch?.venueId && sketch.venueId !== venueId);
   const lines = source ? layerLines(source, ticked) : null;
   const counts = current ? `${current.tables.length} שולחנות, ${current.placements.length} פריטים` : "";
@@ -186,7 +205,9 @@ export function SketchPickStage({ onDone }: { onDone: () => void }) {
       <div className="grid gap-6 rounded-md bg-surface p-6 shadow-floating lg:grid-cols-[minmax(0,1fr)_380px]">
         <section className="min-w-0">
           <h2 className="font-display text-h2 text-ink">מאיפה מתחילים?</h2>
-          <p className="mb-4 mt-1 text-sm text-muted">בחרו סקיצה שמורה להתחיל ממנה{hasDrawing ? ", או המשיכו עם מה שכבר מצויר." : ", או דף חלק."}</p>
+          <p className="mb-4 mt-1 text-sm text-muted">
+            בחרו סקיצה שמורה להתחיל ממנה{hasDrawing ? ", או המשיכו עם מה שכבר מצויר." : venueLayout ? ", או התחילו מהשולחנות של המתחם." : ", או דף חלק."}
+          </p>
           {sketches.length > 0 && (
             <div className="mb-4 w-full max-w-sm">
               <Segmented
@@ -203,8 +224,13 @@ export function SketchPickStage({ onDone }: { onDone: () => void }) {
             </div>
           )}
           <div className="grid grid-cols-2 gap-4 xl:grid-cols-3">
-            <Card on={picked === FIRST} onPick={() => pick(FIRST)} title={hasDrawing ? "הסקיצה הנוכחית" : "דף חלק"} meta={hasDrawing ? counts : "מתחילים מאפס"}>
-              {hasDrawing ? (
+            <Card
+              on={picked === FIRST}
+              onPick={() => pick(FIRST)}
+              title={firstTitle}
+              meta={hasDrawing ? counts : venueLayout ? `${venueLayout.tables.length} שולחנות, כפי שהמתחם מסדר אותם` : "מתחילים מאפס"}
+            >
+              {hasDrawing || venueLayout ? (
                 <SketchPlan doc={firstDoc} venue={eventRoom} />
               ) : (
                 <span className="flex h-full items-center justify-center text-faint">
@@ -261,7 +287,7 @@ export function SketchPickStage({ onDone }: { onDone: () => void }) {
             />
           )}
           <div>
-            <div className="text-lg font-bold text-ink">{sketch ? sketch.name : hasDrawing ? "הסקיצה הנוכחית" : "דף חלק"}</div>
+            <div className="text-lg font-bold text-ink">{sketch ? sketch.name : firstTitle}</div>
             <div className="text-sm text-muted">
               {sketch
                 ? sketch.venueId
@@ -269,7 +295,9 @@ export function SketchPickStage({ onDone }: { onDone: () => void }) {
                   : "ללא מתחם"
                 : hasDrawing
                   ? "ממשיכים עם מה שכבר מצויר"
-                  : "הסקיצה תתחיל ריקה — רק המתחם עצמו"}
+                  : venueLayout
+                    ? "הסקיצה תתחיל עם השולחנות של המתחם — אפשר להזיז, להוסיף ולמחוק"
+                    : "הסקיצה תתחיל ריקה — רק המתחם עצמו"}
             </div>
           </div>
           {elsewhere && (
