@@ -8,8 +8,9 @@
 // category registry (which pulls lucide-react) and node-runnable.
 // Run: npm run check:csv
 import type { Layer } from "../design-document/types";
-import { PRICE_UNIT_LABEL, STOCK_KIND_LABEL, type Product } from "./types";
+import { PRICE_UNIT_LABEL, STOCK_KIND_LABEL, type PriceUnit, type Product, type StockKind } from "./types";
 import { flowerSummary } from "./flowers";
+import { productProblem } from "./product-values";
 import { isMain } from "../self-check";
 
 const COLS: Record<string, string> = {
@@ -20,12 +21,68 @@ const COLS: Record<string, string> = {
   "עומק": "depth", depth: "depth",
   "גובה": "height", height: "height",
   "מחיר": "price", price: "price",
+  // The rest of the export's own columns (HEADER below), so a sheet exported, edited and imported
+  // again keeps what its prices and its stock MEAN (QA 2026-11-20, PR-5: a curtain at 80 למטר, rented,
+  // came back 80 per item, owned, its cost gone). The derived ones (שווי מלאי) and the ones that name
+  // other rows (ספק, גוונים, פרחים) are still typed in the drawer.
+  "סוג מלאי": "stockKind", "stock kind": "stockKind",
+  "כמות במלאי": "stockQty", "stock": "stockQty",
+  "תמחור לפי": "priceUnit", "price unit": "priceUnit",
+  "עלות": "cost", cost: "cost",
+  "יחידת הזמנה": "orderUnit", "order unit": "orderUnit",
+  "מקדם הזמנה": "orderFactor", "order factor": "orderFactor",
+  "תגיות": "tags", tags: "tags",
+  "מפרט": "spec", spec: "spec",
 };
+
+/** A header as the sheet wrote it, to the name COLS knows: "רוחב (ס״מ)" — the form the import's own
+ *  notice suggests — is "רוחב" (QA PR-9: it was ignored, and every width with it). */
+const headerKey = (h: string) =>
+  h
+    .replace(/[([][^)\]]*[)\]]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+/** A number as a spreadsheet writes it — "1,200", "₪1,500", " 45.5" — `undefined` for an empty cell,
+ *  and `null` for a cell that holds something else ("12,5", "$40", "abc"). Never a guess (QA PR-9):
+ *  parseFloat read "1,200" as 1 and "₪1,500" as nothing, and a misread number is worse than a line
+ *  refused with its reason. */
+export function csvNumber(raw: string | undefined): number | null | undefined {
+  if (raw === undefined) return undefined;
+  const s = raw
+    .replace(/[‎‏‪-‮⁦-⁩]/g, "")
+    .replace(/₪|ש["״]ח|\bnis\b|\bils\b/gi, "")
+    .replace(/[\s   ]/g, "");
+  if (s === "") return undefined;
+  const plain = /^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s) ? s.replace(/,/g, "") : s;
+  return /^-?(\d+\.?\d*|\.\d+)$/.test(plain) ? Number(plain) : null;
+}
+
+/** "תמחור לפי" as written — the export's label ('למ"ר', with either quote mark) or the key. */
+function csvPriceUnit(raw: string): PriceUnit | null {
+  const s = raw.replace(/["״׳']/g, "").replace(/\s+/g, "").toLowerCase();
+  const byWord: Record<string, PriceUnit> = { ליחידה: "unit", יחידה: "unit", unit: "unit", למטר: "m", מטר: "m", m: "m", למר: "m2", מר: "m2", m2: "m2" };
+  return byWord[s] ?? null;
+}
+
+/** "סוג מלאי" as written — the export's label or the key. */
+function csvStockKind(raw: string): StockKind | null {
+  const s = raw.trim();
+  const hit = (Object.entries(STOCK_KIND_LABEL) as [StockKind, string][]).find(([k, label]) => label === s || k === s.toLowerCase());
+  return hit ? hit[0] : null;
+}
 
 export interface CsvCategory {
   id: string;
   label: string;
   defaultLayer: Layer;
+  /** What a NEW row of the category starts as (CategoryDef) — an imported line with no answer of its
+   *  own gets the same seeds a row made in the drawer does (QA PR-5: an imported arrangement was
+   *  "owned", so it never reached the florist's order). */
+  defaultStock?: StockKind;
+  defaultPriceUnit?: PriceUnit;
+  defaultHeightMm?: number;
   /** A built-in-only category (CategoryDef.builtIn): a studio's import refuses rows in it. */
   builtIn?: true;
   /** A supplier's category (CategoryDef.supplierOnly — cut stems): a studio's import refuses rows in it. */
@@ -98,7 +155,7 @@ export function parseCsvImport(
   const rows = splitCsvRows(text);
   const refused: string[] = [];
   if (rows.length < 2) return { products: [], refused };
-  const header = rows[0].map((h) => COLS[h.trim().toLowerCase()] ?? "");
+  const header = rows[0].map((h) => COLS[headerKey(h)] ?? "");
   // An old name first, the live labels over it: a label in use today always wins over a retired one.
   const byLabel = new Map([...categories.flatMap((c) => (c.aliases ?? []).map((a) => [a, c] as const)), ...categories.map((c) => [c.label, c] as const)]);
   const byId = new Map(categories.map((c) => [c.id, c]));
@@ -109,27 +166,82 @@ export function parseCsvImport(
       if (key) row[key] = (cells[i] ?? "").trim();
     });
     if (!row.name) continue;
-    const cat = byLabel.get(row.category) ?? byId.get(row.category) ?? categories[0];
+    const refuse = (why: string) => refused.push(`שורה ${index + 2} (${row.name}): ${why}`);
+    // A category the catalog does not know — a typo, an empty cell, a name it never had — refuses the
+    // line (QA PR-4: it used to be filed under the first category, as a table, without a word).
+    const cat = row.category ? (byLabel.get(row.category) ?? byId.get(row.category)) : undefined;
+    if (!cat) {
+      refuse(row.category ? `אין בקטלוג קטגוריה בשם "${row.category}".` : "חסרה קטגוריה.");
+      continue;
+    }
     if (!isSupplier && cat.builtIn) {
-      refused.push(`שורה ${index + 2} (${row.name}): "${cat.label}" היא קטגוריה מובנית — יש בקטלוג פריט אחד כזה, ועורכים אותו שם.`);
+      refuse(`"${cat.label}" היא קטגוריה מובנית — יש בקטלוג פריט אחד כזה, ועורכים אותו שם.`);
       continue;
     }
     if (!isSupplier && cat.supplierOnly) {
-      refused.push(`שורה ${index + 2} (${row.name}): "${cat.label}" היא קטגוריה של ספקים — פרחים נבחרים בשורות המפרט של סידור פרחים.`);
+      refuse(`"${cat.label}" היא קטגוריה של ספקים — פרחים נבחרים בשורות המפרט של סידור פרחים.`);
       continue;
     }
-    const num = (v?: string) => (v && !isNaN(parseFloat(v)) ? Math.round(parseFloat(v) * 10) : undefined);
-    out.push({
+    // Every number read as written, or the line refused with the column and the cell (QA PR-9).
+    let wrong = false;
+    const read = (key: string, word: string): number | undefined => {
+      const n = csvNumber(row[key]);
+      if (n === null) {
+        refuse(`ב"${word}" כתוב "${row[key]}" — זה לא מספר.`);
+        wrong = true;
+      } else if (n !== undefined && n < 0) {
+        refuse(`"${word}" לא יכול להיות שלילי (${row[key]}).`);
+        wrong = true;
+      }
+      return n ?? undefined;
+    };
+    const mm = (key: string, word: string) => {
+      const cm = read(key, word);
+      return cm === undefined ? undefined : Math.round(cm * 10);
+    };
+    const dimensions = { diameterMm: mm("diameter", "קוטר"), widthMm: mm("width", "רוחב"), depthMm: mm("depth", "עומק"), heightMm: mm("height", "גובה") ?? cat.defaultHeightMm ?? 0 };
+    const unitPrice = read("price", "מחיר");
+    const costPrice = read("cost", "עלות");
+    const stockQty = read("stockQty", "כמות במלאי");
+    const orderFactor = read("orderFactor", "מקדם הזמנה");
+    if (wrong) continue;
+    // What its prices and stock mean: the sheet's word, else what the category starts a new row as.
+    const priceUnit = row.priceUnit ? csvPriceUnit(row.priceUnit) : (cat.defaultPriceUnit ?? "unit");
+    if (!priceUnit) {
+      refuse(`"תמחור לפי" — "${row.priceUnit}" אינו ${Object.values(PRICE_UNIT_LABEL).join(" / ")}.`);
+      continue;
+    }
+    const stockKind = row.stockKind ? csvStockKind(row.stockKind) : (cat.defaultStock ?? "owned");
+    if (!stockKind) {
+      refuse(`"סוג מלאי" — "${row.stockKind}" אינו ${Object.values(STOCK_KIND_LABEL).join(" / ")}.`);
+      continue;
+    }
+    const product: Product = {
       id: makeId(),
       name: row.name,
       category: cat.id,
       layer: cat.defaultLayer,
-      dimensions: { diameterMm: num(row.diameter), widthMm: num(row.width), depthMm: num(row.depth), heightMm: num(row.height) ?? 0 },
+      dimensions,
       categoryFields: {},
-      unitPrice: row.price && !isNaN(parseFloat(row.price)) ? parseFloat(row.price) : undefined,
-      styleTags: [],
+      unitPrice,
+      ...(priceUnit !== "unit" ? { priceUnit } : {}),
+      ...(stockKind !== "owned" ? { stockKind } : {}),
+      ...(stockQty !== undefined ? { stockQty } : {}),
+      ...(costPrice !== undefined ? { costPrice } : {}),
+      ...(row.orderUnit ? { orderUnit: row.orderUnit } : {}),
+      ...(orderFactor ? { orderFactor } : {}),
+      ...(row.spec ? { spec: row.spec } : {}),
+      styleTags: row.tags ? [...new Set(row.tags.split("·").map((t) => t.trim()).filter(Boolean))] : [],
       variants: [],
-    });
+    };
+    // …and the values no row may be stored with, by the rule the server holds (a fractional count, a
+    // size past a kilometre): refused here by line, where it would refuse the whole file there.
+    const problem = productProblem(product);
+    if (problem) {
+      refuse(problem);
+      continue;
+    }
+    out.push(product);
   }
   return { products: out, refused };
 }
@@ -292,7 +404,7 @@ if (isMain(import.meta.url)) {
   assert(supplier.products.length === 3 && supplier.refused.length === 0, "a supplier imports every row");
 
   // ── the quoted forms the naive split used to break on ────────────────────────────────────────
-  const tricky = parseCsvProducts('שם,מפרט\n"רהיט ""מיוחד""","שתי\nשורות"\n', cats, id);
+  const tricky = parseCsvProducts('שם,מפרט,קטגוריה\n"רהיט ""מיוחד""","שתי\nשורות",כיסאות\n', cats, id);
   assert(tricky.length === 1, "a newline inside quotes is not a second product");
   assert(tricky[0].name === 'רהיט "מיוחד"', "doubled quotes unescape to one");
   assert(splitCsvRows('a,"b,c",d\n')[0].length === 3, "a quoted comma is not a delimiter");
@@ -355,6 +467,45 @@ if (isMain(import.meta.url)) {
   assert(back[0].dimensions.widthMm === 450 && back[0].unitPrice === 30, "…with its measurements and price");
   assert(back[1].category === "tablecloths", "…and its category, matched by label");
   assert(inventoryFileName(new Date("2026-08-30T09:00:00Z")) === "eve-inventory-2026-08-30.csv", "dated filename");
+
+  // ── QA 2026-11-20 ──────────────────────────────────────────────────────────────────────────────
+  const full: CsvCategory[] = [
+    { id: "tables", label: "שולחנות", defaultLayer: "floor", defaultHeightMm: 750 },
+    { id: "chairs", label: "כיסאות", defaultLayer: "floor" },
+    { id: "curtains", label: "ווילונות", defaultLayer: "ceiling" },
+    { id: "flower-arrangements", label: "פרחים", defaultLayer: "table", defaultStock: "consumable" },
+    { id: "drapes", label: "בדים", defaultLayer: "ceiling", defaultPriceUnit: "m" },
+  ];
+  const studioImport = (text: string) => parseCsvImport(text, full, id, { isSupplier: false });
+
+  // PR-4: an unknown, misspelled or empty category is refused by line — never filed as the first one.
+  const typo = studioImport("שם,קטגוריה\nכיסא,כסאות\nמשהו,\nשטיח פרסי,שטיח\nכיסא טוב,כיסאות\n");
+  assert(typo.products.length === 1 && typo.products[0].category === "chairs", "only the line with a real category is imported");
+  assert(typo.refused.length === 3 && typo.refused[0].includes("שורה 2") && typo.refused[0].includes("כסאות"), "a misspelled category is refused by line and name");
+  assert(typo.refused[1].includes("שורה 3") && typo.refused[1].includes("חסרה קטגוריה"), "…an empty one too");
+
+  // PR-9: numbers as a spreadsheet writes them; headers with units.
+  const money = studioImport('שם,קטגוריה,רוחב (ס״מ),עומק (ס"מ),גובה (ס״מ),מחיר (₪)\nשולחן אבירים,שולחנות,"1,200",120,75,"₪1,500"\n');
+  assert(money.products.length === 1 && money.products[0].dimensions.widthMm === 12000, `"1,200" is 1200 cm, under a header with its unit (${money.products[0]?.dimensions.widthMm})`);
+  assert(money.products[0].unitPrice === 1500 && money.products[0].dimensions.heightMm === 750, `"₪1,500" is 1500`);
+  const bad = studioImport('שם,קטגוריה,רוחב,מחיר\nשולחן,שולחנות,-180,10\nשולחן ב,שולחנות,"12,5",10\nשולחן ג,שולחנות,180,$40\nשולחן ד,שולחנות,180,40\n');
+  assert(bad.products.length === 1 && bad.products[0].name === "שולחן ד", "a negative, an ambiguous or a foreign number refuses its line");
+  assert(bad.refused.length === 3 && bad.refused[0].includes("שלילי") && bad.refused[1].includes("12,5") && bad.refused[2].includes("$40"), "…each said");
+  const huge = studioImport("שם,קטגוריה,רוחב\nשולחן,שולחנות,99999999\n");
+  assert(huge.products.length === 0 && huge.refused[0]?.includes("הרוחב"), "a size the server would refuse is refused by line here");
+
+  // PR-5: export → import keeps what prices and stock mean, and a new line gets its category's defaults.
+  const curtain = product({ name: "וילון שיפון", category: "curtains", layer: "ceiling", priceUnit: "m", unitPrice: 80, stockKind: "rented", costPrice: 35, orderUnit: "מטר", orderFactor: 1.5, styleTags: ["קלאסי", "זוהר"], spec: "שיפון לבן" });
+  const chair = product({ name: "כיסא", stockQty: 40, costPrice: 12.5, unitPrice: 30 });
+  const again = studioImport(CSV_BOM + productsToCsv([curtain, chair], full)).products;
+  assert(again.length === 2 && again[0].priceUnit === "m" && again[0].unitPrice === 80, "a price per metre comes back per metre");
+  assert(again[0].stockKind === "rented" && again[0].costPrice === 35 && again[0].orderUnit === "מטר" && again[0].orderFactor === 1.5, "…rented, with its cost and order unit");
+  assert(again[0].styleTags.join() === "קלאסי,זוהר" && again[0].spec === "שיפון לבן", "…its tags and spec");
+  assert(again[1].stockQty === 40 && again[1].costPrice === 12.5 && again[1].stockKind === undefined && again[1].priceUnit === undefined, "an owned chair comes back counted, owned and per unit");
+  const seeded = studioImport("שם,קטגוריה\nכיפת ורדים,פרחים\nבד תקרה,בדים\n").products;
+  assert(seeded[0].stockKind === "consumable" && seeded[1].priceUnit === "m", "a line with no stock kind or price unit gets its category's");
+  const unknownUnit = studioImport("שם,קטגוריה,תמחור לפי\nכיסא,כיסאות,לשעה\n");
+  assert(unknownUnit.products.length === 0 && unknownUnit.refused[0].includes("לשעה"), "an unknown price unit refuses the line rather than meaning something else");
 
   console.log("catalog/csv self-check passed");
 }
