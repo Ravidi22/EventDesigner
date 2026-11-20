@@ -447,11 +447,16 @@ export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
   table: "שולחן",
 };
 
-/** One wall standing in an old wall's place, and the share of the OLD wall's parameter it covers. */
+/** One wall standing in an old wall's place: the share of the OLD wall's parameter it covers
+ *  (`from`–`to`), and the stretch of the standing wall that share is, by ITS parameter (`u0`–`u1`,
+ *  absent = 0 and 1 — the whole of it; `u0 > u1` = it runs the other way). A split gives each half
+ *  whole; a join gives each old wall a stretch of the new one. */
 export interface WallPiece {
   wallId: string;
   from: number;
   to: number;
+  u0?: number;
+  u1?: number;
 }
 
 /** A wall that was split (or joined into another) lives on as this: its id, and the walls standing in

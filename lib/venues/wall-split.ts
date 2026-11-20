@@ -28,23 +28,195 @@ const sub = (p: Point, q: Point): Point => ({ x: p.x - q.x, y: p.y - q.y });
 const lerp = (p: Point, q: Point, t: number): Point => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t });
 const dist = (p: Point, q: Point) => Math.hypot(q.x - p.x, q.y - p.y);
 
-/** The walls standing where `id` stood, in order from its node a, each with the share of `id`'s
- *  parameter it covers — `[{ wall, 0, 1 }]` for a wall that was never split. Null when the id names
- *  nothing, or when any piece of its chain is gone (the old wall is gone, as a deleted wall is). */
-export function wallChain(s: VenueStructure, id: string, depth = 0): { wall: Wall; from: number; to: number }[] | null {
+/** One standing wall in a chain: the share `from`–`to` of the asked id's parameter it carries, and
+ *  where that share lies on the standing wall by its own parameter (`u0`–`u1`; `u0 > u1` = reversed). */
+export interface ChainLink {
+  wall: Wall;
+  from: number;
+  to: number;
+  u0: number;
+  u1: number;
+}
+
+/** The walls standing where `id` stood, in order from its node a — `[{ wall, 0, 1, 0, 1 }]` for a wall
+ *  that was never split. Null when the id names nothing, or when any piece of its chain is gone (the
+ *  old wall is gone, as a deleted wall is). */
+export function wallChain(s: VenueStructure, id: string, depth = 0): ChainLink[] | null {
   const wall = s.walls.find((w) => w.id === id);
-  if (wall) return [{ wall, from: 0, to: 1 }];
+  if (wall) return [{ wall, from: 0, to: 1, u0: 0, u1: 1 }];
   if (depth >= MAX_DEPTH) return null;
   const lineage = s.wallLineage?.find((l) => l.id === id);
   if (!lineage) return null;
-  const out: { wall: Wall; from: number; to: number }[] = [];
+  const out: ChainLink[] = [];
   for (const piece of lineage.chain) {
     const inner = wallChain(s, piece.wallId, depth + 1);
     if (!inner) return null;
-    const span = piece.to - piece.from;
-    for (const q of inner) out.push({ wall: q.wall, from: piece.from + q.from * span, to: piece.from + q.to * span });
+    // The piece is the stretch u0–u1 of `piece.wallId`, carrying from–to of `id`. Each inner link
+    // carries its own stretch of `piece.wallId`; the part of it inside u0–u1 is mapped across.
+    const u0 = piece.u0 ?? 0;
+    const u1 = piece.u1 ?? 1;
+    const lo = Math.min(u0, u1);
+    const hi = Math.max(u0, u1);
+    const toOld = (x: number) => piece.from + ((x - u0) / (u1 - u0)) * (piece.to - piece.from);
+    const parts: ChainLink[] = [];
+    for (const q of inner) {
+      const x0 = Math.max(lo, q.from);
+      const x1 = Math.min(hi, q.to);
+      if (x1 - x0 <= 1e-12) continue;
+      const onWall = (x: number) => q.u0 + ((x - q.from) / (q.to - q.from)) * (q.u1 - q.u0);
+      const [o0, o1] = [toOld(x0), toOld(x1)];
+      parts.push(o0 <= o1
+        ? { wall: q.wall, from: o0, to: o1, u0: onWall(x0), u1: onWall(x1) }
+        : { wall: q.wall, from: o1, to: o0, u0: onWall(x1), u1: onWall(x0) });
+    }
+    if (!parts.length) return null;
+    out.push(...parts.sort((m, n) => m.from - n.from));
   }
   return out.length ? out : null;
+}
+
+/** Where on wall `w` its own parameter `u` stands — the bezier's point on a bowed wall. */
+function pointOnWall(s: VenueStructure, w: Wall, u: number): Point | null {
+  const pts = wallPoints(s, w, nodeMap(s));
+  if (!pts) return null;
+  if (!w.curve) return lerp(pts.a, pts.b, u);
+  const { c1, c2 } = absoluteControlPoints(pts.a, pts.b, w.curve);
+  return cubicPointAt(pts.a, c1, c2, pts.b, u);
+}
+
+/** The walls meeting at `nodeId`. */
+const wallsAt = (s: VenueStructure, nodeId: string) => s.walls.filter((w) => w.a === nodeId || w.b === nodeId);
+const farEnd = (w: Wall, nodeId: string) => (w.a === nodeId ? w.b : w.a);
+
+/** Exactly two walls of one kind meet at `nodeId`, and they lead to two different corners — so taking
+ *  the point away leaves one wall. */
+export function joinable(s: VenueStructure, nodeId: string): boolean {
+  const at = wallsAt(s, nodeId);
+  return at.length === 2 && at[0].kind === at[1].kind && farEnd(at[0], nodeId) !== farEnd(at[1], nodeId);
+}
+
+/** Why two walls meeting at `nodeId` cannot be joined, when they are two and of different kinds. Null
+ *  otherwise — a corner of three walls is not refused, it is simply not a join (Delete keeps its old
+ *  rule there). */
+export function joinRefusal(s: VenueStructure, nodeId: string): string | null {
+  const at = wallsAt(s, nodeId);
+  return at.length === 2 && at[0].kind !== at[1].kind ? "קיר וגבול שטח לא מתחברים" : null;
+}
+
+/** The point at `nodeId` taken away: its two walls become one. When they are exactly one split's two
+ *  halves, the ORIGINAL wall comes back under its own id (its bow too, when the halves still draw
+ *  it) and the lineage entry goes. Otherwise a new wall, and each old id keeps naming its stretch of
+ *  it through a lineage entry. Openings keep their places. `straightened`: the join could not keep
+ *  what the two walls drew (a bow, or a bend at the corner). */
+export function joinWalls(s: VenueStructure, nodeId: string): { structure: VenueStructure; wallId: string; straightened: boolean } | { error: string } {
+  if (!joinable(s, nodeId)) return { error: joinRefusal(s, nodeId) ?? "אפשר לחבר רק נקודה ששני קירות נפגשים בה" };
+  const nodes = nodeMap(s);
+  const pair = wallsAt(s, nodeId);
+  // The first wall runs INTO the corner when either does, so the join keeps its direction.
+  const [w1, w2] = pair[0].b === nodeId ? pair : pair[1].b === nodeId ? [pair[1], pair[0]] : pair;
+  const aId = farEnd(w1, nodeId);
+  const bId = farEnd(w2, nodeId);
+  const a = nodes.get(aId)!;
+  const b = nodes.get(bId)!;
+  const n = nodes.get(nodeId)!;
+  const chord = dist(a, b);
+
+  // One split's two halves, untouched in direction → the original id.
+  const whole = s.wallLineage?.find(
+    (l) => l.chain.length === 2 && l.chain[0].wallId === w1.id && l.chain[1].wallId === w2.id && w1.b === nodeId && w2.a === nodeId &&
+      l.chain.every((p) => (p.u0 ?? 0) === 0 && (p.u1 ?? 1) === 1),
+  );
+
+  // What the joined wall draws: the old bow when the halves still draw it, else straight.
+  let curve: EdgeCurve | undefined;
+  let straightened = !!w1.curve || !!w2.curve || distToLine(n, a, b) > 1;
+  if (whole?.curve) {
+    const t = whole.chain[0].to;
+    const { c1, c2 } = absoluteControlPoints(a, b, whole.curve);
+    const { left, right } = splitCubic([a, c1, c2, b], t);
+    const same = (c: EdgeCurve | null | undefined, want: EdgeCurve) => !!c && Math.hypot(c.c1.x - want.c1.x, c.c1.y - want.c1.y) <= 1 && Math.hypot(c.c2.x - want.c2.x, c.c2.y - want.c2.y) <= 1;
+    const p = left[3];
+    if (dist(p, n) <= 1 && same(w1.curve, { c1: sub(left[1], a), c2: sub(left[2], p) }) && same(w2.curve, { c1: sub(right[1], p), c2: sub(right[2], b) })) {
+      curve = whole.curve;
+      straightened = false;
+    }
+  }
+
+  const id = whole ? whole.id : crypto.randomUUID();
+  const sameHeight = w1.heightMm === w2.heightMm ? w1.heightMm : undefined;
+  const joined: Wall = { id, a: aId, b: bId, kind: w1.kind, ...(sameHeight !== undefined ? { heightMm: sameHeight } : {}), ...(curve ? { curve } : {}) };
+
+  // Openings: by the old parameter when the bow came back, else projected onto the straight chord.
+  const tSplit = whole?.chain[0].to;
+  const entrances = s.entrances.map((e) => {
+    if (e.wallId !== w1.id && e.wallId !== w2.id) return e;
+    const w = e.wallId === w1.id ? w1 : w2;
+    const pts = wallPoints(s, w, nodes)!;
+    const u = e.distanceMm / dist(pts.a, pts.b);
+    if (curve && tSplit !== undefined) {
+      const t = w === w1 ? u * tSplit : tSplit + u * (1 - tSplit);
+      return { ...e, wallId: id, distanceMm: t * chord };
+    }
+    const m = pointOnWall(s, w, u)!;
+    const along = ((m.x - a.x) * (b.x - a.x) + (m.y - a.y) * (b.y - a.y)) / chord;
+    return { ...e, wallId: id, distanceMm: Math.max(0, Math.min(chord, along)) };
+  });
+
+  // Where the corner fell on the joined wall, for the old ids' shares.
+  const tm = Math.max(0, Math.min(1, ((n.x - a.x) * (b.x - a.x) + (n.y - a.y) * (b.y - a.y)) / (chord * chord)));
+  const share = (w: Wall, onFirst: boolean) => {
+    // `w` runs from its own a to its own b; on the joined wall that is a stretch [0, tm] or [tm, 1],
+    // in whichever direction w was drawn.
+    const [near, far] = onFirst ? [0, tm] : [tm, 1];
+    const forward = onFirst ? w.a === aId : w.a === nodeId;
+    return { id: w.id, chain: [{ wallId: id, from: 0, to: 1, u0: forward ? near : far, u1: forward ? far : near }] };
+  };
+  const lineage = (s.wallLineage ?? []).filter((l) => l !== whole);
+  if (!whole) lineage.push(share(w1, true), share(w2, false));
+
+  const index = Math.min(s.walls.indexOf(w1), s.walls.indexOf(w2));
+  const walls = s.walls.filter((w) => w !== w1 && w !== w2);
+  walls.splice(index, 0, joined);
+  return {
+    wallId: id,
+    straightened,
+    structure: {
+      ...s,
+      nodes: s.nodes.filter((x) => x.id !== nodeId),
+      walls,
+      entrances,
+      ...(lineage.length ? { wallLineage: lineage } : { wallLineage: undefined }),
+    },
+  };
+}
+
+function distToLine(p: Point, a: Point, b: Point): number {
+  const len = dist(a, b);
+  if (len === 0) return dist(p, a);
+  return Math.abs((b.x - a.x) * (a.y - p.y) - (a.x - p.x) * (b.y - a.y)) / len;
+}
+
+/** Corner `fromId` dropped on corner `intoId`: one corner with every wall of both. A wall that ran
+ *  between them collapses and goes, with its openings; a wall the merge doubles is kept once. */
+export function mergeNodes(s: VenueStructure, fromId: string, intoId: string): VenueStructure {
+  if (fromId === intoId) return s;
+  const seen = new Set<string>();
+  const walls: Wall[] = [];
+  for (const w of s.walls) {
+    const next = { ...w, a: w.a === fromId ? intoId : w.a, b: w.b === fromId ? intoId : w.b };
+    if (next.a === next.b) continue;
+    const key = [next.a, next.b].sort().join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    walls.push(w.a === next.a && w.b === next.b ? w : next);
+  }
+  const kept = new Set(walls.map((w) => w.id));
+  return {
+    ...s,
+    nodes: s.nodes.filter((n) => n.id !== fromId),
+    walls,
+    entrances: s.entrances.filter((e) => kept.has(e.wallId)),
+  };
 }
 
 /** A wall, or an old wall whose chain still stands — what "is this wall still there" means now. */
@@ -197,6 +369,63 @@ if (isMain(import.meta.url)) {
   // Dangling: one piece gone → the old id is gone, as a deleted wall is today.
   const gone: VenueStructure = { ...r.structure, walls: r.structure.walls.filter((w) => w.id !== left.wall.id) };
   assert(wallChain(gone, "w") === null && !hasWall(gone, "w"), "a chain with a piece gone resolves to nothing");
+
+  // ── Joining back ─────────────────────────────────────────────────────────────────────────────
+  const j = joinWalls(r.structure, r.nodeId);
+  if ("error" in j) throw new Error("FAIL: " + j.error);
+  assert(j.wallId === "w" && j.structure.walls.some((w) => w.id === "w" && w.a === "A" && w.b === "B" && w.heightMm === 2800), "joining a lineage's whole chain gives the ORIGINAL wall back");
+  assert(!j.structure.wallLineage?.some((l) => l.id === "w") && !j.straightened, "and drops the lineage entry, nothing straightened");
+  assert(j.structure.entrances[0].wallId === "w" && Math.abs(j.structure.entrances[0].distanceMm - 2000) < 1, "the door is back on the original, same place");
+  assert(!j.structure.nodes.some((n) => n.id === r.nodeId) && j.structure.walls.length === 2, "the corner and the halves are gone");
+
+  const jb = joinWalls(rb.structure, rb.nodeId);
+  if ("error" in jb) throw new Error("FAIL: " + jb.error);
+  const wbBack = jb.structure.walls.find((w) => w.id === "wb")!;
+  assert(!jb.straightened && !!wbBack.curve && near(wbBack.curve.c1, BOW.c1, 1) && near(wbBack.curve.c2, BOW.c2, 1), "a bowed wall joins back with its bow");
+  const moved: VenueStructure = { ...rb.structure, nodes: rb.structure.nodes.map((n) => (n.id === rb.nodeId ? { ...n, y: n.y - 500 } : n)) };
+  const jm = joinWalls(moved, rb.nodeId);
+  if ("error" in jm) throw new Error("FAIL: " + jm.error);
+  assert(jm.straightened && !jm.structure.walls.find((w) => w.id === "wb")!.curve, "moved off its bow, it joins as a straight wall and says so");
+
+  // Two walls that were never one: a NEW wall, and each old id names its share of it.
+  const pq: VenueStructure = {
+    nodes: [{ id: "A", x: 0, y: 0 }, { id: "M", x: 4000, y: 0 }, { id: "B", x: 10000, y: 0 }],
+    walls: [{ id: "p", a: "A", b: "M", kind: "wall" }, { id: "q", a: "B", b: "M", kind: "wall" }],
+    entrances: [{ id: "d2", wallId: "q", distanceMm: 1000, widthMm: 800, swingInward: false, doubleDoor: false }],
+    features: [],
+  };
+  const jpq = joinWalls(pq, "M");
+  if ("error" in jpq) throw new Error("FAIL: " + jpq.error);
+  assert(jpq.wallId !== "p" && jpq.wallId !== "q" && jpq.structure.walls.length === 1, "an unrelated pair joins into a new wall");
+  const [pp] = wallChain(jpq.structure, "p")!;
+  const [qq] = wallChain(jpq.structure, "q")!;
+  assert(pp.wall.id === jpq.wallId && pp.from === 0 && pp.to === 1 && Math.abs(pp.u0 - 0) < 1e-9 && Math.abs(pp.u1 - 0.4) < 1e-9, "p is the first 0.4 of the new wall");
+  assert(Math.abs(qq.u0 - 1) < 1e-9 && Math.abs(qq.u1 - 0.4) < 1e-9, "q (drawn B→M) is the new wall from its end back to 0.4");
+  assert(Math.abs(jpq.structure.entrances[0].distanceMm - 9000) < 1, "q's door keeps its place on the joined wall");
+
+  // Refusals: two kinds, three walls, a loop of two.
+  const mixed: VenueStructure = { ...pq, walls: [pq.walls[0], { ...pq.walls[1], kind: "edge" }] };
+  assert(joinRefusal(mixed, "M") === "קיר וגבול שטח לא מתחברים" && !joinable(mixed, "M") && "error" in joinWalls(mixed, "M"), "a wall and an edge do not join");
+  assert(joinRefusal(pq, "M") === null && joinable(pq, "M"), "two walls of one kind join");
+  const three: VenueStructure = { ...pq, nodes: [...pq.nodes, { id: "T", x: 4000, y: 3000 }], walls: [...pq.walls, { id: "t", a: "M", b: "T", kind: "wall" }] };
+  assert(!joinable(three, "M") && joinRefusal(three, "M") === null, "three walls at a corner do not join (and are not refused — Delete keeps today's rule)");
+
+  // Nested: split w, split its right half, join the inner corner → the right half comes back.
+  const jn = joinWalls(r2.structure, r2.nodeId);
+  if ("error" in jn) throw new Error("FAIL: " + jn.error);
+  assert(jn.wallId === right.wall.id && wallChain(jn.structure, "w")!.length === 2, "joining a half's own split gives the half back; the original still resolves");
+
+  // ── Merging two corners ──────────────────────────────────────────────────────────────────────
+  const xy: VenueStructure = {
+    nodes: [{ id: "X", x: 0, y: 0 }, { id: "Y", x: 5000, y: 0 }, { id: "Z", x: 5000, y: 5000 }],
+    walls: [{ id: "x1", a: "X", b: "Z", kind: "wall" }, { id: "x2", a: "X", b: "Y", kind: "wall" }, { id: "x3", a: "Y", b: "Z", kind: "wall" }],
+    entrances: [],
+    features: [],
+  };
+  const m = mergeNodes(xy, "X", "Y");
+  assert(!m.nodes.some((n) => n.id === "X"), "the dragged corner is gone");
+  assert(!m.walls.some((w) => w.id === "x2"), "the wall between the two corners collapses and goes");
+  assert(m.walls.length === 1 && (m.walls[0].a === "Y" || m.walls[0].b === "Y"), "a wall doubled by the merge is kept once, on the kept corner");
 
   console.log("wall-split: ok");
 }
