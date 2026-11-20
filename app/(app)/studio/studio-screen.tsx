@@ -5207,14 +5207,27 @@ export function StudioScreen({
     const variantId = defaultVariantId(product);
     const keepSize = CATEGORY_BY_ID[product.category]?.sizing === "stretch";
     const items = doc.placements.filter((p) => ids.includes(p.id) && !p.stage);
+    // A STANDALONE BANQUETTE (QA BQ-8): one swapped for another keeps the length it was stretched to;
+    // one swapped for anything else lets go of its banquette spec — its number with it, never held
+    // hidden; and anything swapped INTO a banquette gets what a drop gets — the next number, and
+    // table depth when its row is shallower.
+    const toBench = product.category === "stage-benches";
+    const box = catalogBox(product);
+    let nextBench = nextNumber();
     batch(
-      items.flatMap((p): Action[] => [
-        { type: "setPlacementVariant", id: p.id, variantId },
-        ...(p.sizeMm && !keepSize ? [{ type: "resizePlacement" as const, id: p.id, sizeMm: null }] : []),
-        // A block of chairs swapped for another chair stays a block; swapped for anything else it is
-        // one of that thing — not twenty-five sofas (lib/design-document/chair-rows.ts).
-        ...(p.rows && product.category !== "chairs" ? [{ type: "setChairRows" as const, id: p.id, rows: null }] : []),
-      ]),
+      items.flatMap((p): Action[] => {
+        const wasBench = !!benchOf(p);
+        return [
+          { type: "setPlacementVariant", id: p.id, variantId },
+          ...(p.sizeMm && !keepSize && !(wasBench && toBench) ? [{ type: "resizePlacement" as const, id: p.id, sizeMm: null }] : []),
+          ...(wasBench && !toBench && p.bench ? [{ type: "setPlacementBench" as const, id: p.id, bench: null }] : []),
+          ...(!wasBench && toBench ? [{ type: "setPlacementBench" as const, id: p.id, bench: { number: nextBench++ } }] : []),
+          ...(!wasBench && toBench && box.depthMm < BENCH_TABLE_DEPTH_MM ? [{ type: "resizePlacement" as const, id: p.id, sizeMm: { widthMm: box.widthMm, depthMm: BENCH_TABLE_DEPTH_MM } }] : []),
+          // A block of chairs swapped for another chair stays a block; swapped for anything else it is
+          // one of that thing — not twenty-five sofas (lib/design-document/chair-rows.ts).
+          ...(p.rows && product.category !== "chairs" ? [{ type: "setChairRows" as const, id: p.id, rows: null }] : []),
+        ];
+      }),
     );
     showHint(items.length === 1 ? `הוחלף ל${product.name}` : `${items.length} פריטים הוחלפו ל${product.name}`);
   };

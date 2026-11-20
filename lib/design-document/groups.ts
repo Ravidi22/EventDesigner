@@ -181,9 +181,11 @@ export function shownNumbers(doc: DesignDocumentContent, benches?: BenchLookup):
 
 /** Every number a standalone banquette HOLDS (Placement.bench.number) — shown or not: a banquette
  *  nobody sits at keeps its number underneath and it comes back with the first seat, so no new
- *  table may take it meanwhile. Needs no catalog: the number is stored on the placement. */
-function heldBenchNumbers(doc: DesignDocumentContent): number[] {
-  return doc.placements.flatMap((p) => (p.bench?.number !== undefined ? [p.bench.number] : []));
+ *  table may take it meanwhile. Needs no catalog: the number is stored on the placement — but when
+ *  `benches` can tell one, a number left on something that is no longer a banquette (its row
+ *  re-filed) is held by nobody (QA BQ-8). */
+function heldBenchNumbers(doc: DesignDocumentContent, benches?: BenchLookup): number[] {
+  return doc.placements.flatMap((p) => (p.bench?.number !== undefined && (!benches || standaloneBench(p, benches)) ? [p.bench.number] : []));
 }
 
 /** The number a NEW table or banquette takes: one past the highest the plan shows — or that a
@@ -194,7 +196,7 @@ function heldBenchNumbers(doc: DesignDocumentContent): number[] {
  *  and 8 sent the next table to 9) and collided (a block renumbered to 12 over members 3 and 4 gave
  *  the next table 5… and the one after that, eventually, a second 12). */
 export function nextTableNumber(doc: DesignDocumentContent, benches?: BenchLookup): number {
-  return [...shownNumbers(doc, benches), ...heldBenchNumbers(doc)].reduce((m, n) => Math.max(m, n), 0) + 1;
+  return [...shownNumbers(doc, benches), ...heldBenchNumbers(doc, benches)].reduce((m, n) => Math.max(m, n), 0) + 1;
 }
 
 /** Numbers two units on the plan both show — two table 4s the crew cannot tell apart. The head
@@ -890,6 +892,10 @@ if (isMain(import.meta.url)) {
     assert(duplicateNumbers({ ...room, tables: [...room.tables, at("c", 1, 0, 6000)] }, benches).has(1), "a table numbered like a seated banquette is a duplicate…");
     assert(!duplicateNumbers({ ...room, tables: [...room.tables, at("c", 9, 0, 6000)] }, benches).has(9), "…while the number a seatless one holds is not shown, so not doubled");
     assert(freeNumbers({ ...room, tables: [...room.tables, { ...at("c", 9, 0, 6000), groupId: "g" }], groups: [{ id: "g", number: 5 }] }, ["c"]).get("c") === 10, "an ungrouped table never takes a number a banquette holds");
+    // QA BQ-8: a number left on something that is no longer a banquette (its row re-filed as a sofa)
+    // is held by nobody — when the plan can tell a banquette, the next table does not skip it.
+    const stale = { ...room, placements: [bench("head", 0, -3000, { number: 1 }), { ...stageP("sofa"), variantId: "sofa", bench: { number: 7 } }] };
+    assert(nextTableNumber(stale, benches) === 4 && nextTableNumber(stale) === 8, "a number on a placement that is not a banquette is not held — seen through the catalog");
 
     // Renumbered with the tables, in reading order: the banquette across the top is 1, the two
     // tables below it 2 and 3 right to left — already so.
