@@ -75,6 +75,40 @@ export function wallChain(s: VenueStructure, id: string, depth = 0): ChainLink[]
   return out.length ? out : null;
 }
 
+/** The openings standing along `wallId` — on the wall itself, or on the walls of its chain — each with
+ *  its middle (`t`) and its stretch widened by `padMm` either side (`lo`–`hi`) in `wallId`'s OWN
+ *  parameter. What a curtain on an old wall parts for, though its door now stands on a half. */
+export function openingsAlong(s: VenueStructure, wallId: string, padMm = 0): { opening: StructureEntrance; t: number; lo: number; hi: number }[] {
+  const chain = wallChain(s, wallId);
+  if (!chain) return [];
+  const nodes = nodeMap(s);
+  const out: { opening: StructureEntrance; t: number; lo: number; hi: number }[] = [];
+  for (const link of chain) {
+    const pts = wallPoints(s, link.wall, nodes);
+    if (!pts) continue;
+    const chord = dist(pts.a, pts.b);
+    if (chord === 0) continue;
+    const lo = Math.min(link.u0, link.u1);
+    const hi = Math.max(link.u0, link.u1);
+    const toOld = (u: number) => link.from + ((u - link.u0) / (link.u1 - link.u0)) * (link.to - link.from);
+    for (const e of s.entrances) {
+      if (e.wallId !== link.wall.id) continue;
+      const mid = e.distanceMm / chord;
+      if (mid < lo || mid > hi) continue;
+      const [a, b] = [toOld((e.distanceMm - e.widthMm / 2 - padMm) / chord), toOld((e.distanceMm + e.widthMm / 2 + padMm) / chord)];
+      out.push({ opening: e, t: toOld(mid), lo: Math.min(a, b), hi: Math.max(a, b) });
+    }
+  }
+  return out.sort((p, q) => p.t - q.t);
+}
+
+/** A wall's own typed height (Wall.heightMm), read through a split: the lowest typed among the walls
+ *  standing in its place. Undefined when none is typed, or the id names nothing. */
+export function typedHeightAlong(s: VenueStructure, wallId: string): number | undefined {
+  const typed = (wallChain(s, wallId) ?? []).map((l) => l.wall.heightMm).filter((h): h is number => h !== undefined && h > 0);
+  return typed.length ? Math.min(...typed) : undefined;
+}
+
 /** Where on wall `w` its own parameter `u` stands — the bezier's point on a bowed wall. */
 function pointOnWall(s: VenueStructure, w: Wall, u: number): Point | null {
   const pts = wallPoints(s, w, nodeMap(s));
@@ -369,6 +403,13 @@ if (isMain(import.meta.url)) {
   // Dangling: one piece gone → the old id is gone, as a deleted wall is today.
   const gone: VenueStructure = { ...r.structure, walls: r.structure.walls.filter((w) => w.id !== left.wall.id) };
   assert(wallChain(gone, "w") === null && !hasWall(gone, "w"), "a chain with a piece gone resolves to nothing");
+
+  // A split wall's typed height: the lowest typed among the walls in its place (a curtain is never
+  // taller than the wall it hangs on).
+  assert(typedHeightAlong(r.structure, "w") === 2800, "a split wall keeps its typed height");
+  const lowered: VenueStructure = { ...r.structure, walls: r.structure.walls.map((w) => (w.id === right.wall.id ? { ...w, heightMm: 2000 } : w)) };
+  assert(typedHeightAlong(lowered, "w") === 2000, "…the lower half wins");
+  assert(typedHeightAlong(s, "wb") === undefined && typedHeightAlong(s, "gone") === undefined, "no typed height, or no wall: undefined");
 
   // ── Joining back ─────────────────────────────────────────────────────────────────────────────
   const j = joinWalls(r.structure, r.nodeId);

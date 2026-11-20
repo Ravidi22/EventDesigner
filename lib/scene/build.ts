@@ -26,6 +26,7 @@ import { carpetFootprint, carpetShape } from "@/lib/studio/cover";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { footprintPolygons } from "@/lib/studio/proximity";
 import type { StructureFeature } from "@/lib/venues/structure";
+import { typedHeightAlong } from "@/lib/venues/wall-split";
 import { CURTAIN_FILL, curtainLines, curtainOf, curtainPieces } from "@/lib/venues/curtain";
 import { isRailed, isRodRow, offsetPath, railLines, railOf, rodPostMm, rodThickMm, sketchRailContext } from "@/lib/studio/rail";
 import type { Placement } from "@/lib/design-document/types";
@@ -287,8 +288,8 @@ function curtain(input: SceneInput, out: SceneCollector, p: Placement): void {
 
 /** A WALL's own typed height (Wall.heightMm), when it has one. */
 function wallTypedHeight(input: SceneInput, wallId: string): number | undefined {
-  const h = input.structure.walls.find((w) => w.id === wallId)?.heightMm;
-  return h !== undefined && h > 0 ? h : undefined;
+  // Read through a split (lib/venues/wall-split.ts): a drape on an old wall id keeps its top.
+  return typedHeightAlong(input.structure, wallId);
 }
 
 /** Where a curtain on a wall hangs from: the LOWER of the room's ceiling and the wall's own typed

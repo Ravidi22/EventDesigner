@@ -73,6 +73,7 @@ import { MAP_SHAPES, SHAPE_LABEL } from "@/lib/catalog/types";
 import { climbRunMm, isClimb } from "@/lib/venues/climb";
 import { seatingChair, seatingCount, seatingOf, seatingPatch } from "@/lib/venues/seating";
 import { canDefineColumns, columnOf, columnPatch } from "@/lib/venues/column";
+import { openingsAlong } from "@/lib/venues/wall-split";
 import { CURTAIN_FILL, curtainLengthMm, curtainLines, curtainLookPatch, curtainOf, curtainPatch, curtainRail, curtainRailPatch } from "@/lib/venues/curtain";
 import { CANTILEVER_MAX_MM, type RailLine } from "@/lib/studio/rail";
 import { ledLengthMm } from "@/lib/venues/led";
@@ -815,7 +816,11 @@ export function HallsSelection({
     const glassWords = !window ? (door.doubleDoor ? "כנף כפולה" : "כנף יחידה") : vitrine ? "זכוכית מהרצפה עד התקרה" : `${cmOf(sillMm)} ס״מ מהרצפה · ${glassMm !== null ? `גובה ${cmOf(glassMm)} ס״מ` : "עד הקיר"}`;
     const title = window ? (vitrine ? "ויטרינה" : "חלון") : "כניסה";
     const facts = `${cmOf(door.widthMm)} ס״מ · ${m(off.toEdgeMm)} מ׳ ${cornerWord(centre, from === "a" ? pts.a : pts.b)} · ${glassWords}`;
-    const curtained = !window && structure.features.some((f) => f.kind === "curtain" && curtainOf(f)?.wallId === door.wallId);
+    const curtained = !window && structure.features.some((f) => {
+      // On the door's wall, or on the wall it was split from (lib/venues/wall-split.ts).
+      const c = f.kind === "curtain" ? curtainOf(f) : null;
+      return !!c && openingsAlong(structure, c.wallId).some((o) => o.opening.id === door.id);
+    });
     if (!bar)
       return groupsOf(kind, title, `על ה${wall?.kind === "edge" ? "גבול" : "קיר"}`, [
         G(

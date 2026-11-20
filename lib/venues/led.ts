@@ -47,6 +47,7 @@ import {
 } from "@/lib/studio/rail";
 import { fromLocalFrame, toLocalFrame, wallAngleDeg } from "@/lib/studio/geometry";
 import { newFeature, type StructureFeature, type VenueStructure } from "./structure";
+import { hasWall } from "./wall-split";
 import { sideOfWall, type CurtainEnds, type CurtainPiece } from "./curtain";
 import { isMain } from "../self-check";
 
@@ -81,7 +82,7 @@ export const LED_RUN_MM = 3000;
 /** A new strip on a wall: the whole wall, on the side `at` lies, at the floor line (heightMm 0 — the
  *  skirting). Null for a wall that is gone. */
 export function ledWallRail(s: VenueStructure, wallId: string, at: Point, from = 0, to = 1): WallRail | null {
-  if (!s.walls.some((w) => w.id === wallId)) return null;
+  if (!hasWall(s, wallId)) return null;
   return { type: "wall", wallId, from: Math.min(from, to), to: Math.max(from, to), side: sideOfWall(s, wallId, at), heightMm: 0 };
 }
 

@@ -8,11 +8,12 @@
 // Pure geometry over `{nodes, walls}` — no React, no storage — so it runs under node like the rest
 // of lib/studio.
 import type { Point } from "@/lib/studio/hall";
-import type { VenueStructure } from "@/lib/venues/structure";
+import type { VenueStructure, Wall } from "@/lib/venues/structure";
 import { isDoor, nodeMap, wallPoints } from "@/lib/venues/structure";
 import { absoluteControlPoints, cubicPointAt, pointAtDistance, projectOntoWall, wallLengthMm } from "./geometry";
 import type { WallSpan } from "@/lib/design-document/types";
 import type { DoorOpening } from "@/lib/design-document/stage";
+import { joinWalls, splitWall, wallChain } from "@/lib/venues/wall-split";
 import { isMain } from "../self-check";
 
 export interface WallSegment {
@@ -25,7 +26,11 @@ export interface WallSegment {
  *  drape that hung on it pointing at nothing, and every caller has to survive that. */
 export function wallSegment(structure: VenueStructure, wallId: string): WallSegment | null {
   const wall = structure.walls.find((w) => w.id === wallId);
-  if (!wall) return null;
+  if (!wall) {
+    // A split wall's old id: the ends of the walls standing in its place.
+    const tr = wallTrack(structure, wallId);
+    return tr ? { a: tr.a, b: tr.b, lengthMm: wallLengthMm(tr.a, tr.b) } : null;
+  }
   const pts = wallPoints(structure, wall, nodeMap(structure));
   if (!pts) return null;
   return { a: pts.a, b: pts.b, lengthMm: wallLengthMm(pts.a, pts.b) };
@@ -62,10 +67,101 @@ export interface WallTrack {
 /** Samples taken along a bowed wall — for its length and a nearest-point search. */
 const TRACK_SAMPLES = 64;
 
-/** One wall as a WallTrack, or null if the id dangles. */
+/** One wall as a WallTrack, or null if the id dangles. An id that was SPLIT (or joined into another)
+ *  is read through its lineage (lib/venues/wall-split.ts): one track along the walls standing in its
+ *  place, in its own parameter — so whatever hangs on the old id hangs where it hung. */
 export function wallTrack(structure: VenueStructure, wallId: string): WallTrack | null {
   const wall = structure.walls.find((w) => w.id === wallId);
-  if (!wall) return null;
+  if (wall) return singleTrack(structure, wall);
+  const chain = wallChain(structure, wallId);
+  if (!chain) return null;
+  const links: { track: WallTrack; from: number; to: number; u0: number; u1: number }[] = [];
+  for (const l of chain) {
+    const track = singleTrack(structure, l.wall);
+    if (!track) return null;
+    links.push({ track, from: l.from, to: l.to, u0: l.u0, u1: l.u1 });
+  }
+  return chainTrack(links);
+}
+
+/** Several walls' stretches read as ONE track in an old wall's parameter: link i carries `from`–`to`
+ *  of it, as the stretch `u0`–`u1` of its own wall (reversed when u0 > u1, its normal turned with it
+ *  so "left of the old wall" stays left). */
+function chainTrack(links: { track: WallTrack; from: number; to: number; u0: number; u1: number }[]): WallTrack {
+  const linkAt = (t: number) => links.find((l) => t <= l.to) ?? links[links.length - 1];
+  const uOf = (l: (typeof links)[number], t: number) => l.u0 + ((t - l.from) / (l.to - l.from || 1)) * (l.u1 - l.u0);
+  const tOf = (l: (typeof links)[number], u: number) => l.from + ((u - l.u0) / (l.u1 - l.u0 || 1)) * (l.to - l.from);
+  const sign = (l: (typeof links)[number]) => (l.u1 >= l.u0 ? 1 : -1);
+  const lens = links.map((l) => Math.abs(l.track.mmAt(l.u1) - l.track.mmAt(l.u0)));
+  const before = lens.map((_, i) => lens.slice(0, i).reduce((s, x) => s + x, 0));
+  const lengthMm = lens.reduce((s, x) => s + x, 0);
+  const at = (t: number) => {
+    const l = linkAt(clamp01(t));
+    const { p, n } = l.track.at(uOf(l, clamp01(t)));
+    return { p, n: { x: n.x * sign(l), y: n.y * sign(l) } };
+  };
+  const a = at(0).p;
+  const b = at(1).p;
+  const mmAt = (t: number) => {
+    const i = links.indexOf(linkAt(clamp01(t)));
+    const l = links[i];
+    return before[i] + Math.abs(l.track.mmAt(uOf(l, clamp01(t))) - l.track.mmAt(l.u0));
+  };
+  const tAt = (mm: number) => {
+    if (mm <= 0) return 0;
+    if (mm >= lengthMm) return 1;
+    const i = Math.max(0, before.findIndex((s, k) => mm <= s + lens[k]));
+    const l = links[i];
+    const start = l.track.mmAt(l.u0);
+    const u = l.track.tAt(start + sign(l) * (mm - before[i]));
+    return tOf(l, u);
+  };
+  const nearestT = (p: Point) => {
+    let best = 0;
+    let bd = Infinity;
+    for (const l of links) {
+      const lo = Math.min(l.u0, l.u1);
+      const hi = Math.max(l.u0, l.u1);
+      const u = Math.min(hi, Math.max(lo, l.track.nearestT(p)));
+      const q = l.track.at(u).p;
+      const d = (p.x - q.x) ** 2 + (p.y - q.y) ** 2;
+      if (d < bd) {
+        bd = d;
+        best = tOf(l, u);
+      }
+    }
+    return clamp01(best);
+  };
+  const path = (t0: number, t1: number, off = 0): Point[] => {
+    if (t1 < t0) return path(t1, t0, off).reverse();
+    const out: Point[] = [];
+    for (const l of links) {
+      const s0 = Math.max(t0, l.from);
+      const s1 = Math.min(t1, l.to);
+      if (s1 < s0 || (s1 === s0 && out.length)) continue;
+      for (const q of l.track.path(uOf(l, s0), uOf(l, s1), off * sign(l))) {
+        const last = out[out.length - 1];
+        if (!last || Math.hypot(last.x - q.x, last.y - q.y) > 0.01) out.push(q);
+      }
+    }
+    return out;
+  };
+  return {
+    a,
+    b,
+    curved: links.length > 1 || links[0].track.curved,
+    chordMm: wallLengthMm(a, b),
+    lengthMm,
+    at,
+    nearestT,
+    mmAt,
+    tAt,
+    path,
+  };
+}
+
+/** One standing wall as a WallTrack. */
+function singleTrack(structure: VenueStructure, wall: Wall): WallTrack | null {
   const pts = wallPoints(structure, wall, nodeMap(structure));
   if (!pts) return null;
   const { a, b } = pts;
@@ -338,6 +434,50 @@ if (isMain(import.meta.url)) {
   assert(strip.length === track.path(0.25, 0.75).length * 2, "a band along a bow is a curved strip");
   const straightTrack = wallTrack(structure, "w-long")!;
   assert(!straightTrack.curved && straightTrack.path(0, 1).length === 2 && near(straightTrack.nearestT({ x: 2500, y: 900 }), 0.25), "a straight wall is its chord, as before");
+
+  // ── A SPLIT wall's old id still names the same stretch (connected drawings §5) ──
+  const onLine = (pts: Point[], y: number, x0: number, x1: number) => pts.every((p) => Math.abs(p.y - y) < 0.5 && p.x >= x0 - 0.5 && p.x <= x1 + 0.5);
+  const cut = splitWall(structure, "w-long", 0.6);
+  if ("error" in cut) throw new Error("FAIL: " + cut.error);
+  const chainTr = wallTrack(cut.structure, "w-long")!;
+  assert(!!chainTr, "a split wall's old id still has a track");
+  assert(near(chainTr.lengthMm, 10000, 0.5) && near(chainTr.a.x, 0) && near(chainTr.b.x, 10000), "the chain runs the old wall's length, end to end");
+  const runAfter = chainTr.path(0.2, 0.8);
+  assert(near(runAfter[0].x, 2000, 0.5) && near(runAfter[runAfter.length - 1].x, 8000, 0.5) && onLine(runAfter, 0, 2000, 8000), "a drape's 0.2–0.8 hangs where it hung");
+  assert(near(chainTr.at(0.3).p.x, 3000, 0.5) && near(chainTr.at(0.9).p.x, 9000, 0.5) && near(chainTr.at(0.9).n.y, straightTrack.at(0.9).n.y), "points and the normal along it are the old wall's");
+  assert(near(chainTr.nearestT({ x: 7000, y: 500 }), 0.7, 1e-3) && near(chainTr.mmAt(0.75), 7500, 0.5) && near(chainTr.tAt(2500), 0.25, 1e-4), "nearest, mm and t read the old parameter");
+  // The new corner dragged a metre off the line: the drape bends with the wall.
+  const bent: VenueStructure = { ...cut.structure, nodes: cut.structure.nodes.map((n) => (n.id === cut.nodeId ? { ...n, y: 1000 } : n)) };
+  const runBent = wallTrack(bent, "w-long")!.path(0.2, 0.8);
+  assert(runBent.some((p) => near(p.x, 6000, 0.5) && near(p.y, 1000, 0.5)), "the drape has a corner where the wall now bends");
+
+  // A bowed wall split: every point of the old track, within half a millimetre.
+  const bowS: VenueStructure = { ...structure, walls: [{ id: "bw", a: "n0", b: "n1", kind: "wall", curve: { c1: { x: 3000, y: -2000 }, c2: { x: -3000, y: -2000 } } }] };
+  const bowBefore = wallTrack(bowS, "bw")!;
+  const bowCut = splitWall(bowS, "bw", 0.4);
+  if ("error" in bowCut) throw new Error("FAIL: " + bowCut.error);
+  const bowAfter = wallTrack(bowCut.structure, "bw")!;
+  for (let i = 0; i <= 10; i++) {
+    const t = i / 10;
+    const [p, q] = [bowBefore.at(t).p, bowAfter.at(t).p];
+    assert(Math.hypot(p.x - q.x, p.y - q.y) < 0.5, `a bowed split keeps every point (t ${t})`);
+  }
+
+  // Joined into a new wall drawn the other way: the old id runs its own way along it.
+  const pq: VenueStructure = {
+    nodes: [{ id: "A", x: 0, y: 0 }, { id: "M", x: 4000, y: 0 }, { id: "B", x: 10000, y: 0 }],
+    walls: [{ id: "p", a: "A", b: "M", kind: "wall" }, { id: "q", a: "B", b: "M", kind: "wall" }],
+    entrances: [],
+    features: [],
+  };
+  const qBefore = wallTrack(pq, "q")!;
+  const joined = joinWalls(pq, "M");
+  if ("error" in joined) throw new Error("FAIL: " + joined.error);
+  const qAfter = wallTrack(joined.structure, "q")!;
+  assert(near(qAfter.at(0).p.x, 10000, 0.5) && near(qAfter.at(1).p.x, 4000, 0.5) && near(qAfter.lengthMm, 6000, 0.5), "q still runs from B to M");
+  assert(near(qAfter.at(0.5).n.y, qBefore.at(0.5).n.y), "…with its own left-hand side");
+  assert(wallTrack(joined.structure, "gone") === null, "a dangling id is still nothing");
+  assert(wallSegment(cut.structure, "w-long")!.lengthMm === 10000, "a split wall's old id still has its segment");
 
   console.log("anchor self-check passed");
 }

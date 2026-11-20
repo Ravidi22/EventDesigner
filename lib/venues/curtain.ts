@@ -33,7 +33,8 @@ import type { CurtainStyle } from "@/lib/catalog/symbols";
 import { spanBand, wallTrack, type WallTrack } from "@/lib/studio/anchor";
 import { featureHosts, rodPointMoved, hostSide, railBand, railClothLine, resolveRail, type Rail, type RailContext, type RailLine, type RodRail, type SideRail } from "@/lib/studio/rail";
 import { fromLocalFrame, toLocalFrame, wallAngleDeg } from "@/lib/studio/geometry";
-import { doorsOf, newFeature, type StructureFeature, type VenueStructure } from "./structure";
+import { isDoor, newFeature, type StructureFeature, type VenueStructure } from "./structure";
+import { hasWall, openingsAlong, splitWall } from "./wall-split";
 import { isMain } from "../self-check";
 
 /** A curtain on a WALL, read: the stretch, ordered, and which side of its wall it hangs on: +1 for
@@ -226,7 +227,7 @@ export function sideOfWall(s: VenueStructure, wallId: string, p: Point): 1 | -1 
 /** A new curtain along `wallId` — the whole wall unless a stretch is given — on the side of the
  *  wall `at` lies (the click that placed it), in the default black. Null for a wall that is gone. */
 export function newCurtain(s: VenueStructure, wallId: string, at: Point, from = 0, to = 1): Omit<StructureFeature, "id"> | null {
-  if (!s.walls.some((w) => w.id === wallId)) return null;
+  if (!hasWall(s, wallId)) return null;
   return newRailCurtain(s, { type: "wall", wallId, from: Math.min(from, to), to: Math.max(from, to), side: sideOfWall(s, wallId, at) });
 }
 
@@ -328,11 +329,11 @@ export function curtainPieces(s: VenueStructure, f: StructureFeature): CurtainPi
     const d = f.depthMm / 2;
     return [{ t0: 0, t1: 1, lengthMm: f.widthMm, band: [{ x: -w, y: -d }, { x: w, y: -d }, { x: w, y: d }, { x: -w, y: d }], line: [{ x: -w, y: 0 }, { x: w, y: 0 }] }];
   }
-  const L = tr.chordMm;
   const local = (p: Point) => toLocalFrame(p, { x: f.x, y: f.y }, f.rotationDeg);
-  const bare = doorsOf(s)
-    .filter((e) => e.wallId === c.wallId && e.curtainClear)
-    .map((e) => [(e.distanceMm - e.widthMm / 2 - DOOR_CLEAR_MM) / L, (e.distanceMm + e.widthMm / 2 + DOOR_CLEAR_MM) / L] as const)
+  // The doors along the wall — on it, or on the walls a split left in its place (lib/venues/wall-split.ts).
+  const bare = openingsAlong(s, c.wallId, DOOR_CLEAR_MM)
+    .filter((o) => isDoor(o.opening) && o.opening.curtainClear)
+    .map((o) => [o.lo, o.hi] as const)
     .sort((p, q) => p[0] - q[0]);
   const out: CurtainPiece[] = [];
   let cursor = c.from;
@@ -531,6 +532,16 @@ if (isMain(import.meta.url)) {
   const parted = curtainPieces(doored, doored.features[0]);
   assert(parted.length === 2 && parted[0].lengthMm === 3000 - DOOR_CLEAR_MM && parted[1].lengthMm === 5000 - DOOR_CLEAR_MM, `a door parts the curtain into the stretches either side of it, each clear of the jamb (${parted.map((p) => p.lengthMm).join(",")})`);
   assert(Math.abs(parted[0].band[0].x + 5000) < 1e-6 && parted[1].t0 > 0.5 && parted[1].t1 === 1, "…each placed along the wall in the box's frame");
+  // The wall split past the door (connected drawings §5): the door stands on a half now, and the
+  // curtain, still on the old id, parts for it exactly as before.
+  const splitPast = splitWall(doored, "w", 0.8);
+  if ("error" in splitPast) throw new Error("FAIL: " + splitPast.error);
+  const partedAfter = curtainPieces(splitPast.structure, doored.features[0]);
+  assert(
+    partedAfter.length === 2 && partedAfter[0].lengthMm === parted[0].lengthMm && partedAfter[1].lengthMm === parted[1].lengthMm,
+    `a split wall's curtain still parts for its door (${partedAfter.map((p) => p.lengthMm).join(",")})`,
+  );
+  assert(newCurtain(splitPast.structure, "w", { x: 0, y: 100 }) !== null, "a curtain may still be hung on the old id");
   const windowed: VenueStructure = { ...withOne, entrances: [{ id: "v", wallId: "w", distanceMm: 4000, widthMm: 2000, swingInward: false, doubleDoor: false, kind: "window" }] };
   assert(curtainPieces(windowed, windowed.features[0]).length === 1, "a window is curtained over — only a door parts it");
   const edgeDoor: VenueStructure = { ...withOne, entrances: [{ id: "e", wallId: "w", distanceMm: 500, widthMm: 1000, swingInward: true, doubleDoor: false, curtainClear: true }] };
