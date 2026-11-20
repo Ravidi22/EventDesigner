@@ -394,6 +394,16 @@ if (isMain(import.meta.url)) {
     assert(plan.structure.features.length === 1 && plan.structure.features[0].id === "bar", "an event's room has no venue table in it");
     assert(plan.layoutTables.length === 1 && plan.layoutTables[0].id === "t1", "…they come apart, as its starting layout");
 
+    // SK-5: a zone MADE OF the venue's tables (/halls: select them → "אזור") is still their area in
+    // an event — the tables leave the room, not the zone's own definition.
+    const ring = { ...venue, features: [...venue.features, { ...venue.features[1], id: "t2", x: 6000, table: tableSpec(catalog[0], 2) }] };
+    const tableZone = { id: "z", venueId: "v", name: "שולחנות", kind: "hall" as const, source: { type: "features" as const, featureIds: ["t1", "t2"], marginMm: 1000 }, ceilingHeightMm: 0, createdAt: 0 };
+    const zoned = eventPlan({ venueId: "v", zoneIds: ["z"] }, { structure: ring, zones: [tableZone], mmPerUnit: 1, access: "granted" });
+    assert(zoned.zones.length === 1 && zoned.zones[0].boundary.length >= 3 && !zoned.zones[0].detached, "a zone made of the venue's tables has its area in the event");
+    assert(zoned.layoutTables.length === 2, "…and both its tables are the event's starting layout");
+    assert(zoned.bounds.widthMm > 6000, "…and the canvas frames the zone, not a collapsed box");
+    assert(zoned.structure.features.every((f) => f.kind !== "table"), "…while the room still has no venue table in it");
+
     // SK-4: a table no row matches keeps the shape it is DRAWN in — only a box stays a rectangle.
     const spec = (number: number, name: string): FeatureTable => ({ seats: 4, number, name });
     const own = layoutTables(

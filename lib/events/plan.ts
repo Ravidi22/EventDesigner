@@ -73,7 +73,10 @@ export function eventPlan(event: Pick<EventSummary, "venueId" | "zoneIds"> | nul
   const faces = detectFaces(structure);
   // The VENUE's features, not this event's arrangement of them: a zone is the property's, and one
   // made of a stage stays where the venue has the stage when a sketch nudges it for one evening.
-  const all = resolveZones(allZones, faces, structure.features);
+  // ALL of them, its default tables too (QA 2026-11-20, SK-5): they leave the room, not the zones —
+  // a zone made of them (/halls: select the tables → "אזור") resolved against the room without them
+  // came out empty in every event: nothing framed, and no table inside it to start the drawing with.
+  const all = resolveZones(allZones, faces, venue.features);
   // Ordered by the event's own list, not the venue's: the first zone is the one the designer
   // reached for first, and a picker that reorders behind their back is its own small bug.
   const zones = event.zoneIds
