@@ -304,6 +304,22 @@ export function benchIsNumbered(p: Placement, layout: BenchLayout | null): layou
   return !!layout && layout.seats > 0 && p.bench?.number !== undefined;
 }
 
+/** One side of a banquette as its bar lists it: as laid, and whether its count was TYPED. */
+export type BenchSideRowOf = BenchSideLayout & { set: boolean };
+
+/** A STAGE banquette's two sides as its bar shows them: everything the layout says of each — what
+ *  it is, its count, a sofa's run and seat as drawn (QA BQ-1: the bar built them from kind and count
+ *  alone, so a sofa's fields read 0 and a blur wrote the fields' floors into the drawing) — and
+ *  whether each count was typed, read through benchSpecOf, so a legacy `seats` is the back side's
+ *  only while the new form says nothing of the back (QA BQ-10). */
+export function benchSideRows(item: Pick<StageStair, "bench" | "seats" | "heightMm" | "depthMm">, lay: BenchLayout | undefined): { back: BenchSideRowOf; front: BenchSideRowOf } {
+  const spec = benchSpecOf(item);
+  return {
+    back: { ...(lay?.back ?? { kind: DEFAULT_BACK, seats: 0 }), set: spec.back?.seats !== undefined },
+    front: { ...(lay?.front ?? { kind: DEFAULT_FRONT, seats: 0 }), set: spec.front?.seats !== undefined },
+  };
+}
+
 /** A spec with one side patched — kind, count (`seats: null` = back to automatic), and a sofa's run
  *  and seat depth (`null` = back to the whole length / the half strip). */
 export function patchBenchSide(
@@ -424,6 +440,19 @@ if (isMain(import.meta.url)) {
   assert(benchLayout(3000, 600, { back: { kind: "sofa", depthMm: 5000 } }).cushions.every((q) => Math.max(...q.map((p) => p.y)) <= 280), "a seat deeper than the strip stops short of its far edge");
   const widened = patchBenchSide(patchBenchSide(undefined, "back", { kind: "sofa", widthMm: 2000, depthMm: 350 }), "back", { widthMm: null });
   assert(widened.back?.widthMm === undefined && widened.back?.depthMm === 350, "null puts a sofa's run back to the whole length and keeps its depth");
+
+  // ── The bar's rows for a STAGE banquette (QA BQ-1): its sofa side's run and seat as laid — the
+  //    fields read 0 and a blur wrote the field's floor into the drawing — and whether each count
+  //    was typed, through benchSpecOf (QA BQ-10: a legacy count is the back side's only while the new
+  //    form says nothing of the back).
+  const edgeSofa: Pick<StageStair, "bench"> = { bench: { back: { kind: "chairs" }, front: { kind: "sofa", widthMm: 2400, depthMm: 200 } } };
+  const edgeRows = benchSideRows(edgeSofa, benchLayout(6000, 600, benchSpecOf(edgeSofa)));
+  assert(edgeRows.front.kind === "sofa" && edgeRows.front.widthMm === 2400 && edgeRows.front.depthMm === 200, "a stage banquette's sofa side reads its run and seat as laid, never 0");
+  assert(!edgeRows.front.set && !edgeRows.back.set && edgeRows.back.kind === "chairs" && edgeRows.back.seats === 10, "…its chairs side as laid, and no count typed on either");
+  const legacySofa = { seats: 4, bench: { back: { kind: "sofa" as const } } };
+  assert(!benchSideRows(legacySofa, benchLayout(3000, 450, benchSpecOf(legacySofa))).back.set, "a legacy chair count under a back the new form names is not that side's typed count");
+  assert(benchSideRows({ seats: 4 }, benchLayout(3000, 450, benchSpecOf({ seats: 4 }))).back.set, "…while the new form says nothing of the back, it is");
+  assert(benchSideRows({}, undefined).back.kind === "chairs" && benchSideRows({}, undefined).front.kind === "none", "with no layout the sides are the defaults");
 
   // ── A banquette of any shape is laid along its spine.
   const strip: Footprint = { kind: "rect", widthMm: 6000, depthMm: 600 };

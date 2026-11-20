@@ -1621,6 +1621,8 @@ export function Inspector({
                     heightMm={it.heightMm}
                     sofaHeightMm={it.sofaHeightMm}
                     heightNote="מעל הבמה — שולחן לכיסאות שעליה"
+                    lengthMm={it.widthMm}
+                    depthMm={it.depthMm}
                     onSide={(side, patch) => onStairChange(it.id, { [side]: patch })}
                     onHeight={(mm) => onStairChange(it.id, { heightMm: mm })}
                     onSofaHeight={(mm) => onStairChange(it.id, { sofaHeightMm: mm })}

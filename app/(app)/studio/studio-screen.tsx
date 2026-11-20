@@ -20,7 +20,7 @@ import { ALL_PLANES_VISIBLE, PLANES, type Plane } from "@/lib/studio/planes";
 import type { Point } from "@/lib/studio/hall";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { benchOf, coverOn, deckOf, defaultVariantId, firstVariantId, primeEventShades, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
-import { BENCH_TABLE_DEPTH_MM, benchIsNumbered, patchBenchSide, standaloneBench, standaloneBenchSeats } from "@/lib/design-document/bench";
+import { BENCH_TABLE_DEPTH_MM, benchIsNumbered, benchSideRows, patchBenchSide, standaloneBench, standaloneBenchSeats } from "@/lib/design-document/bench";
 import { productById } from "@/lib/catalog/storage";
 import type { Composition, Product } from "@/lib/catalog/types";
 import { useCatalog } from "@/lib/catalog/use-catalog";
@@ -3223,10 +3223,9 @@ export function StudioScreen({
           chairSeats: shape.chairs.length,
           sofaSeats: shape.sofaSeats,
           autoSeats: Math.floor(shape.widthMm / SEAT_WIDTH_MM),
-          // The two sides as laid (./bench.ts), and whether each count was typed — in the new form, or
-          // the legacy `seats` for the stage side.
-          back: { kind: shape.bench?.back.kind ?? "chairs", seats: shape.bench?.back.seats ?? 0, set: (st.bench?.back?.seats ?? st.seats) !== undefined },
-          front: { kind: shape.bench?.front.kind ?? "none", seats: shape.bench?.front.seats ?? 0, set: st.bench?.front?.seats !== undefined },
+          // The two sides as laid (./bench.ts) — a sofa's run and seat included — and whether each
+          // count was typed (benchSideRows).
+          ...benchSideRows(st, shape.bench),
           dressed: doc.placements.filter((x) => x.perch?.stageId === soleStage.id && x.perch.itemId === st.id).length,
         },
       ];

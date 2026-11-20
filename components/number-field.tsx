@@ -5,6 +5,18 @@ import { controlClassName, fieldLabelClassName, inlineLabelClassName } from "./c
 
 const format = (n: number, decimals?: number) => (decimals != null ? n.toFixed(decimals) : String(n));
 
+/** What a blur (or Enter) commits: NOTHING when nothing was typed or nudged since the field took
+ *  the focus (null — the box shows `value` again); else what was typed, clamped to min…max, or
+ *  `value` when it does not parse. A blur with no edit is not an edit: tabbing through a field that
+ *  shows a value outside its range (a default below its floor, a size the caller derived) must not
+ *  write the clamp into the document — the banquette's sofa fields did (QA BQ-1), and a value that
+ *  changed under a focused box was written back over with the stale text. */
+export function blurValue(text: string, value: number, edited: boolean, clamp: (n: number) => number): number | null {
+  if (!edited) return null;
+  const parsed = parseFloat(text);
+  return Number.isFinite(parsed) ? clamp(parsed) : value;
+}
+
 // Tailwind resolves conflicting utilities (e.g. h-10 vs h-7) by their order in the generated
 // stylesheet, not by where they land in a className string — so a caller can never shrink
 // controlClassName's fixed h-10 by appending a smaller h-* class. A compact variant needs its own
@@ -76,6 +88,8 @@ export function NumberField({
   disabled?: boolean;
 }) {
   const focused = useRef(false);
+  // Typed (or nudged) since the focus — only then does a blur commit (blurValue).
+  const edited = useRef(false);
   const display = (v: number) => (hideZero && v === 0 ? "" : format(v, decimals));
   const [text, setText] = useState(() => display(value));
 
@@ -93,15 +107,16 @@ export function NumberField({
 
   const commit = () => {
     focused.current = false;
-    const parsed = parseFloat(text);
-    const next = Number.isFinite(parsed) ? clamp(parsed) : value;
-    setText(display(next));
-    if (next !== value) onChange(next);
+    const next = blurValue(text, value, edited.current, clamp);
+    edited.current = false;
+    setText(display(next ?? value));
+    if (next !== null && next !== value) onChange(next);
   };
 
   const nudge = (dir: 1 | -1) => {
     const current = parseFloat(text);
     const next = clamp((Number.isFinite(current) ? current : value) + dir * step);
+    edited.current = true;
     setText(display(next));
     onChange(next);
   };
@@ -139,11 +154,13 @@ export function NumberField({
       aria-label={ariaLabel}
       onFocus={() => {
         focused.current = true;
+        edited.current = false;
       }}
       onChange={(e) => {
         const raw = e.target.value;
         if (!/^-?\d*\.?\d*$/.test(raw)) return;
         focused.current = true;
+        edited.current = true;
         setText(raw);
         if (!commitOnBlur && raw !== "" && raw !== "-" && !raw.endsWith(".")) {
           const parsed = parseFloat(raw);
