@@ -1579,9 +1579,12 @@ export function StudioScreen({
    *  spot (a third of the way along, a third of the way along). The table is frozen where it was
    *  drawn first (its surface `write` sends every item), so nothing else on it jumps. A cloth goes
    *  on as the table's ONE cloth: recolouring what it wears. */
-  const pasteDressing = (pairs: { src: Placement; fresh: Placement }[], step: number, unitPx: number): { actions: Action[]; selected: SelectionRef[] } => {
+  const pasteDressing = (pairs: { src: Placement; fresh: Placement }[], step: number, unitPx: number): { actions: Action[]; selected: SelectionRef[]; landed: number } => {
     const out: Action[] = [];
     const picked: SelectionRef[] = [];
+    // How many found a table to land on: one whose table is gone, with no table picked to take it,
+    // is not pasted at all — and must not be counted as pasted (SK-10).
+    let landed = 0;
     const tablesPicked = selected.filter((r) => r.kind === "table");
     const pickedUnits = new Set(tablesPicked.map((r) => unitOf(units, r.id)?.key ?? r.id));
     const chosen = dressing ?? (tablesPicked.length && pickedUnits.size === 1 && selected.every((r) => r.kind === "table") ? tablesPicked[0].id : null);
@@ -1595,6 +1598,7 @@ export function StudioScreen({
       const s = dressSurface(target);
       const toUnit = unitOf(units, target);
       if (!s || !toUnit) continue;
+      landed += list.length;
       const placed: { id: string; local: DocPoint }[] = [];
       for (const { src, fresh } of list) {
         // A cloth: the target's one cloth, on every table of it.
@@ -1623,7 +1627,7 @@ export function StudioScreen({
       }
       if (placed.length) out.push(s.write([...s.chips.map((sp) => ({ id: sp.p.id, local: sp.local })), ...placed]));
     }
-    return { actions: out, selected: picked };
+    return { actions: out, selected: picked, landed };
   };
 
   const paste = useCallback(() => {
@@ -1641,9 +1645,18 @@ export function StudioScreen({
     const loose = (p: Placement) => !!p.tableId && !pastedTables.has(p.tableId);
     const pairs = fresh.placements.flatMap((p, i) => (loose(p) ? [{ src: clip.placements[i], fresh: p }] : []));
     const extra = pairs.length ? pasteDressing(pairs, k, PASTE_STEP_PX * mmPerPx.current) : undefined;
-    addClip({ ...fresh, placements: fresh.placements.filter((p) => !loose(p)) }, extra);
-    const n = clipCount(fresh);
-    showHint(n === 1 ? "הודבק פריט" : `הודבקו ${n} פריטים`);
+    const kept = { ...fresh, placements: fresh.placements.filter((p) => !loose(p)) };
+    // What actually lands: design items whose table is gone, with no table picked to put them on,
+    // land nowhere — said so, and the selection left as it was (SK-10: this said "הודבק פריט" over
+    // a paste that added nothing, and cleared the selection).
+    const n = clipCount(kept) + (extra?.landed ?? 0);
+    const missed = clipCount(fresh) - n;
+    if (n === 0) {
+      showHint("אין שולחן להדביק עליו — בחרו שולחן ואז הדביקו");
+      return;
+    }
+    addClip(kept, extra);
+    showHint(`${n === 1 ? "הודבק פריט" : `הודבקו ${n} פריטים`}${missed > 0 ? ` · ${missed} בלי שולחן להדביק עליו` : ""}`);
     // pasteDressing reads the document, the selection and the table being dressed — all here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addClip, nextNumber, doc, selected, dressing, units]);
