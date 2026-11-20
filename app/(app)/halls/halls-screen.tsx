@@ -245,8 +245,10 @@ function settleWalls(before: VenueStructure, after: VenueStructure): VenueStruct
   return after.features !== before.features && after.features.some((f) => f.kind === "curtain" && f.curtain?.rail?.type === "side") ? syncCurtains(after) : after;
 }
 
-/** A feature's box as it stands, turned — what alignment and snapping measure. */
+/** A feature's box as it stands, turned — what alignment and snapping measure. A ROUND one turned is
+ *  the same circle, and its box must not grow: a ⌀3m fountain turned 45° snapped as a 4.24m box. */
 function featureBox(f: StructureFeature): SnapBox {
+  if (f.shape === "circle") return { x: f.x, y: f.y, widthMm: f.widthMm, depthMm: f.widthMm };
   const rad = ((f.rotationDeg ?? 0) * Math.PI) / 180;
   const c = Math.abs(Math.cos(rad));
   const sn = Math.abs(Math.sin(rad));
@@ -707,19 +709,41 @@ export function HallsScreen() {
     () => (alignPreview && alignRows.length >= 2 ? alignGuide(alignRows.map(featureBox), 0, alignPreview) : null),
     [alignPreview, alignRows],
   );
+  /** A group drag's ONE box: the selected features' box as they stood when the gesture began, and
+   *  where the pressed one stood then — frozen on the drag's first snapped frame, cleared when it ends
+   *  (endGesture). */
+  const groupSnap = useRef<{ anchor: Point; box: SnapBox } | null>(null);
   /** The canvas's own alignment pull for a dragged feature: its edges and centre line up with the
    *  walls, the corners and the other features, and equal gaps are offered (the same guides a
-   *  dragged table gets in the sketch). The ground is never a reference — it is under everything. */
+   *  dragged table gets in the sketch). The ground is never a reference — it is under everything.
+   *  A GROUP is snapped as ONE BOX round its members, the sketch's rule, and every member takes the
+   *  delta: only the pressed feature's edges used to line up, the rest of the group's never. */
   const snapFeatureAt = useCallback(
     (id: string, p: Point, snap: CanvasLayerContext["snap"]): Point => {
       const f = structure.features.find((x) => x.id === id);
       if (!f) return p;
-      const self = featureBox(f);
+      const group = selection.length > 1 && isSelected(selection, "feature", id);
+      const members = group ? structure.features.filter((o) => isSelected(selection, "feature", o.id) && !o.locked && !followsWalls(o)) : [f];
       // A dragged lawn lines up with the walls and with the other GROUND — a paved path butted
       // against a bed — never with the palm standing on it; and nothing else lines up with the ground.
-      const ground = f.kind === "surface";
+      const ground = members.every((m) => m.kind === "surface");
       const boxes = structure.features.filter((o) => o.id !== id && (o.kind === "surface") === ground && !isSelected(selection, "feature", o.id)).map(featureBox);
-      return snap(p, { boxes, self: { widthMm: self.widthMm, depthMm: self.depthMm } });
+      if (!group || members.length < 2) {
+        const self = featureBox(f);
+        return snap(p, { boxes, self: { widthMm: self.widthMm, depthMm: self.depthMm } });
+      }
+      groupSnap.current ??= (() => {
+        const all = members.map(featureBox);
+        const minX = Math.min(...all.map((b) => b.x - b.widthMm / 2));
+        const maxX = Math.max(...all.map((b) => b.x + b.widthMm / 2));
+        const minY = Math.min(...all.map((b) => b.y - b.depthMm / 2));
+        const maxY = Math.max(...all.map((b) => b.y + b.depthMm / 2));
+        return { anchor: { x: f.x, y: f.y }, box: { x: (minX + maxX) / 2, y: (minY + maxY) / 2, widthMm: maxX - minX, depthMm: maxY - minY } };
+      })();
+      const g = groupSnap.current;
+      const moved = { x: g.box.x + p.x - g.anchor.x, y: g.box.y + p.y - g.anchor.y };
+      const s = snap(moved, { boxes, self: { widthMm: g.box.widthMm, depthMm: g.box.depthMm } });
+      return { x: Math.round(p.x + s.x - moved.x), y: Math.round(p.y + s.y - moved.y) };
     },
     [structure, selection],
   );
@@ -1010,6 +1034,7 @@ export function HallsScreen() {
       if (r.hint) setHint(r.hint);
     }
     groupDrag.current = null;
+    groupSnap.current = null;
     hist.commit();
   }, [hist, dragStructure]);
 
