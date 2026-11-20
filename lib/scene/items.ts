@@ -339,6 +339,7 @@ function pictureBody(kind: SymbolKind | null, ctx: ItemContext): ItemBuild {
     case "stairs":
     case "ramp":
     case "pergola":
+    case "billiard":
       return floorKindBody(kind, ctx);
     case "chandelier":
       return overheadKindBody(kind, ctx);

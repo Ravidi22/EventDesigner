@@ -43,6 +43,8 @@ import { rugFringe, rugInset, type RugShape } from "@/lib/studio/rug-shape";
 import { rugBorderBands } from "@/lib/studio/rug-shape";
 import { borderBands, clothHem, darkerShade, edgeFringe, footprintBorderBands, fringeOf, type Border, type BorderBand } from "@/lib/catalog/border";
 import { ledSymbol, screenSymbol, SCREEN_BODY } from "./led-glyph";
+import { billiardSymbol } from "./billiard-glyph";
+import { BILLIARD_CLOTH } from "@/lib/catalog/game-tables";
 import { LED_COLOUR } from "@/lib/venues/led";
 import { DanceFloorPattern } from "./dance-floor";
 
@@ -105,6 +107,8 @@ export const DEFAULT_TONE: Record<SymbolKind, string> = {
   "ceiling-drape": "#F3EDE2",
   // A white gloss dance floor, the one most halls hire (a black one says so through its shade).
   "dance-floor": "#F5F3F8",
+  // Green baize (lib/catalog/game-tables.ts) — a blue or a red cloth says so through its shade.
+  billiard: BILLIARD_CLOTH,
 };
 
 export interface ItemSymbolProps {
@@ -298,6 +302,10 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
       break;
     case "screen":
       body = screenSymbol(w, h, label, { tone, print: c.print, ink, textMm });
+      break;
+    // A billiard table: rails, the cloth in its shade, pockets (components/billiard-glyph.tsx).
+    case "billiard":
+      body = billiardSymbol(w, h, { cloth: t, print: c.print, ink, inkOpacity: c.inkOpacity });
       break;
     // Cloth in the air, as a card or a drag image shows it (on the plan each is drawn along its rail).
     case "sail":

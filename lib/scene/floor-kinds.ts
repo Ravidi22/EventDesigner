@@ -52,6 +52,7 @@ import { chairParts, chairRequest, darkened, pale } from "./items";
 import { flowerBuild } from "./flowers";
 import { treeEnvelopeParts, treeParts } from "./plants";
 import { applyTransform, compose, turn } from "./frame";
+import { BILLIARD_CLOTH, BILLIARD_POCKET, BILLIARD_WOOD, billiardLayout } from "@/lib/catalog/game-tables";
 import { ENVELOPE, clothMaterial, foliageMaterial, glossMaterial, metalMaterial, swatchMaterial, waterMaterial } from "./materials";
 import { type MaterialRef, type NodeTag, type Part, type Transform, type Vec3, transform, vec3 } from "./types";
 
@@ -285,9 +286,76 @@ export function floorKindBody(kind: SymbolKind, ctx: ItemContext): ItemBuild {
       return rampBody(ctx);
     case "pergola":
       return pergolaBody(ctx);
+    case "billiard":
+      return billiardBody(ctx);
     default:
       return fallbackBody(ctx);
   }
+}
+
+// ── billiard table (components/billiard-glyph.tsx, lib/catalog/game-tables.ts) ────────────────────
+
+/** A billiard table: the plan's layout lifted — a wooden cabinet on six turned legs (four at the
+ *  corners, two under the side pockets), the cloth in the row's shade 4 cm under the rails' top,
+ *  the cushioned rails round it, a dark cup at each of the six pockets, ivory sights on the rails.
+ *  Its height is the rail's top (79 cm standard). */
+function billiardBody(ctx: ItemContext): ItemBuild {
+  const w = Math.max(400, ctx.widthMm);
+  const d = Math.max(300, ctx.depthMm);
+  const h = Math.max(300, ctx.heightMm || 790);
+  const t = billiardLayout(w, d);
+  const wood = glossMaterial(BILLIARD_WOOD);
+  const cloth = clothMaterial(ctx.tone || BILLIARD_CLOTH);
+  const b = make(wood);
+  const railH = Math.min(70, h * 0.09);
+  const clothZ = h - railH * 0.6;
+  const cabinet = Math.min(260, h * 0.33);
+  const cabTop = clothZ - 40;
+  // The cabinet under the slate, a little in from the rails.
+  const inset = t.railMm * 0.35;
+  b.parts.push(box(w - 2 * inset, d - 2 * inset, cabinet, vec3(0, 0, cabTop - cabinet)));
+  // The slate and its cloth.
+  b.parts.push(box(t.cloth.w + 2, t.cloth.h + 2, 40, vec3(0, 0, cabTop), cloth));
+  // The rails: two long and two short, their tops at the table's height, the cushion's nose a
+  // darker strip of the cloth along the inside edge.
+  const r = t.railMm;
+  const nose = Math.min(35, r * 0.3);
+  const railZ = clothZ;
+  const railTall = h - railZ;
+  if (t.alongX) {
+    for (const sy of [-1, 1]) {
+      b.parts.push(box(w, r, railTall, vec3(0, sy * (d / 2 - r / 2), railZ)));
+      b.parts.push(box(t.cloth.w, nose, railTall * 0.7, vec3(0, sy * (t.cloth.h / 2 - nose / 2), railZ), cloth));
+    }
+    for (const sx of [-1, 1]) {
+      b.parts.push(box(r, d - 2 * r, railTall, vec3(sx * (w / 2 - r / 2), 0, railZ)));
+      b.parts.push(box(nose, t.cloth.h, railTall * 0.7, vec3(sx * (t.cloth.w / 2 - nose / 2), 0, railZ), cloth));
+    }
+  } else {
+    for (const sx of [-1, 1]) {
+      b.parts.push(box(r, d, railTall, vec3(sx * (w / 2 - r / 2), 0, railZ)));
+      b.parts.push(box(nose, t.cloth.h, railTall * 0.7, vec3(sx * (t.cloth.w / 2 - nose / 2), 0, railZ), cloth));
+    }
+    for (const sy of [-1, 1]) {
+      b.parts.push(box(w - 2 * r, r, railTall, vec3(0, sy * (d / 2 - r / 2), railZ)));
+      b.parts.push(box(t.cloth.w, nose, railTall * 0.7, vec3(0, sy * (t.cloth.h / 2 - nose / 2), railZ), cloth));
+    }
+  }
+  // The pockets: a dark cup through the rail, a hair over its top so it reads from above.
+  for (const p of t.pockets) b.parts.push(cyl(t.pocketMm, railTall + 30, vec3(p.x, p.y, railZ - 30), matte(BILLIARD_POCKET), t.pocketMm * 1.05, 16));
+  for (const s of t.sights) b.parts.push(cyl(Math.max(5, t.railMm * 0.07), 2, vec3(s.x, s.y, h), matte("#efe6d2"), undefined, 8));
+  // Six legs: turned columns, wider at the foot, under the corners and the side pockets.
+  const legR = Math.max(30, Math.min(70, Math.min(w, d) * 0.045));
+  const legTop = cabTop - cabinet;
+  const along = t.alongX ? w : d;
+  const across = t.alongX ? d : w;
+  for (const u of [-along / 2 + legR * 2.2, 0, along / 2 - legR * 2.2]) {
+    for (const v of [-across / 2 + legR * 2.2, across / 2 - legR * 2.2]) {
+      const at = t.alongX ? vec3(u, v, 0) : vec3(v, u, 0);
+      b.parts.push(cyl(legR * 1.15, legTop, at, undefined, legR * 0.9, 16));
+    }
+  }
+  return b;
 }
 
 // ── sofa (item-symbol.tsx:875 sofa, :911 pouf) ─────────────────────────────────────────────────
@@ -1567,5 +1635,15 @@ if (isMain(import.meta.url)) {
   assert(JSON.stringify(floorKindBody("tree", ctxOf({ kind: "circle", diameterMm: 3500 }, 4000, DEFAULT_TONE.tree))) === JSON.stringify(tree), "…and a tree with none is the tree it always was");
   const pouf = floorKindBody("sofa", ctxOf({ kind: "circle", diameterMm: 900 }, 420, DEFAULT_TONE.sofa, { profile: baluster }));
   assert(pouf.parts.length === 1 && pouf.parts[0].shape === "lathe", "a round sofa with a profile is a pouf turned to it");
+
+  // A billiard table (lib/catalog/game-tables.ts): its rails' tops at its height, the cloth in its
+  // shade under them, six pocket cups, six legs; turned the long way down it is the same table.
+  const pool = floorKindBody("billiard", ctxOf({ kind: "rect", widthMm: 2540, depthMm: 1420 }, 790, "#1f4e8c"));
+  assert(near(Math.max(...pool.parts.map(top)), 792), `billiard: the rails' tops at its height, the sights on them (${Math.max(...pool.parts.map(top))})`);
+  assert(boxes(pool).some((p) => p.material?.kind === "fabric" && p.material.colour === "#1f4e8c" && p.w > 2000 && top(p) < 790), "billiard: the cloth in the row's shade, under the rails");
+  assert(cyls(pool).filter((p) => p.material?.colour === BILLIARD_POCKET).length === 6, "billiard: six pockets");
+  assert(cyls(pool).filter((p) => p.at.z === 0).length === 6, "billiard: six legs on the floor");
+  const turned = floorKindBody("billiard", ctxOf({ kind: "rect", widthMm: 1420, depthMm: 2540 }, 790, "#1f4e8c"));
+  assert(cyls(turned).filter((p) => p.material?.colour === BILLIARD_POCKET && Math.abs(p.at.y) < 1e-6).length === 2, "billiard: laid the long way down, its side pockets on the long rails");
   console.log("scene floor kinds ok");
 }

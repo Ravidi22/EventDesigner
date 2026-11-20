@@ -442,6 +442,7 @@ const NAME_EXAMPLE: Record<string, string> = {
   tables: "שולחן עגול 180",
   chairs: "כיסא נפוליאון שקוף",
   sofas: "ספת קטיפה תלת־מושבית",
+  "game-tables": "שולחן ביליארד 8 רגל",
   stages: "במה 4×6",
   "stage-decks": "פלטת במה 244×122",
   bars: "בר ישר לבן",

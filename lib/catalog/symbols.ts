@@ -64,7 +64,10 @@ export type SymbolKind =
    *  between each, an edge trim round it. On the plan it is laid as a rug is (CarpetNode, the printed
    *  map's stretch path), which draws the same panels by its category; this is the card's and the
    *  drag image's. */
-  | "dance-floor";
+  | "dance-floor"
+  /** A billiard table (lib/catalog/game-tables.ts) — its wooden rails round the cloth, six pockets,
+   *  the sights, the head string and the foot spot. */
+  | "billiard";
 
 /** The categories that have a picture, and which one. A category not here draws as it always did. */
 export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
@@ -107,6 +110,8 @@ export const SYMBOL_BY_CATEGORY: Record<string, SymbolKind> = {
   "ceiling-drapes": "ceiling-drape",
   // Panels clicked together (the built-in kit, spec 2026-11-07 §2).
   "dance-floors": "dance-floor",
+  // The game table of a lounge (lib/catalog/game-tables.ts).
+  "game-tables": "billiard",
 };
 
 /** Whether the category has a picture at all — what the appearance editor's switch is offered for. */

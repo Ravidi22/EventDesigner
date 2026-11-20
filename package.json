@@ -169,6 +169,7 @@
     "check:scene-focus": "tsx lib/scene/focus.ts",
     "db:verify:scene": "tsx lib/scene/verify.ts",
     "check:envelope": "tsx lib/scene/envelope.ts",
+    "check:billiard": "tsx lib/catalog/game-tables.ts",
     "check:tables": "tsx lib/scene/tables.ts",
     "check:items": "tsx lib/scene/items.ts",
     "check:scene-viewer": "tsx components/scene/smoke.ts",

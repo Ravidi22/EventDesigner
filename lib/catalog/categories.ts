@@ -47,6 +47,7 @@ import { Sailboat, Waves } from "lucide-react";
 import { Grid3x3 } from "lucide-react";
 import { GalleryVerticalEnd } from "lucide-react";
 import { Route } from "lucide-react";
+import { Dices } from "lucide-react";
 
 export interface CategoryField {
   key: string;
@@ -228,6 +229,10 @@ export const CATEGORIES: CategoryDef[] = [
   // Lounge seating — a corner of sofas and armchairs round a low table, not a place laid for dinner.
   // No seat field: a sofa is counted as one sofa on the packing list, and nothing multiplies off it.
   { id: "sofas", label: "ספות", group: "grp-seating", defaultLayer: "floor", icon: Sofa, dims: "box", fields: [] },
+  // A lounge's game table — billiards (2026-11-20, the user: "I want to be able to add a pool table"),
+  // drawn as the table itself on the plan and in the room (lib/catalog/game-tables.ts). Furniture of
+  // the hall pass, beside the sofas; never a dining table (no seats, no number, nothing dressed).
+  { id: "game-tables", label: "שולחנות משחק", group: "grp-seating", defaultLayer: "floor", icon: Dices, dims: "box", defaultHeightMm: 790, fields: [] },
   { id: "tablecloths", label: "מפות", group: "grp-table-design", defaultLayer: "table", icon: Square, dims: "both", fields: [], anchor: "table", needsHeight: false },
   // The one category that defaults to consumable: a centrepiece is flowers far more often than it
   // is the vase they stand in, and a designer who stocks reusable pieces changes one field.

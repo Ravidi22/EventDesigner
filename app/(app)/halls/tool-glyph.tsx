@@ -13,7 +13,8 @@ import type { AddTool } from "@/lib/venues/add-tools";
 import { pergolaOf } from "@/lib/venues/pergola";
 import { newPoolFeature } from "@/lib/venues/pool";
 import { newSeatingFeature, seatingChair } from "@/lib/venues/seating";
-import { featureFootprint, newFeature, newFeatureFromProduct, type StructureFeature } from "@/lib/venues/structure";
+import { featureFootprint, newFeature, newFeatureFromProduct, newItemFeature, type StructureFeature } from "@/lib/venues/structure";
+import { VenueItemGlyph } from "@/components/venue-item";
 import { useMounted } from "@/lib/use-mounted";
 
 // A rail tile's picture for the things that ARE a shape (2026-11-19, the user, of the /halls rail:
@@ -35,7 +36,8 @@ type Picture =
   | { kind: "outline"; footprint: Footprint; fill: string; dashed?: boolean }
   | { kind: "climb"; feature: Omit<StructureFeature, "id"> }
   | { kind: "pergola"; footprint: Footprint; feature: Omit<StructureFeature, "id"> }
-  | { kind: "seating"; spec: NonNullable<StructureFeature["seating"]>; w: number; h: number };
+  | { kind: "seating"; spec: NonNullable<StructureFeature["seating"]>; w: number; h: number }
+  | { kind: "item"; feature: StructureFeature };
 
 /** "ציור חופשי" in water: a pool of no particular shape, traced dashed as the trace draws it. */
 const FREE_OUTLINE = [
@@ -66,6 +68,8 @@ function pictureOf(tool: AddTool): Picture | null {
     return { kind: "pergola", footprint: featureFootprint(feature), feature };
   }
   if (!tool.product || !tool.kind) return null;
+  // A catalog thing put in the venue as itself (./item.ts) — a billiard table — is its picture.
+  if (tool.kind === "item") return { kind: "item", feature: { id: `tile:${tool.id}`, ...newItemFeature(tool.product, ORIGIN) } };
   const feature = newFeatureFromProduct(tool.kind, tool.product, ORIGIN);
   if (tool.kind === "stairs" || tool.kind === "ramp") return { kind: "climb", feature };
   return { kind: "outline", footprint: featureFootprint(feature), fill: "var(--color-surface)" };
@@ -84,7 +88,7 @@ export const ToolGlyph = memo(function ToolGlyph({ tool }: { tool: AddTool }) {
   const picture = useMemo(() => (mounted ? pictureOf(tool) : null), [mounted, tool]);
   if (!picture) return <span className="block shrink-0" style={{ width: BOX_W, height: BOX_H }} aria-hidden />;
 
-  const b = picture.kind === "seating" ? { w: picture.w, h: picture.h } : footprintBounds(picture.kind === "climb" ? featureFootprint(picture.feature) : picture.footprint);
+  const b = picture.kind === "seating" ? { w: picture.w, h: picture.h } : footprintBounds(picture.kind === "climb" || picture.kind === "item" ? featureFootprint(picture.feature) : picture.footprint);
   // A deck stored 122 across and 244 deep is the same deck as a 244×122: laid long side across, it
   // fills the tile instead of standing in a third of it.
   const turned = b.h > b.w * 1.1;
@@ -123,6 +127,7 @@ export const ToolGlyph = memo(function ToolGlyph({ tool }: { tool: AddTool }) {
           <PergolaGlyph footprint={picture.footprint} pergola={pergolaOf(picture.feature)} stroke={stroke} strokeWidth={1} postFill={stroke} />
         )}
         {picture.kind === "seating" && <SeatingGlyph spec={picture.spec} ink={stroke} />}
+        {picture.kind === "item" && <VenueItemGlyph feature={picture.feature} />}
       </g>
     </svg>
   );
