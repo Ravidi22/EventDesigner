@@ -26,6 +26,7 @@ import { PlacementMap } from "@/app/(app)/outputs/placement-map";
 import { Button } from "@/components/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Segmented } from "@/components/segmented";
+import { WorkspaceFailed } from "@/components/workspace-failed";
 
 // סקיצת פתיחה — the meeting stage after the details (spec docs/superpowers/specs/
 // 2026-11-01-meeting-sketch-pick-design.md). The couple sees the studio's saved sketches as picture
@@ -55,7 +56,7 @@ type Room = { id: string; geometry: VenueGeometry };
 const FIRST = "first";
 
 export function SketchPickStage({ onDone }: { onDone: () => void }) {
-  const { workspace, ready } = useEventWorkspace();
+  const { workspace, ready, failed: workspaceFailed, retry: retryWorkspace } = useEventWorkspace();
   const catalog = useCatalog();
   const [sketches, setSketches] = useState<SketchTemplateSummary[] | null>(null);
   const [venueNames, setVenueNames] = useState<Map<string, string>>(new Map());
@@ -169,6 +170,8 @@ export function SketchPickStage({ onDone }: { onDone: () => void }) {
   };
   const start = () => (sketch && hasDrawing ? setAsking(true) : void write());
 
+  // The event could not be read (SK-2): said, with a retry — not a stage that never appears.
+  if (workspaceFailed) return <WorkspaceFailed onRetry={retryWorkspace} />;
   if (!ready || !sketches || !catalog.ready) return null;
 
   // The stage renders only once the catalog is in (below), and categoryOf reads its primed cache —

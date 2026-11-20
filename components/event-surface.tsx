@@ -37,8 +37,8 @@ export function EventSurface({ active, children }: { active: EventSurfaceTab; ch
 
 function SurfaceHeader({ active }: { active: EventSurfaceTab }) {
   // Until the one round trip lands the bar says "אין אירוע פעיל", which is also what it says when
-  // there genuinely isn't one.
-  const { workspace } = useEventWorkspace();
+  // there genuinely isn't one — but not when the read FAILED: that is no answer at all (SK-2).
+  const { workspace, failed } = useEventWorkspace();
   const event = workspace?.event ?? null;
 
   return (
@@ -53,7 +53,7 @@ function SurfaceHeader({ active }: { active: EventSurfaceTab }) {
       </Link>
 
       <div className="flex min-w-0 flex-1 flex-col justify-center leading-tight">
-        <h1 className="truncate font-display text-h2 text-ink">{event?.clientName ?? "אין אירוע פעיל"}</h1>
+        <h1 className="truncate font-display text-h2 text-ink">{event?.clientName ?? (failed ? "האירוע לא נטען" : "אין אירוע פעיל")}</h1>
         {event && (
           <span className="truncate text-xs text-muted">
             {zonesLabelOf(event)} · {formatEventDate(event.date)}

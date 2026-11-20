@@ -148,6 +148,7 @@ import { diffDocuments } from "@/lib/design-document/delta";
 import { CanvasStage, type SelectionKind, type SelectionRef, type SpinMode } from "./canvas-stage";
 import type { ContextMenuItem, MarqueeMode } from "@/components/plan-canvas";
 import { VenueAccessNotice, VenueUnsetNotice } from "@/components/venue-access-notice";
+import { WorkspaceFailed } from "@/components/workspace-failed";
 import { ScenePreview } from "./scene-preview";
 import { HoldWhileDragging } from "./hold-while-dragging";
 import { EndPanel, openEndPanel, PanelGroups, PanelList, PanelListFolded, PanelListHeading, PanelListRow, type PanelGroup } from "@/components/end-panel";
@@ -342,7 +343,8 @@ export function StudioScreen({
     });
   }, []);
   // Resolved once for this whole event surface — the event, its document and its venue geometry.
-  const { workspace, ready } = useEventWorkspace();
+  // `failed`: the read did not land — not "no event" (SK-2, see the early return before the canvas).
+  const { workspace, ready, failed: workspaceFailed, retry: retryWorkspace } = useEventWorkspace();
   // An EMPTY document, not a fabricated one. The studio used to open on a sample plan built out of
   // sample products — invented tables, invented placements — which the restore effect below then
   // replaced. With the catalog on Postgres that fiction is worse than useless: it would draw items
@@ -505,6 +507,9 @@ export function StudioScreen({
       // adoptCovers): a lawn reshaped at /halls since reshapes its carpet now.
       setHistory(initHistory(adoptCovers(adoptHung(saved, arrangedStructure(plan.structure, saved)), plan.structure, deckOf)));
     }
+    // …and one with nothing saved yet opens EMPTY, whatever the screen's own history picked up before
+    // the read landed (or while it had failed): that was drawn against nothing and saved nowhere.
+    else setHistory(initHistory(emptyDocument()));
     // What is already on the server, so the first render after a restore doesn't write it straight
     // back. Against localStorage that redundant save was free; it is a round trip now.
     saves.restore(saved ?? null);
@@ -5623,6 +5628,11 @@ export function StudioScreen({
           onClose: () => setStageFill(null),
         }
       : null;
+
+  // The event could not be read (SK-2): there is nothing to draw on and nowhere to save — said, with
+  // a retry, instead of a canvas that would quietly be this device's scratch drawing. Every hook is
+  // above; nothing is restored, so nothing is saved, until a read lands.
+  if (workspaceFailed) return <WorkspaceFailed onRetry={retryWorkspace} />;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">

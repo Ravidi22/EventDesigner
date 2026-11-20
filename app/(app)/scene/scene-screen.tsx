@@ -20,6 +20,7 @@ import { detectDevice } from "@/components/scene/device";
 import { previewScene } from "@/components/scene/preview-scene";
 import { Segmented } from "@/components/segmented";
 import { SwitchRow } from "@/components/toggle";
+import { WorkspaceFailed } from "@/components/workspace-failed";
 import { EndPanel, PanelGroups, PanelGroupsHeader, openEndPanel, panelGroup as G } from "@/components/end-panel";
 import { groupMemory } from "@/lib/studio/panel-groups";
 import { ClientChip, CollapsedAction, FloatStrip, PanelFoot, PanelSkeleton, StripDivider, type FootAction } from "@/components/doc-shell";
@@ -53,7 +54,7 @@ const KIND = "scene";
 const DEFAULT_OPEN = ["views"] as const;
 
 export function SceneScreen({ frame = "studio", initialProducts }: { frame?: "studio" | "meeting"; initialProducts?: Product[] }) {
-  const { workspace, ready } = useEventWorkspace();
+  const { workspace, ready, failed: workspaceFailed, retry: retryWorkspace } = useEventWorkspace();
   const [warm] = useState(() => (typeof window !== "undefined" && loadProducts().length > 0 ? loadProducts() : undefined));
   const catalog = useCatalog(initialProducts ?? warm);
   // The studio's railing rule (settings → במות), as /outputs reads it: off if the read fails — a
@@ -259,6 +260,9 @@ export function SceneScreen({ frame = "studio", initialProducts }: { frame?: "st
             compact
             className="h-full w-full"
           />
+        ) : workspaceFailed ? (
+          // The event could not be read (SK-2): no room is built from a drawing that never arrived.
+          <WorkspaceFailed onRetry={retryWorkspace} body="לא ניתן לטעון את האירוע, ולכן אי אפשר להציג את החלל." />
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-muted">טוען את הסקיצה…</div>
         )}

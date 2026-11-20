@@ -13,7 +13,7 @@
 // header already says which event this is. So the hook falls back to fetching for itself when there
 // is no provider above it. Whether one exists is fixed for a component's lifetime, so the effect
 // below either never runs or runs exactly once; it is not a conditional hook.
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { whenSaved } from "@/lib/studio/save-queue";
 import { loadActiveEventId } from "./storage";
 import { fetchEventWorkspace, type EventWorkspace } from "./workspace";
@@ -22,12 +22,20 @@ export interface WorkspaceHandle {
   workspace: EventWorkspace | null;
   /** False until the one round trip lands. Every consumer already had this state — the studio drew
    *  an empty plane, the header said "אין אירוע פעיל" — because the active-event pointer is in this
-   *  browser and resolving it was always a request. */
+   *  browser and resolving it was always a request. Stays false when the read FAILS: a screen that
+   *  waits for it keeps waiting rather than taking "no workspace" for "no event". */
   ready: boolean;
+  /** The read failed. Not "no event" — that is a successful read with `event: null` — so nothing is
+   *  drawn into the device's scratch drawing and nothing is saved there: the screen says so and
+   *  offers `retry` (QA 2026-11-20, SK-2: it used to land `ready` with no workspace, and the studio
+   *  opened the scratch drawing and saved every edit to it under "נשמר"). */
+  failed: boolean;
+  /** Read again, after a failure. */
+  retry: () => void;
 }
 
 /** `null` means "no provider above me", which is a different thing from a provider that has not
- *  resolved yet — that one is `{ workspace: null, ready: false }`. */
+ *  resolved yet — that one is `{ workspace: null, ready: false, failed: false }`. */
 const WorkspaceContext = createContext<WorkspaceHandle | null>(null);
 
 /** The one read, for a whole event surface. */
@@ -48,10 +56,13 @@ export function useEventWorkspace(): WorkspaceHandle {
 }
 
 /** The actual fetch. `skip` is set when a provider above has already done it, so the fallback path
- *  in useEventWorkspace costs nothing beyond two unused useState calls. */
+ *  in useEventWorkspace costs nothing beyond a few unused state slots. */
 function useResolvedWorkspace(skip = false): WorkspaceHandle {
   const [workspace, setWorkspace] = useState<EventWorkspace | null>(null);
   const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+  // Bumped by `retry`, which is what runs the read again.
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (skip) return;
@@ -66,15 +77,23 @@ function useResolvedWorkspace(skip = false): WorkspaceHandle {
     void whenSaved()
       .then(() => fetchEventWorkspace(loadActiveEventId()))
       .then((w) => {
-        if (live) setWorkspace(w);
+        if (!live) return;
+        setWorkspace(w);
+        setFailed(false);
+        setReady(true);
       })
-      .finally(() => {
-        if (live) setReady(true);
+      .catch(() => {
+        if (live) setFailed(true);
       });
     return () => {
       live = false;
     };
-  }, [skip]);
+  }, [skip, attempt]);
 
-  return { workspace, ready };
+  const retry = useCallback(() => {
+    setFailed(false);
+    setAttempt((n) => n + 1);
+  }, []);
+
+  return useMemo(() => ({ workspace, ready, failed, retry }), [workspace, ready, failed, retry]);
 }

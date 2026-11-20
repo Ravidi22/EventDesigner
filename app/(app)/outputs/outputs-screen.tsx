@@ -64,6 +64,7 @@ import { CrewFooter, CrewHeader } from "./crew-doc";
 import { docTheme } from "@/lib/documents/theme";
 import type { DocStyleSetting } from "@/lib/documents/style";
 import { VenueAccessNotice } from "@/components/venue-access-notice";
+import { WorkspaceFailed } from "@/components/workspace-failed";
 import { Quote, statusOf } from "./quote";
 import { buildQuotePdf, quoteFileName, shareFile } from "./quote-pdf";
 import { DocRail, type RailDoc } from "./doc-rail";
@@ -172,7 +173,7 @@ export function OutputsScreen({
     return cat ? { category: cat, group: CATEGORY_BY_ID[cat]?.group } : undefined;
   };
   // EventSurface resolved all of this in one call for the whole surface.
-  const { workspace, ready } = useEventWorkspace();
+  const { workspace, ready, failed: workspaceFailed, retry: retryWorkspace } = useEventWorkspace();
 
   // THE CATALOG, which every sheet here resolves its items against, synchronously, while rendering
   // (lib/catalog/storage.ts). Nothing on this screen used to load it, so the quote and the packing
@@ -786,7 +787,13 @@ export function OutputsScreen({
         <DocRail docs={railDocs} active={view} onSelect={setView} forcedClosed={client ? leaveClient : undefined} />
 
         <SheetStage pageSelector={view === "quote" ? "[data-quote-page]" : "article.sheet"} client={client} onClient={setClient} contentRef={sheetsRef} resetKey={view}>
-          {loading ? (
+          {workspaceFailed ? (
+            // The event could not be read (SK-2): still loading as far as every sheet is concerned —
+            // nothing is printed off a drawing that never arrived — and said, with a retry.
+            <div className="no-print bg-canvas shadow-lifted" style={{ width: `${TRIM.A4[0]}mm` }}>
+              <WorkspaceFailed onRetry={retryWorkspace} body="לא ניתן לטעון את האירוע, ולכן אי אפשר להציג את הפלטים." />
+            </div>
+          ) : loading ? (
             <SheetLoading widthMm={view === "quote" ? TRIM.A4[0] : w} heightMm={view === "quote" ? TRIM.A4[1] : h} />
           ) : failed ? (
             // A catalog that failed to load would print every sheet empty — say so instead.
@@ -817,7 +824,7 @@ export function OutputsScreen({
           ) : (
             <>
               <PanelGroupsHeader title={head.title} sub={head.sub} />
-              {loading && <PanelSkeleton />}
+              {loading && !workspaceFailed && <PanelSkeleton />}
             </>
           )}
         </EndPanel>
