@@ -1,17 +1,21 @@
 // Start a new event from the meeting-flow details form (F-1.3): create the record, mark it active,
-// and seed its own empty design document (per-event keys — B).
+// and seed its own design document (per-event keys — B).
 //
 // No geometry is copied here. The event names its venue and zones; the walls stay at the venue and
-// resolve on read (lib/events/plan.ts). Tables aren't copied either (F-3.1) — they are drawn per
-// event, in the meeting's hall-sketch stage.
-import { emptyDocument } from "@/lib/design-document/types";
-import { saveDocument } from "@/lib/studio/actions";
-import { seedDocumentFromTemplate } from "@/lib/studio/sketch-actions";
+// resolve on read (lib/events/plan.ts). The venue's DEFAULT TABLE LAYOUT, when it has one, is the
+// one thing a new drawing starts with — copied in as the event's own tables by the seed below
+// (lib/studio/sketch-actions.ts seedEventDocument); everything else is drawn per event, in the
+// meeting's sketch stages.
+import { seedEventDocument } from "@/lib/studio/sketch-actions";
 import { saveEvent } from "./actions";
 import { setActiveEventId } from "./storage";
 import type { EventSummary } from "./types";
 
 export async function beginEvent(input: {
+  /** The id to create it under — the details form mints ONE per create and sends it again on a retry,
+   *  so a create that failed half-way (the row written, its drawing not) is finished, never doubled
+   *  (QA 2026-11-20, SK-6). Absent = a fresh one. */
+  id?: string;
   clientName: string;
   phone: string;
   contactName?: string;
@@ -32,7 +36,7 @@ export async function beginEvent(input: {
   sketchTemplateId?: string;
 }): Promise<EventSummary> {
   const ev: EventSummary = {
-    id: crypto.randomUUID(),
+    id: input.id ?? crypto.randomUUID(),
     clientName: input.clientName,
     phone: input.phone,
     // The details form asks for these on the same screen — dropping them here made the couple's own
@@ -51,16 +55,16 @@ export async function beginEvent(input: {
     step: 0,
     createdAt: Date.now(),
   };
-  // The id is minted here, in the browser, and the row is written with it — so the document below
-  // and the event it belongs to agree on an id without waiting to be told one.
+  // The id is minted in the browser, and the row is written with it — so the document below and the
+  // event it belongs to agree on an id without waiting to be told one. saveEvent is an upsert on the
+  // id: a retry under the same id writes the same row again, never a second event.
   await saveEvent(ev);
   setActiveEventId(ev.id);
   // Seeded under this event's own id, explicitly — not dependent on setActiveEventId having run
   // first, which was an ordering rule enforced only by a comment. Awaited now that it is a round
-  // trip: the hall-sketch stage opens straight after this returns, and it reads what this wrote.
-  // …or on a saved sketch, when one was picked: the server reads the sketch, drops what belonged
-  // to another venue's walls, and writes it as this event's v1 — one round trip, not two.
-  if (input.sketchTemplateId) await seedDocumentFromTemplate(ev.id, input.sketchTemplateId, input.mmPerUnit ?? 1);
-  else await saveDocument(ev.id, emptyDocument(input.mmPerUnit ?? 1));
+  // trip: the next stage opens straight after this returns, and it reads what this wrote. ONE round
+  // trip for every case — a saved sketch, the venue's tables, or an empty plan — and a no-op for an
+  // event that already has its drawing (a retry after the seed's answer was lost).
+  await seedEventDocument(ev.id, input.sketchTemplateId, input.mmPerUnit ?? 1);
   return ev;
 }

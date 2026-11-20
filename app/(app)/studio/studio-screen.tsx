@@ -349,8 +349,8 @@ export function StudioScreen({
   // sample products — invented tables, invented placements — which the restore effect below then
   // replaced. With the catalog on Postgres that fiction is worse than useless: it would draw items
   // against variant ids the designer's real catalog may not contain, and for one frame it showed a
-  // plan nobody drew. An event's real document is loaded below; a new one starts empty, which is
-  // what beginEvent() already writes.
+  // plan nobody drew. An event's real document is loaded below — a new one as beginEvent() wrote it:
+  // empty, or the venue's own tables.
   const [history, setHistory] = useState<History>(() => initHistory(emptyDocument()));
   // DERIVED, not state: the plane an event sits on is a pure function of its venue and zones, and
   // nothing on this screen edits it — the designer draws ON the walls, never the walls themselves

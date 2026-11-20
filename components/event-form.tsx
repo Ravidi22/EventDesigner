@@ -101,6 +101,10 @@ export function EventForm({
   const [others, setOthers] = useState<EventSummary[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The id a NEW event is created under: minted on the first submit and kept until a create has
+  // landed, so "נסו שוב" after one that failed half-way — the row written, its drawing not — finishes
+  // THAT event instead of opening a second one beside it with no drawing (QA 2026-11-20, SK-6).
+  const newEventId = useRef<string | null>(null);
   // Whether this form is still on screen once `onSaved` has resolved. Usually it is not — the
   // dialog closes and the meeting steps to the next stage — but a studio whose configured flow is
   // `details` alone has nowhere to step TO, and there the form stays put and must be usable again.
@@ -277,13 +281,16 @@ export function EventForm({
       } else {
         // The venue list is already in state from the picker below — no need to go back to the
         // server for a scale we are holding.
+        newEventId.current ??= crypto.randomUUID();
         await onSaved(
           await beginEvent({
             ...fields,
+            id: newEventId.current,
             mmPerUnit: venue?.plan.mmPerUnit ?? 1,
             sketchTemplateId: sketchId || undefined,
           }),
         );
+        newEventId.current = null;
       }
     } catch {
       setError("לא ניתן לשמור את האירוע. נסו שוב.");

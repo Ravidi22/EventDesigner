@@ -9,11 +9,17 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentOrg } from "@/lib/db/org";
-import { events, sketchTemplates } from "@/lib/db/schema";
+import { sketchTemplates } from "@/lib/db/schema";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { emptyDocument } from "@/lib/design-document/types";
 import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
-import { saveDocument } from "./actions";
+import { fetchProducts } from "@/lib/catalog/actions";
+import { fetchEvent } from "@/lib/events/actions";
+import { eventPlan } from "@/lib/events/plan";
+import { fetchVenueGeometry } from "@/lib/venues/actions";
+import { featureFootprint } from "@/lib/venues/structure";
+import { wantsLayout, withLayout } from "@/lib/venues/venue-table";
+import { fetchDocument, saveDocument } from "./actions";
 import {
   adoptSketch,
   MAX_SKETCHES,
@@ -128,23 +134,38 @@ export async function fetchSketchTemplateContent(id: unknown, venueId?: string |
 }
 
 /**
- * A new event's first drawing, from a saved sketch — what "התחלה מסקיצה" in the event form does.
+ * A NEW event's first drawing (lib/events/begin.ts) — written once.
  *
- * Reads the event's own venue to decide what the sketch keeps, and writes the document through the
- * same saveDocument every autosave goes through, so the row it opens is an ordinary v1. A sketch
- * that has since been deleted seeds an empty document rather than failing the event: the event is
- * the thing being made, the sketch was a head start.
+ * From a saved sketch when one was picked ("התחלה מסקיצה" in the event form): read against the
+ * event's own venue to decide what the sketch keeps. Else empty — and an empty drawing starts with
+ * the venue's DEFAULT TABLE LAYOUT in it as its own tables (lib/venues/venue-table.ts), matched to
+ * this studio's rows here (QA 2026-11-20, SK-8: they used to be copied in only when the studio first
+ * opened the drawing, so the client's view, outputs, the 3D tab, procurement and the venue's view of
+ * the sketch all saw an empty hall until then — and a client's proposal made on that empty hall
+ * was later merged on top of the venue's tables). Written through the same saveDocument every
+ * autosave goes through, so the row it opens is an ordinary v1. A sketch that has since been
+ * deleted seeds an empty drawing rather than failing the event: the event is the thing being made,
+ * the sketch was a head start.
+ *
+ * IDEMPOTENT (SK-6): an event that already has a drawing is left as it is. A create is retried with
+ * the same id after a failure, and a seed whose answer was lost on the way back may have landed —
+ * writing again would lay the sketch or the tables over it a second time.
  */
-export async function seedDocumentFromTemplate(eventId: string, templateId: unknown, mmPerUnit: number): Promise<void> {
-  const organizationId = await currentOrg();
+export async function seedEventDocument(eventId: string, templateId: unknown, mmPerUnit: number): Promise<void> {
   if (!isId(eventId)) throw new Error("eventId must be a uuid");
   const scale = Number.isFinite(mmPerUnit) && mmPerUnit > 0 ? mmPerUnit : 1;
-  const [ev] = await db()
-    .select({ venueId: events.venueId })
-    .from(events)
-    .where(and(eq(events.id, eventId), eq(events.organizationId, organizationId)))
-    .limit(1);
-  if (!ev) throw new Error("event not found");
-  const sketch = isId(templateId) ? await fetchSketchTemplateContent(templateId, ev.venueId ?? null) : null;
-  await saveDocument(eventId, sketch ? { ...sketch, calibration: { mmPerUnit: scale } } : emptyDocument(scale));
+  // Both scoped to this organisation: an event of another studio is simply not found.
+  const [event, existing] = await Promise.all([fetchEvent(eventId), fetchDocument(eventId)]);
+  if (!event) throw new Error("event not found");
+  if (existing) return;
+  const sketch = isId(templateId) ? await fetchSketchTemplateContent(templateId, event.venueId ?? null) : null;
+  let content: DesignDocumentContent = sketch ? { ...sketch, calibration: { mmPerUnit: scale } } : emptyDocument(scale);
+  if (event.venueId && wantsLayout(content)) {
+    const [geometry, products] = await Promise.all([fetchVenueGeometry(event.venueId), fetchProducts()]);
+    const plan = eventPlan(event, geometry);
+    if (plan.layoutTables.length) {
+      content = withLayout(content, plan.layoutTables, products, { newId: () => crypto.randomUUID(), shades: event.shades, footprintOf: featureFootprint }).content;
+    }
+  }
+  await saveDocument(eventId, content);
 }
