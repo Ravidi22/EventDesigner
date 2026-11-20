@@ -8,11 +8,12 @@
 // two studios today, but because the day there are, the check has to already be in the query rather
 // than in a code review. Nothing in this file trusts an id it was handed; ownership is a WHERE
 // clause, always.
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, or, sql, type SQLWrapper } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentActor, currentOrg } from "@/lib/db/org";
 import { revalidateCatalog } from "@/lib/db/revalidate";
-import { products, productVariants, designDocuments, studioSettings } from "@/lib/db/schema";
+import { products, productVariants, designDocuments, sketchProposals, sketchTemplates, studioSettings } from "@/lib/db/schema";
+import { COMPOSITION_VARIANT_PATHS, DRAWING_VARIANT_PATHS, STAGE_TEMPLATE_VARIANT_PATHS, namesAny } from "./variant-refs";
 import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import type { Product } from "./types";
 import { catalogShades, type CatalogShade } from "./shades";
@@ -218,67 +219,100 @@ export async function saveProduct(product: Product): Promise<Product[]> {
   return fetchProducts();
 }
 
-/** F-4.5: is any of these variant ids placed in ANY design document of this studio?
+/** F-4.5: does anything this studio keeps NAME one of these variant ids — so that deleting the row
+ *  would leave it pointing at nothing?
  *
- *  ⚠ This is the one query that reaches INSIDE design_documents.content, which the schema notes say
- *  is otherwise only ever read and written whole. It is a containment test over the placements
- *  array, and it runs on a sequential scan today — correct, and fine at one document per event.
- *  The moment a studio has thousands of documents this wants a GIN index on `content`; it is not
- *  worth the write cost before then, and this is the query that would justify it. */
+ *  Every place a drawing names a row is listed once, in ./variant-refs.ts: a table's row and its
+ *  chair, a placement's row, vase and aisle piece, a stage's decks, pieces and finishes (QA
+ *  2026-11-20, PR-1 — this used to read only the placements, so a table, a chair or a deck was
+ *  hard-deleted from under every plan). Asked of every drawing the studio keeps — each event's design
+ *  documents (every version: a sealed one is what an issued quote was made from), its saved sketches,
+ *  a client's proposals (the drawing forked and the one sent back), its saved stages — and of the
+ *  catalog's own rows: the vase an arrangement is made in, the piece an aisle is lined with, a
+ *  composite's parts.
+ *
+ *  ⚠ These are the queries that reach INSIDE the jsonb drawings, which the schema notes say are
+ *  otherwise only ever read and written whole. They run on a sequential scan today — correct, and
+ *  fine at one document per event; the moment a studio has thousands, this wants a GIN index on
+ *  `content`, and this is the query that would justify it. Asked in order, and the first answer ends
+ *  it: most rows a designer deletes were placed somewhere or nowhere. */
 export async function isPlacedAnywhere(variantIds: string[]): Promise<boolean> {
   assertIdList(variantIds, "variantIds");
   if (variantIds.length === 0) return false;
   const organizationId = await currentOrg();
+  const database = db();
+  const one = { one: sql<number>`1` };
 
   // Bound one parameter per id (`in ($2, $3, …)`) rather than handing Postgres a JS array for
   // `= any(...)`: the driver serialises a bare array as a single scalar, which arrives as the
   // string "656136df-…" and fails with `malformed array literal`. sql.join keeps every id a
   // separate placeholder, so this is still fully parameterised — no interpolation into the text.
+  // (namesAny binds them the same way.)
   const idList = sql.join(
     variantIds.map((v) => sql`${v}`),
     sql`, `,
   );
+  const drawing = (column: SQLWrapper) => namesAny(column, DRAWING_VARIANT_PATHS, variantIds);
 
-  const [hit] = await db()
-    .select({ one: sql<number>`1` })
+  const [drawn] = await database
+    .select(one)
     .from(designDocuments)
+    .where(and(eq(designDocuments.organizationId, organizationId), drawing(designDocuments.content)))
+    .limit(1);
+  if (drawn) return true;
+
+  // A saved sketch is loaded into a plan or begins an event (lib/studio/sketch-actions.ts).
+  const [sketch] = await database
+    .select(one)
+    .from(sketchTemplates)
+    .where(and(eq(sketchTemplates.organizationId, organizationId), drawing(sketchTemplates.content)))
+    .limit(1);
+  if (sketch) return true;
+
+  // A client's proposal is merged into the drawing, and a resolved one is the record of what was agreed.
+  const [proposed] = await database
+    .select(one)
+    .from(sketchProposals)
+    .where(and(eq(sketchProposals.organizationId, organizationId), or(drawing(sketchProposals.base), drawing(sketchProposals.content))))
+    .limit(1);
+  if (proposed) return true;
+
+  // A saved stage is placed again from the stage tool, decks, finishes, banquette dressing and all.
+  const [staged] = await database
+    .select(one)
+    .from(studioSettings)
     .where(
       and(
-        eq(designDocuments.organizationId, organizationId),
-        sql`exists (
-          select 1
-          from jsonb_array_elements(${designDocuments.content} -> 'placements') as placement
-          where placement ->> 'variantId' in (${idList}) or placement ->> 'vessel' in (${idList})
-             or placement -> 'aisle' ->> 'piece' in (${idList})
-        )`,
+        eq(studioSettings.organizationId, organizationId),
+        sql`${studioSettings.stageTemplates} is not null`,
+        namesAny(studioSettings.stageTemplates, STAGE_TEMPLATE_VARIANT_PATHS, variantIds),
       ),
     )
     .limit(1);
+  if (staged) return true;
 
   // …or the vase an arrangement row is made in (lib/catalog/vessel.ts) — deleted, every arrangement
-  // would lose its vase on the plan, the packing list and the quote, issued ones included.
-  const [vessel] = await db()
-    .select({ one: sql<number>`1` })
+  // would lose its vase on the plan, the packing list and the quote, issued ones included. The same
+  // read holds the PIECE an aisle row is lined with (lib/catalog/aisle.ts) — deleted, the aisle would
+  // stand bare on every plan and count nothing.
+  const [vessel] = await database
+    .select(one)
     .from(products)
     .where(and(eq(products.organizationId, organizationId), eq(products.archived, false), sql`(${products.categoryFields} ->> 'vessel' in (${idList}) or ${products.categoryFields} ->> 'piece' in (${idList}))`))
     .limit(1);
+  if (vessel) return true;
 
-  // (…the same read holds the PIECE an aisle row is lined with — lib/catalog/aisle.ts — deleted, the
-  // aisle would stand bare on every plan and count nothing.)
   // …or a part of a composite, which is a design waiting to be placed (isPartOfComposite).
-  return !!hit || !!vessel || (await isPartOfComposite(variantIds, organizationId));
+  return isPartOfComposite(variantIds, organizationId);
 }
 
 /** Is any of these variants a PART of one of this studio's live composites (lib/catalog/
- *  composition.ts) — a table, the chair round it, or an item on, over or beside it? A composite is a
- *  drawing waiting to be placed, so a part of one is as much in use as a placed row: deleting it
- *  would leave the composite pasting items that resolve to nothing. */
+ *  composition.ts) — a table, the chair round it, an item on, over or beside it, a stage's deck, or a
+ *  line of the list it was laid out from? A composite is a drawing waiting to be placed, so a part of
+ *  one is as much in use as a placed row: deleting it would leave the composite pasting items that
+ *  resolve to nothing. */
 async function isPartOfComposite(variantIds: string[], organizationId: string): Promise<boolean> {
   if (variantIds.length === 0) return false;
-  const idList = sql.join(
-    variantIds.map((v) => sql`${v}`),
-    sql`, `,
-  );
   const [hit] = await db()
     .select({ one: sql<number>`1` })
     .from(products)
@@ -287,15 +321,7 @@ async function isPartOfComposite(variantIds: string[], organizationId: string): 
         eq(products.organizationId, organizationId),
         eq(products.archived, false),
         sql`${products.composition} is not null`,
-        sql`(
-          exists (
-            select 1 from jsonb_array_elements(${products.composition} -> 'placements') as part
-            where part ->> 'variantId' in (${idList}) or part ->> 'vessel' in (${idList})
-          ) or exists (
-            select 1 from jsonb_array_elements(${products.composition} -> 'tables') as part
-            where part ->> 'variantId' in (${idList}) or part ->> 'chairVariantId' in (${idList})
-          )
-        )`,
+        namesAny(products.composition, COMPOSITION_VARIANT_PATHS, variantIds),
       ),
     )
     .limit(1);
