@@ -2317,6 +2317,10 @@ export function HallsScreen() {
                   onBow={(i, depth) => outlineEdit((s) => bowShapeSide(s, i, depth))}
                   onCorner={(i, r) => outlineEdit((s) => roundShapeCorner(s, i, r))}
                   onSmooth={() => outlineEdit((s) => smoothShape(s))}
+                  onInsertMiddle={(i) => {
+                    outlineEdit((s) => insertShapePoint(s, i, 0.5).shape);
+                    setOutlinePart({ kind: "corner", index: i + 1 });
+                  }}
                   onClose={() => (editableRegion ? setSelection([]) : setOutlineEditId(null))}
                 />
               </div>

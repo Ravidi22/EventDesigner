@@ -19,6 +19,7 @@ import {
   polygonAreaMm2,
   polygonCentroid,
   endpointFromLengthAngle,
+  edgeParamAt,
 } from "@/lib/studio/geometry";
 import { snapPoint, constrainAngleDeg, gridStepMm, type GapGuide, type SnapBox, type SnapResult } from "@/lib/studio/snap";
 import { insidePolys } from "@/lib/studio/proximity";
@@ -369,6 +370,8 @@ export function PlanCanvas({
   onCancelDraw,
   onMoveVertex,
   onMoveWall,
+  onInsertVertex,
+  onRemoveVertex,
   onMoveWallHandle,
   onMoveSelection,
   onRotateFixtureGroup,
@@ -446,6 +449,10 @@ export function PlanCanvas({
   // undo entry is one gesture, like a vertex drag. Bowing stays on the diamond at the midpoint.
   // Supplying this is what makes a side draggable at all; without it a side only selects.
   onMoveWall?: (edgeIdx: number, a: Point, b: Point) => void;
+  // Edit mode: a double-click on a side adds a point where it fell (`t` is the side's own parameter,
+  // geometry.ts edgeParamAt), and on a point takes it away (connected drawings §5.1).
+  onInsertVertex?: (edgeIdx: number, t: number) => void;
+  onRemoveVertex?: (idx: number) => void;
   onMoveWallHandle: (edgeIdx: number, which: "bulge" | "c1" | "c2", p: Point) => void;
   // Fires once per pointermove during a group drag/rotate — every selected ref's next absolute
   // point (or, for rotate, position+facing), batched so the host coalesces it into one undo entry.
@@ -2191,6 +2198,15 @@ export function PlanCanvas({
                   e.stopPropagation();
                   onSelect({ kind: "wall", id: String(i) });
                 }}
+                onDoubleClick={
+                  onInsertVertex && mode === "edit"
+                    ? (e) => {
+                        e.stopPropagation();
+                        const t = edgeParamAt(a, b, curve, clientToMm(e.clientX, e.clientY));
+                        onInsertVertex(i, Math.min(0.95, Math.max(0.05, t)));
+                      }
+                    : undefined
+                }
               />
             )}
           </g>
@@ -2316,7 +2332,15 @@ export function PlanCanvas({
             {...(interactive ? drag : {})}
             tabIndex={interactive ? 0 : undefined}
             role={interactive ? "button" : undefined}
-            aria-label={interactive ? `נקודה ${i + 1} — גרירה לשינוי צורה` : undefined}
+            aria-label={interactive ? `נקודה ${i + 1} — גרירה לשינוי צורה${onRemoveVertex ? " · לחיצה כפולה מסירה אותה" : ""}` : undefined}
+            onDoubleClick={
+              interactive && onRemoveVertex
+                ? (e) => {
+                    e.stopPropagation();
+                    onRemoveVertex(i);
+                  }
+                : undefined
+            }
             onKeyDown={interactive ? (e) => nudge(e, v.x, v.y, (p) => onMoveVertex(i, p)) : undefined}
             className={interactive ? `cursor-move touch-none ${HANDLE_CLS}` : closeTarget ? "cursor-pointer" : undefined}
           >

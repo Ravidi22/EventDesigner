@@ -6,7 +6,7 @@
 // third of its shorter side in one undo entry — a kidney out of four points in one click
 // (lib/studio/shaped-outline.ts smoothShape). The handles pick the side or corner (a click on a
 // side's line, on a point or its grip); the bar types what the drag does by eye.
-import { PenLine, Spline } from "lucide-react";
+import { PenLine, Plus, Spline } from "lucide-react";
 import { Bar, Note } from "@/components/inspector-bar";
 import { Button } from "@/components/button";
 import { NumberField } from "@/components/number-field";
@@ -21,6 +21,7 @@ export function OutlineBar({
   onBow,
   onCorner,
   onSmooth,
+  onInsertMiddle,
   onClose,
 }: {
   title?: string;
@@ -31,6 +32,8 @@ export function OutlineBar({
   /** Corner `index` — or every corner — rounded at `radiusMm` (0 squares it): one undo entry. */
   onCorner: (index: number | "all", radiusMm: number) => void;
   onSmooth: () => void;
+  /** "הוספת נקודה באמצע": a point on the picked side's middle (connected drawings §5.1). Absent = no button. */
+  onInsertMiddle?: (side: number) => void;
   onClose: () => void;
 }) {
   const n = shape.outline.length;
@@ -56,6 +59,12 @@ export function OutlineBar({
           onChange={(cm) => onBow(side, cm * 10)}
           className="w-20"
         />
+      )}
+      {side !== null && onInsertMiddle && (
+        <Button size="sm" variant="outline" onClick={() => onInsertMiddle(side)}>
+          <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+          הוספת נקודה באמצע
+        </Button>
       )}
       {corner !== null && (
         <>

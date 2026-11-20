@@ -681,8 +681,21 @@ function ShapedOutlineHandles({
         const b = pts[(i + 1) % n];
         const d = edgePathD(a, b, curveOf(i));
         return (
-          <g key={`s${i}`} onPointerDown={sideDown(i)} role="button" aria-label={`צלע ${i + 1} — לחיצה לבחירה · גרירה מוסיפה בה פינה`} className="cursor-copy touch-none">
-            <title>לחיצה בוחרת את הצלע · גרירה מוסיפה בה פינה</title>
+          <g
+            key={`s${i}`}
+            onPointerDown={sideDown(i)}
+            // Every outline adds a point the same way (connected drawings §5.1): a double-click where it falls.
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              const index = onInsertPoint(i, nearestOnSide(shape, i, clientToMm(e.clientX, e.clientY)));
+              onSelectPart?.({ kind: "corner", index });
+              onCommit();
+            }}
+            role="button"
+            aria-label={`צלע ${i + 1} — לחיצה לבחירה · גרירה או לחיצה כפולה מוסיפה בה פינה`}
+            className="cursor-copy touch-none"
+          >
+            <title>לחיצה בוחרת את הצלע · גרירה או לחיצה כפולה מוסיפה בה פינה</title>
             {isSel("side", i) && (
               <path d={d} fill="none" stroke="var(--color-accent)" strokeWidth={3} vectorEffect="non-scaling-stroke" className="pointer-events-none" />
             )}

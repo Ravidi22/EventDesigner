@@ -425,6 +425,31 @@ export function projectOntoWall(a: Point, b: Point, p: Point): number {
   return Math.max(0, Math.min(len, (p.x - a.x) * ux + (p.y - a.y) * uy));
 }
 
+/** The side's own parameter (0 at a, 1 at b) of its point nearest `p` — the chord fraction on a
+ *  straight side, the bezier's parameter on a bowed one. Where a double-click on a side adds a point. */
+export function edgeParamAt(a: Point, b: Point, curve: EdgeCurve | null, p: Point): number {
+  const len = wallLengthMm(a, b);
+  if (!curve) return len > 0 ? projectOntoWall(a, b, p) / len : 0;
+  const { c1, c2 } = absoluteControlPoints(a, b, curve);
+  const d2 = (u: number) => {
+    const q = cubicPointAt(a, c1, c2, b, u);
+    return (q.x - p.x) ** 2 + (q.y - p.y) ** 2;
+  };
+  const N = 64;
+  let best = 0;
+  for (let i = 1; i <= N; i++) if (d2(i / N) < d2(best)) best = i / N;
+  // Refine between the neighbouring samples.
+  let lo = Math.max(0, best - 1 / N);
+  let hi = Math.min(1, best + 1 / N);
+  for (let k = 0; k < 30; k++) {
+    const m1 = lo + (hi - lo) / 3;
+    const m2 = hi - (hi - lo) / 3;
+    if (d2(m1) < d2(m2)) hi = m2;
+    else lo = m1;
+  }
+  return (lo + hi) / 2;
+}
+
 export function nearestWallToPoint(outline: Point[], p: Point): { edgeIdx: number; distanceMm: number } {
   let best = { edgeIdx: 0, distanceMm: 0, distSq: Infinity };
   const n = outline.length;
@@ -861,6 +886,17 @@ if (isMain(import.meta.url)) {
   assert(faceStrokeD(band, undefined, [2]) === "M 1500 10 L -1500 10", `the band's face is its +y side (${faceStrokeD(band, undefined, [2])})`);
   assert(faceStrokeD(band, undefined, []) === null && faceStrokeD(band, undefined, undefined) === null, "…none named, nothing drawn");
   assert(faceStrokeD(band, undefined, [1, 2]) === "M 1500 -10 L 1500 10 L -1500 10", "consecutive face edges are one run");
+
+  // Where along a side a click fell — the parameter a double-click adds a point at (connected drawings §5.1).
+  assert(Math.abs(edgeParamAt({ x: 0, y: 0 }, { x: 1000, y: 0 }, null, { x: 250, y: 30 }) - 0.25) < 1e-9, "a straight side: the projection");
+  {
+    const a = { x: 0, y: 0 };
+    const b = { x: 1000, y: 0 };
+    const curve = { c1: { x: 300, y: -400 }, c2: { x: -300, y: -400 } };
+    const { c1, c2 } = absoluteControlPoints(a, b, curve);
+    const on = cubicPointAt(a, c1, c2, b, 0.3);
+    assert(Math.abs(edgeParamAt(a, b, curve, on) - 0.3) < 1e-3, "a bowed side: the bezier parameter of the nearest point");
+  }
 
   console.log("geometry self-check passed");
 }

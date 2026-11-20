@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isShortcut, isTypingTarget } from "@/lib/keyboard";
 import type { EdgeCurve, Entrance, Fixture, Point } from "./hall";
 import {
+  absoluteControlPoints,
   bulgeToCurve,
+  cubicPointAt,
+  splitCubic,
   clampEdgeCurve,
   constrainVertexToLocks,
   edgeMidpoint,
@@ -234,17 +237,35 @@ function withVertexRemoved(s: OutlineState, idx: number): OutlineState {
 
 // Splitting a wall shifts every later wall's index by one; a door on the split wall stays on
 // whichever half it now falls in (measured along the original chord).
-function withVertexInserted(s: OutlineState, edgeIdx: number): OutlineState {
+/** A point added on side `edgeIdx` at `t` along it (its middle by default — the bar's button; where
+ *  it was double-clicked — connected drawings §5.1). A bowed side is cut by de Casteljau, so both
+ *  halves draw the curve that was there. Exported for its self-check. */
+export function withVertexInserted(s: OutlineState, edgeIdx: number, t = 0.5): OutlineState {
   const n = s.outline.length;
   const a = s.outline[edgeIdx];
   const b = s.outline[(edgeIdx + 1) % n];
-  const mid = edgeMidpoint(a, b, s.edgeCurves[edgeIdx] ?? null);
-  const splitDistance = wallLengthMm(a, b) / 2;
+  const curve = s.edgeCurves[edgeIdx] ?? null;
+  let mid: Point;
+  let halves: [EdgeCurve | null, EdgeCurve | null] = [null, null];
+  if (curve) {
+    const { c1, c2 } = absoluteControlPoints(a, b, curve);
+    const { left, right } = splitCubic([a, c1, c2, b], t);
+    mid = left[3];
+    halves = [
+      { c1: { x: left[1].x - a.x, y: left[1].y - a.y }, c2: { x: left[2].x - mid.x, y: left[2].y - mid.y } },
+      { c1: { x: right[1].x - mid.x, y: right[1].y - mid.y }, c2: { x: right[2].x - b.x, y: right[2].y - b.y } },
+    ];
+  } else {
+    mid = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+  }
+  const len = wallLengthMm(a, b);
+  const firstLen = wallLengthMm(a, mid);
+  const secondLen = wallLengthMm(mid, b);
   const edgeCurves: (EdgeCurve | null)[] = [];
   const lockedEdges: boolean[] = [];
   for (let i = 0; i < n; i++) {
     if (i === edgeIdx) {
-      edgeCurves.push(null, null); // wall splits into two straight segments
+      edgeCurves.push(halves[0], halves[1]); // the two halves of the side, its bow kept
       lockedEdges.push(s.lockedEdges[i], s.lockedEdges[i]); // a locked wall's split halves both stay locked
     } else {
       edgeCurves.push(s.edgeCurves[i] ?? null);
@@ -258,7 +279,9 @@ function withVertexInserted(s: OutlineState, edgeIdx: number): OutlineState {
     lockedEdges,
     entrances: s.entrances.map((e) => {
       if (e.wallIndex === edgeIdx) {
-        return e.distanceMm < splitDistance ? e : { ...e, wallIndex: edgeIdx + 1, distanceMm: e.distanceMm - splitDistance };
+        // A door's distance is along the chord; its fraction is the side's parameter, mapped onto its half.
+        const u = len > 0 ? e.distanceMm / len : 0;
+        return u < t ? { ...e, distanceMm: (u / t) * firstLen } : { ...e, wallIndex: edgeIdx + 1, distanceMm: ((u - t) / (1 - t)) * secondLen };
       }
       return e.wallIndex > edgeIdx ? { ...e, wallIndex: e.wallIndex + 1 } : e;
     }),
@@ -519,10 +542,11 @@ export function useOutlineEditor(init: OutlineEditorInit, options?: { enabled?: 
   // The corner is gone and every index after it has shifted — the old selection can't be remapped
   // to anything the user meant, so it goes.
   const removeVertex = useCallback((idx: number) => edit((s) => withVertexRemoved(s, idx), null, () => []), [edit]);
-  const insertVertexOnWall = useCallback(
-    (edgeIdx: number) => edit((s) => withVertexInserted(s, edgeIdx), null, () => [{ kind: "vertex", id: String(edgeIdx + 1) }]),
+  const insertVertexAt = useCallback(
+    (edgeIdx: number, t: number) => edit((s) => withVertexInserted(s, edgeIdx, t), null, () => [{ kind: "vertex", id: String(edgeIdx + 1) }]),
     [edit],
   );
+  const insertVertexOnWall = useCallback((edgeIdx: number) => insertVertexAt(edgeIdx, 0.5), [insertVertexAt]);
   const moveWallHandle = useCallback(
     (edgeIdx: number, which: "bulge" | "c1" | "c2", p: Point) => edit((s) => withWallHandleMoved(s, edgeIdx, which, p), `wall:${edgeIdx}:${which}`),
     [edit],
@@ -639,6 +663,7 @@ export function useOutlineEditor(init: OutlineEditorInit, options?: { enabled?: 
     moveWall,
     removeVertex,
     insertVertexOnWall,
+    insertVertexAt,
     moveWallHandle,
     setWallLength,
     setWallAngle,
@@ -824,6 +849,29 @@ if (isMain(import.meta.url)) {
   assert(!continuesEntry({ token: "vertex:2", at: t0 }, null, t0 + 16), "a discrete action never joins an open entry");
   assert(!continuesEntry(null, "vertex:2", t0), "nothing open means a new entry");
   assert(patchToken("stage", { rotationDeg: 90 }) !== patchToken("stage", { widthMm: 10 }), "two fields of one fixture take separate entries");
+
+  // A side split where it was double-clicked keeps its bow on both halves (connected drawings §5.1).
+  {
+    const bow = { c1: { x: 300, y: -400 }, c2: { x: -300, y: -400 } };
+    const bowed: OutlineState = { ...base, edgeCurves: [bow, null, null, null] };
+    const cut = withVertexInserted(bowed, 0, 0.3);
+    assert(cut.outline.length === 5, "one point added");
+    const sample = (s: OutlineState, i: number, u: number) => {
+      const a = s.outline[i];
+      const b = s.outline[(i + 1) % s.outline.length];
+      const c = s.edgeCurves[i];
+      if (!c) return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+      const { c1, c2 } = absoluteControlPoints(a, b, c);
+      return cubicPointAt(a, c1, c2, b, u);
+    };
+    for (let k = 0; k <= 10; k++) {
+      const u = k / 10;
+      const want = sample(bowed, 0, u);
+      const got = u <= 0.3 ? sample(cut, 0, u / 0.3) : sample(cut, 1, (u - 0.3) / 0.7);
+      assert(Math.hypot(want.x - got.x, want.y - got.y) < 0.5, `a bowed side split at 0.3 keeps its curve (u ${u})`);
+    }
+    assert(withVertexInserted(base, 0).outline[1].x === 500, "no t: the middle, as before");
+  }
 
   console.log("outline-editor self-check passed");
 }

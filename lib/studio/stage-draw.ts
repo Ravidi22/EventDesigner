@@ -1010,10 +1010,11 @@ export function setCornerAngle(poly: readonly Point[], k: number, angleDeg: numb
 
 /** Side `i` split in its middle: two corners on one point, so either half can be pushed on its own.
  *  The front stays the side it was (its first half, when it is the one split). */
-export function splitSide(poly: readonly Point[], front: number, i: number): { outline: Point[]; front: number } {
+export function splitSide(poly: readonly Point[], front: number, i: number, t = 0.5): { outline: Point[]; front: number } {
   const a = poly[i];
   const b = poly[(i + 1) % poly.length];
-  const m = { x: Math.round((a.x + b.x) / 2), y: Math.round((a.y + b.y) / 2) };
+  // At `t` along the side — where it was double-clicked (connected drawings §5.1); its middle by default.
+  const m = { x: Math.round(a.x + (b.x - a.x) * t), y: Math.round(a.y + (b.y - a.y) * t) };
   const outline = [...poly.slice(0, i + 1), m, { ...m }, ...poly.slice(i + 1)];
   return { outline, front: front > i ? front + 2 : front };
 }
@@ -1184,6 +1185,8 @@ if (isMain(import.meta.url)) {
   ];
   const split = splitSide(box, 0, 2);
   assert(split.outline.length === 6 && split.front === 0, "a split side is two corners on its middle, and the front stays put");
+  const quarter = splitSide(box, 0, 0, 0.25);
+  assert(quarter.outline[1].x === box[0].x + (box[1].x - box[0].x) / 4 && quarter.outline[1].y === box[0].y && quarter.outline[2].x === quarter.outline[1].x, "a side double-clicked a quarter along splits there (connected drawings §5.1)");
   const ell = pushSide(split.outline, 2, 2000);
   assert(ell[2].y === 6000 && ell[3].y === 6000 && ell[4].y === 4000 && !selfIntersects(ell), "…so half of it pushes out into an L");
   const sheet = (mm: number) => Math.round(mm / 1220) * 1220;
