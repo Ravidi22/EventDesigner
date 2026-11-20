@@ -13,11 +13,93 @@
 // shape that was turned is stood upright on the way out (`upright`): nothing to do for a full circle,
 // width and depth swapped for a rectangle or an ellipse at a quarter turn, and anything else baked
 // into a hand-drawn outline of exactly what the canvas showed.
-import type { MapAppearance, MapShape, Product, ShapePart } from "./types";
-import { FRONT_THICK_MM, usesDiameter } from "./types";
+import type { HollowSpec, MapAppearance, MapShape, Product, ShapePart } from "./types";
+import { FRONT_THICK_MM, canHollow, usesDiameter } from "./types";
 import type { EdgeCurve, Point } from "../studio/hall";
-import { customShapeBounds, flattenEdge, frontFace, placedPartOutline, sampledBounds, placedPartOutlines, repeatCopies, resolveFootprint, footprintBounds, type BuiltOutline } from "../studio/footprint";
+import { customShapeBounds, flattenEdge, frontFace, hollowOuter, placedPartOutline, roundSizeMm, sampledBounds, placedPartOutlines, repeatCopies, resolveFootprint, footprintBounds, type BuiltOutline } from "../studio/footprint";
 import { isMain } from "../self-check";
+
+/** A line's thickness when nothing says otherwise — a rope, a cable, a rail. */
+export const LINE_MM = 20;
+
+/** A hollow spec carried to a DIFFERENT outline (another shape picked, or a drawing found where it
+ *  was left): the band and the entrance's width and place mean the same on any shape, but open sides
+ *  and the entrance's side are edge numbers of the outline they were chosen on — on another one they
+ *  would open some other side, so they go. Nothing at all for a shape that cannot be hollow. */
+export const hollowAcross = (h: HollowSpec | undefined, next: MapShape): HollowSpec | undefined =>
+  h && canHollow(next) ? { bandMm: h.bandMm, ...(h.gapMm ? { gapMm: h.gapMm } : {}), ...(h.gapAt ? { gapAt: h.gapAt } : {}) } : undefined;
+
+type Sized = { widthMm?: number; depthMm?: number; diameterMm?: number };
+
+/** A square's one number, its side, as the engine reads it (lib/studio/footprint.ts solidFootprint:
+ *  a diameter first, else the width, else the depth). */
+export const squareSide = (d: Sized): number | undefined => d.diameterMm || d.widthMm || d.depthMm || undefined;
+
+/** Only the size numbers a shape of `shape` is drawn from (SH-10, QA 2026-11-20): a round kind its
+ *  diameter (a row from before round shapes had one is read through roundSizeMm), a square its side
+ *  as width = depth (SH-11 — one number), anything else its width × depth. A number of another kind
+ *  left behind is read by whoever asks for it first: a ⌀180 round made a 120 square was saved
+ *  {diameterMm 1800, widthMm 1200} and drawn 180×180, and a stale diameter makes a row ROUND to the
+ *  utilisation, the venue-table match and the studio. Undefined keys are written, not left out, so
+ *  a spread over the old numbers clears them. */
+export function sizeFieldsOf(shape: MapShape, d: Sized): Sized {
+  if (usesDiameter(shape)) return { diameterMm: roundSizeMm(shape, d), widthMm: undefined, depthMm: undefined };
+  if (shape === "square") {
+    const side = squareSide(d);
+    return { widthMm: side, depthMm: side, diameterMm: undefined };
+  }
+  return { widthMm: d.widthMm, depthMm: d.depthMm, diameterMm: undefined };
+}
+
+/** sizeFieldsOf without its undefined keys — for a shape being opened, which has no old numbers to
+ *  clear. */
+const definedSizes = (s: Sized): Sized => Object.fromEntries(Object.entries(s).filter(([, v]) => v !== undefined));
+
+/** A shape as the patch would leave it: a hand-drawn one whose size is changed is RESCALED, since its
+ *  outline — not its two numbers — is what draws it; a square typed as either number takes it as its
+ *  side (SH-11 — before, a square's depth was a field that did nothing). */
+export function patchedPart(part: ShapePart, p: Partial<ShapePart>): ShapePart {
+  const next = { ...part, ...p };
+  if (part.shape === "custom" && !p.outline && (p.widthMm !== undefined || p.depthMm !== undefined)) {
+    return { ...next, ...rescaleOutline(part.outline ?? [], part.edgeCurves, p.widthMm ?? part.widthMm ?? 0, p.depthMm ?? part.depthMm ?? 0) };
+  }
+  if (next.shape === "square" && !p.shape) {
+    const side = p.widthMm ?? p.depthMm ?? p.diameterMm ?? squareSide(part);
+    return { ...next, widthMm: side, depthMm: side, diameterMm: undefined };
+  }
+  return next;
+}
+
+/** A shape turned into another kind, at the size it already stands at: a 120×60 rectangle becomes a
+ *  120×60 ellipse, a ⌀90 circle a 90×90 rectangle. Its band comes across (hollowAcross); a sweep, a
+ *  ring and anything else that only one kind reads is the new kind's default. */
+export function reshaped(part: ShapePart, next: Exclude<MapShape, "custom">): ShapePart {
+  // A front shape's size is its FACE's, not its band's.
+  const b = part.plane === "front" ? frontFace(part.shape, { ...part, hollow: undefined, faceTurnDeg: undefined }) : sampledBounds([hollowOuter(part.shape, part)]);
+  const w = Math.round(b.w) || 1200;
+  const h = Math.round(b.h) || 600;
+  return {
+    ...part,
+    shape: next,
+    // The new kind's numbers and none of the old kind's (sizeFieldsOf).
+    ...sizeFieldsOf(
+      next,
+      usesDiameter(next)
+        ? { diameterMm: (next === "quarter-circle" ? 2 : 1) * Math.max(w, h) }
+        : next === "line"
+          ? { widthMm: Math.max(w, h), depthMm: LINE_MM }
+          : next === "square"
+            ? { widthMm: Math.max(w, h) }
+            : { widthMm: w, depthMm: h },
+    ),
+    arc: undefined,
+    ring: undefined,
+    hollow: hollowAcross(part.hollow, next),
+    // A body of revolution is a round shape's; a bowl reshaped to a square is a block.
+    revolve: next === "circle" || next === "ellipse" ? part.revolve : undefined,
+    open: undefined,
+  };
+}
 
 const shapeOfRow = (p: Product): MapShape => p.appearance?.shape ?? (p.dimensions.diameterMm ? "circle" : "rect");
 
@@ -77,7 +159,7 @@ export function shapesOf(p: Product): ShapePart[] {
         ...(box
           ? { widthMm: Math.round(box.w), depthMm: Math.round(box.h) }
           : usesDiameter(shape)
-            ? { diameterMm: d.diameterMm }
+            ? { diameterMm: roundSizeMm(shape, { diameterMm: d.diameterMm, widthMm: d.widthMm }) }
             : { widthMm: d.widthMm, depthMm: d.heightMm }),
         thicknessMm: d.depthMm,
         ...(a?.bendDeg ? { bendDeg: a.bendDeg } : {}),
@@ -98,11 +180,9 @@ export function shapesOf(p: Product): ShapePart[] {
         id: crypto.randomUUID(),
         shape,
         ...(shape === "custom" ? { outline: a!.outline, ...(a!.edgeCurves ? { edgeCurves: a!.edgeCurves } : {}), ...(a!.open ? { open: true } : {}) } : {}),
-        ...(box
-          ? { widthMm: Math.round(box.w), depthMm: Math.round(box.h) }
-          : usesDiameter(shape)
-            ? { diameterMm: d.diameterMm }
-            : { widthMm: d.widthMm, depthMm: d.depthMm }),
+        // The numbers the row is DRAWN at: a row from before round shapes had a diameter opens at
+        // the size it draws (roundSizeMm), a square at its one side (SH-10/11).
+        ...(box ? { widthMm: Math.round(box.w), depthMm: Math.round(box.h) } : definedSizes(sizeFieldsOf(shape, d))),
         ...(a?.arc ? { arc: a.arc } : {}),
         ...(a?.ring ? { ring: a.ring } : {}),
         ...(a?.hollow ? { hollow: a.hollow } : {}),
@@ -305,11 +385,12 @@ export function lookOf(look: Product, shapes: readonly ShapePart[]): { dimension
   const custom = s0.shape === "custom";
   const box = custom && s0.outline ? customShapeBounds(s0.outline, s0.edgeCurves) : null;
   const d = look.dimensions;
+  // The base's own numbers and none of another kind's (SH-10): a hand-drawn base its box, a round one
+  // its diameter, a square its side, anything else its width × depth — never the diameter a round row
+  // reshaped to a square brought with it.
   const dimensions: Product["dimensions"] = box
-    ? { ...d, widthMm: Math.round(box.w), depthMm: Math.round(box.h) }
-    : usesDiameter(s0.shape)
-      ? { ...d, diameterMm: s0.diameterMm }
-      : { ...d, widthMm: s0.widthMm, depthMm: s0.depthMm };
+    ? { ...d, widthMm: Math.round(box.w), depthMm: Math.round(box.h), diameterMm: undefined }
+    : { ...d, ...sizeFieldsOf(s0.shape, s0) };
   const parts = rest.map((q) => shifted(q, -s0.x, -s0.y));
   // The turned base moved the seat sides under the chairs; they are picked again.
   const moved = s0 !== first && turn(first.rotation || 0) !== 0;
@@ -351,11 +432,13 @@ function frontLookOf(look: Product, first: ShapePart, rest: readonly ShapePart[]
   const box = custom && s0.outline ? customShapeBounds(s0.outline, s0.edgeCurves) : null;
   const faceH = Math.round(frontFace(s0.shape, s0).h);
   const thickness = s0.thicknessMm ?? FRONT_THICK_MM;
+  // A front base's depth is its THICKNESS, whatever its face is; the rest are its face's own numbers
+  // and none of another kind's (SH-10).
   const dimensions: Product["dimensions"] = box
-    ? { ...d, widthMm: Math.round(box.w), depthMm: thickness, heightMm: Math.round(box.h) }
+    ? { ...d, widthMm: Math.round(box.w), depthMm: thickness, heightMm: Math.round(box.h), diameterMm: undefined }
     : usesDiameter(s0.shape)
-      ? { ...d, diameterMm: s0.diameterMm, depthMm: thickness, heightMm: faceH }
-      : { ...d, widthMm: s0.widthMm, depthMm: thickness, heightMm: s0.depthMm ?? faceH };
+      ? { ...d, diameterMm: roundSizeMm(s0.shape, s0), widthMm: undefined, depthMm: thickness, heightMm: faceH }
+      : { ...d, widthMm: s0.widthMm, depthMm: thickness, heightMm: s0.depthMm ?? faceH, diameterMm: undefined };
   const parts = rest.map((q) => shifted(q, -s0.x, -s0.y));
   return {
     dimensions,
@@ -537,5 +620,44 @@ if (isMain(import.meta.url)) {
   // A plan first shape leaves no front fields behind; a front one behind it stays front.
   const asPlan = lookOf(wall, [{ ...ws[0], plane: undefined, thicknessMm: undefined, bendDeg: undefined, depthMm: 600 }, { ...ws[0], id: "f", y: -400 }]);
   assert(asPlan.appearance.plane === undefined && asPlan.appearance.bendDeg === undefined && asPlan.dimensions.depthMm === 600 && asPlan.appearance.parts?.[0].plane === "front", "a plan first shape leaves no front fields behind");
+
+  // SH-10 (QA 2026-11-20): a reshape keeps ONLY the numbers the new kind is drawn from. A ⌀180
+  // round made a square and typed to 120 was saved {diameterMm 1800, widthMm 1200} and drawn
+  // 180×180 — a square's side is read diameter first — and a stale diameter makes any row a ROUND
+  // table to the utilisation, the venue-table match and the studio.
+  const round = row({ shape: "circle" }, { diameterMm: 1800, heightMm: 750 });
+  const [r0] = shapesOf(round);
+  const sq = patchedPart(reshaped(r0, "square"), { widthMm: 1200 });
+  assert(sq.diameterMm === undefined, `the square keeps no diameter (${sq.diameterMm})`);
+  const sqRow = { ...round, ...lookOf(round, [sq]) };
+  assert(sqRow.dimensions.diameterMm === undefined, `…nor does the row it is saved as (${JSON.stringify(sqRow.dimensions)})`);
+  near(box(sqRow).w, 1200, "the square is drawn at the side typed");
+  near(box(sqRow).h, 1200, "…both ways");
+  const toRound = reshaped(shapesOf(row({}))[0], "circle");
+  assert(toRound.widthMm === undefined && toRound.depthMm === undefined && toRound.diameterMm === 1600, `a 160×90 made round is ⌀160 and nothing else (${JSON.stringify(toRound)})`);
+  const roundRow = { ...row({}), ...lookOf(row({}), [toRound]) };
+  assert(roundRow.dimensions.widthMm === undefined && roundRow.dimensions.depthMm === undefined && roundRow.dimensions.diameterMm === 1600, `…and saved so (${JSON.stringify(roundRow.dimensions)})`);
+  const byHand = { ...round, ...lookOf(round, [{ ...r0, shape: "custom", outline: [{ x: -900, y: -900 }, { x: 900, y: -900 }, { x: 0, y: 900 }], widthMm: 1800, depthMm: 1800 }]) };
+  assert(byHand.dimensions.diameterMm === undefined && byHand.dimensions.widthMm === 1800, "a round redrawn by hand keeps no diameter");
+  // A row from before round shapes had a diameter (width and depth only) opens at its size and is
+  // saved as the diameter — never as no size at all.
+  const legacy = row({ shape: "half-circle" }, { widthMm: 1200, depthMm: 600, heightMm: 750 });
+  assert(shapesOf(legacy)[0].diameterMm === 1200, `a legacy half-circle opens at its width (${shapesOf(legacy)[0].diameterMm})`);
+  const legacyBack = roundTrip(legacy);
+  assert(legacyBack.dimensions.diameterMm === 1200 && legacyBack.dimensions.widthMm === undefined, `…and is saved as its diameter (${JSON.stringify(legacyBack.dimensions)})`);
+  near(box(legacyBack).w, 1200, "…at the size it had");
+  // A front base keeps its thickness whatever its face is.
+  const frontRound = lookOf(wall, [{ ...ws[0], shape: "half-circle", diameterMm: 2400, widthMm: undefined, depthMm: undefined }]);
+  assert(frontRound.dimensions.diameterMm === 2400 && frontRound.dimensions.depthMm === 30 && frontRound.dimensions.widthMm === undefined, `a round front base: its diameter and its thickness (${JSON.stringify(frontRound.dimensions)})`);
+  assert(lookOf({ ...wall, dimensions: { ...wall.dimensions, diameterMm: 999 } }, ws).dimensions.diameterMm === undefined, "a square front base keeps no diameter");
+
+  // SH-11: a square is ONE number — its side. Typed as a depth or a width, both follow; a row the
+  // drawer stored with two numbers opens as the square it is drawn as.
+  const side = patchedPart({ id: "s", shape: "square", widthMm: 1200, depthMm: 1200, x: 0, y: 0, rotation: 0 }, { depthMm: 2000 });
+  assert(side.widthMm === 2000 && side.depthMm === 2000, `typing a square's depth types its side (${side.widthMm}×${side.depthMm})`);
+  const twoNumbers = shapesOf(row({ shape: "square" }, { widthMm: 1200, depthMm: 600, heightMm: 750 }))[0];
+  assert(twoNumbers.widthMm === 1200 && twoNumbers.depthMm === 1200, `a square row stored 120×60 opens 120 a side, as drawn (${twoNumbers.widthMm}×${twoNumbers.depthMm})`);
+  const made = reshaped(shapesOf(row({}))[0], "square");
+  assert(made.widthMm === 1600 && made.depthMm === 1600, `a 160×90 made a square is 160 a side (${made.widthMm}×${made.depthMm})`);
   console.log("shape-list: ok");
 }

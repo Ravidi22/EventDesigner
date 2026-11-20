@@ -49,7 +49,7 @@ import { CHANDELIER_CRYSTALS, CHANDELIER_PROFILES, FITTING_LABEL, PENDANT_FITTIN
 import { CHUPPAH_FINISHES, CHUPPAH_FINISH_LABEL, CHUPPAH_FLOWERS_LABEL, CHUPPAH_FLOWER_SPOTS, CHUPPAH_PROFILES, CHUPPAH_PROFILE_FORMS, CHUPPAH_PROFILE_LABEL, CHUPPAH_ROOFS, CHUPPAH_ROOF_LABEL, chuppahDrawOf, chuppahLayout, chuppahOf, chuppahPatch } from "@/lib/catalog/chuppah";
 import { ARC_SWEEP, FRONT_BEND_MAX_DEG, FRONT_THICK_MM, MAP_SHAPES, PICKER_SHAPES, RING_GAP, ROUND_FIELD, SHAPE_LABEL, canHollow, usesDiameter } from "@/lib/catalog/types";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
-import { drawnBounds, drawnPieces, flipShapes, lookOf, rescaleOutline, shapesOf, type FlipAxis } from "@/lib/catalog/shape-list";
+import { LINE_MM, drawnBounds, drawnPieces, flipShapes, hollowAcross, lookOf, patchedPart, reshaped, shapesOf, squareSide, type FlipAxis } from "@/lib/catalog/shape-list";
 import type { EdgeCurve } from "@/lib/studio/hall";
 import {
   arcSpecOf,
@@ -383,13 +383,6 @@ const GAP_ALONG = [
 /** What the "מילוי" chip reads on a bar. */
 const hollowValue = (h: HollowSpec | undefined) => (h ? `חלול · ${mmToCm(h.bandMm)} ס״מ` : "מלא");
 
-/** A hollow spec carried to a DIFFERENT outline (another shape picked, or a drawing found where it
- *  was left): the band and the entrance's width and place mean the same on any shape, but open sides
- *  and the entrance's side are edge numbers of the outline they were chosen on — on another one they
- *  would open some other side, so they go. Nothing at all for a shape that cannot be hollow. */
-const hollowAcross = (h: HollowSpec | undefined, next: MapShape): HollowSpec | undefined =>
-  h && canHollow(next) ? { bandMm: h.bandMm, ...(h.gapMm ? { gapMm: h.gapMm } : {}), ...(h.gapAt ? { gapAt: h.gapAt } : {}) } : undefined;
-
 /** Solid or hollow (HollowSpec), and how hollow: the band's depth, the sides left open, and — on a
  *  band that runs all the way round — an entrance cut through it. Shared by the base shape and a
  *  part. `outer` is the shape's own outline drawn SOLID, as it stands on the canvas: its edges are
@@ -635,47 +628,6 @@ function ShapeRail({ armed, drawing, onArm, onDraw, view }: { armed: Armed | nul
   );
 }
 
-/** A hand-drawn shape's outline stretched to a new box about its own centre — what its resize handles
- *  and its size fields do. Curves are offsets from their endpoints, so they scale by the same two. */
-function rescaleCustomPart(part: ShapePart, widthMm: number, depthMm: number): Pick<ShapePart, "outline" | "edgeCurves" | "widthMm" | "depthMm"> {
-  return rescaleOutline(part.outline ?? [], part.edgeCurves, widthMm, depthMm);
-}
-
-/** A shape as the patch would leave it: a hand-drawn one whose size is changed is RESCALED, since its
- *  outline — not its two numbers — is what draws it. */
-function patchedPart(part: ShapePart, p: Partial<ShapePart>): ShapePart {
-  const next = { ...part, ...p };
-  if (part.shape === "custom" && !p.outline && (p.widthMm !== undefined || p.depthMm !== undefined)) {
-    return { ...next, ...rescaleCustomPart(part, p.widthMm ?? part.widthMm ?? 0, p.depthMm ?? part.depthMm ?? 0) };
-  }
-  return next;
-}
-
-/** A shape turned into another kind, at the size it already stands at: a 120×60 rectangle becomes a
- *  120×60 ellipse, a ⌀90 circle a 90×90 rectangle. Its band comes across (hollowAcross); a sweep, a
- *  ring and anything else that only one kind reads is the new kind's default. */
-function reshaped(part: ShapePart, next: RailShape): ShapePart {
-  // A front shape's size is its FACE's, not its band's.
-  const b = part.plane === "front" ? frontFace(part.shape, { ...part, hollow: undefined, faceTurnDeg: undefined }) : sampledBounds([hollowOuter(part.shape, part)]);
-  const w = Math.round(b.w) || 1200;
-  const h = Math.round(b.h) || 600;
-  return {
-    ...part,
-    shape: next,
-    ...(usesDiameter(next)
-      ? { diameterMm: (next === "quarter-circle" ? 2 : 1) * Math.max(w, h) }
-      : next === "line"
-        ? { widthMm: Math.max(w, h), depthMm: LINE_MM }
-        : { widthMm: w, depthMm: h }),
-    arc: undefined,
-    ring: undefined,
-    hollow: hollowAcross(part.hollow, next),
-    // A body of revolution is a round shape's; a bowl reshaped to a square is a block.
-    revolve: next === "circle" || next === "ellipse" ? part.revolve : undefined,
-    open: undefined,
-  };
-}
-
 /** What the "גוף" chip reads: a cylinder, a preset's name, or a profile of the designer's own. */
 function bodyValue(part: ShapePart, tiles?: RevolveTiles): string {
   if (!part.revolve) return tiles?.none ?? "גליל";
@@ -745,9 +697,6 @@ function repeatValue(r: Repeat | undefined): string {
   return `${REPEAT_LABEL[r.along]}${s}`;
 }
 
-/** A line's thickness when nothing says otherwise — a rope, a cable, a rail. */
-const LINE_MM = 20;
-
 /** A drawing that is one straight line — two points, or more all on it, no side bowed — as a "line"
  *  shape: its two farthest points are its ends. Null for anything with a width to it. */
 function straightLine(points: readonly { x: number; y: number }[], curves?: readonly unknown[]) {
@@ -777,7 +726,11 @@ function newPart(shape: RailShape, at: { x: number; y: number }): ShapePart {
             ? { widthMm: 2400, depthMm: 1200 }
             : shape === "line"
               ? { widthMm: 2000, depthMm: LINE_MM }
-              : { widthMm: 1200, depthMm: 600 }),
+              : shape === "square"
+                ? // One number, its side (SH-11): placed 120×60 it was drawn 120×120 with its grips and
+                  // its rotate knob in the middle of it.
+                  { widthMm: 1200, depthMm: 1200 }
+                : { widthMm: 1200, depthMm: 600 }),
     x: Math.round(at.x),
     y: Math.round(at.y),
     rotation: 0,
@@ -1392,8 +1345,13 @@ function sizeLabel(part: ShapePart): string {
     const field = ROUND_FIELD[part.shape] ?? { label: "קוטר", factor: 1 };
     return `${field.label === "רדיוס" ? "R" : "⌀"}${cmOf((roundSizeMm(part.shape, part) ?? 0) / field.factor)}`;
   }
+  if (part.shape === "square") return `${cmOf(squareSide(part))}×${cmOf(squareSide(part))}`;
   return `${cmOf(part.widthMm)}×${cmOf(part.depthMm)}`;
 }
+
+/** The least a shape's size may be typed, in cm (SH-16): a 0 was stored, and the shape drawn at 60 cm
+ *  while the bar said 0. The canvas's grips stop at 10 cm. */
+const MIN_SIZE_CM = 1;
 
 /** The small number box the quick bar types sizes into — the sketch bar's h-7, 56px wide. */
 
@@ -1456,21 +1414,24 @@ function ShapeQuickBar({
       {round ? (
         <>
           <QuickUnit>{field.label === "רדיוס" ? "R" : "⌀"}</QuickUnit>
-          <QuickNumber min={0} label={`${field.label} (ס״מ)`} value={(D ?? 0) / field.factor / 10} onChange={(v) => onChange({ diameterMm: Math.round(v * 10 * field.factor) })} />
+          <QuickNumber min={MIN_SIZE_CM} label={`${field.label} (ס״מ)`} value={(D ?? 0) / field.factor / 10} onChange={(v) => onChange({ diameterMm: Math.round(v * 10 * field.factor) })} />
         </>
+      ) : part.shape === "square" ? (
+        // ONE number, its side (SH-11): a depth field here did nothing.
+        <QuickNumber min={MIN_SIZE_CM} label="צלע (ס״מ)" value={cmOf(squareSide(part))} onChange={(v) => onChange({ widthMm: Math.round(v * 10) })} />
       ) : (
         <>
           {/* Committed on blur: a size typed digit by digit rescaled the shape at "1", then "12", then
-              "120" — a hand-drawn one through rescaleCustomPart each time. */}
-          <QuickNumber min={0} label={part.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={cmOf(part.widthMm)} onChange={(v) => onChange({ widthMm: Math.round(v * 10) })} />
+              "120" — a hand-drawn one through patchedPart each time. */}
+          <QuickNumber min={MIN_SIZE_CM} label={part.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={cmOf(part.widthMm)} onChange={(v) => onChange({ widthMm: Math.round(v * 10) })} />
           <QuickUnit>×</QuickUnit>
           {front ? (
             // A front shape's second number is its height ON THE FACE.
-            <QuickNumber min={0} label="גובה (ס״מ)" value={cmOf(part.depthMm)} onChange={(v) => onChange({ depthMm: Math.round(v * 10) })} />
+            <QuickNumber min={MIN_SIZE_CM} label="גובה (ס״מ)" value={cmOf(part.depthMm)} onChange={(v) => onChange({ depthMm: Math.round(v * 10) })} />
           ) : part.shape === "line" ? (
             <QuickNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(part.depthMm ?? 0) / 10} onChange={(v) => onChange({ depthMm: Math.max(1, Math.round(v * 10)) })} />
           ) : (
-            <QuickNumber min={0} label="עומק (ס״מ)" value={cmOf(part.depthMm)} onChange={(v) => onChange({ depthMm: Math.round(v * 10) })} />
+            <QuickNumber min={MIN_SIZE_CM} label="עומק (ס״מ)" value={cmOf(part.depthMm)} onChange={(v) => onChange({ depthMm: Math.round(v * 10) })} />
           )}
         </>
       )}
@@ -2079,6 +2040,9 @@ export function AppearanceModal({
   // One live group drag: every selected shape's place frozen when the gesture starts, so the whole
   // group is re-derived each frame from one shared delta rather than drifting.
   const groupDrag = useRef<{ from: { x: number; y: number }; origins: Map<string, { x: number; y: number }> } | null>(null);
+  // One live resize: the shape's box as the press found it — what the feature layer's grips measure
+  // their pull from (a square's side is read against it, SH-11).
+  const resizeFrom = useRef<StructureFeature | null>(null);
   // A transient line over the canvas — why a close was refused, and the like. The studio's own.
   const [hint, setHint] = useState<string | null>(null);
   const hintTimer = useRef<number | null>(null);
@@ -2439,7 +2403,9 @@ export function AppearanceModal({
     const round = usesDiameter(p.shape);
     // A hand-drawn shape's box is its outline's; the feature layer stretches the outline to it.
     const ob = p.shape === "custom" && p.outline && p.outline.length >= 3 ? customShapeBounds(p.outline, p.edgeCurves) : null;
-    const w = (ob ? ob.w : round ? (roundSizeMm(p.shape, p) ?? 0) / (p.shape === "quarter-circle" ? 2 : 1) : p.widthMm) || 600;
+    // A square is drawn its side both ways, whatever its depth says (SH-11) — so are its grips and knob.
+    const side = p.shape === "square" ? squareSide(p) : undefined;
+    const w = (ob ? ob.w : round ? (roundSizeMm(p.shape, p) ?? 0) / (p.shape === "quarter-circle" ? 2 : 1) : (side ?? p.widthMm)) || 600;
     return {
       id: p.id,
       kind: "other",
@@ -2447,7 +2413,7 @@ export function AppearanceModal({
       x: p.x,
       y: p.y,
       widthMm: w,
-      depthMm: ob ? ob.h || 600 : round ? w : p.depthMm || 600,
+      depthMm: ob ? ob.h || 600 : round || side ? w : p.depthMm || 600,
       heightMm: 0,
       shape: p.shape,
       ...(ob ? { outline: p.outline, ...(p.edgeCurves ? { edgeCurves: p.edgeCurves } : {}) } : {}),
@@ -3152,6 +3118,31 @@ export function AppearanceModal({
                                     }
                                   }
                                 }
+                                if (part.shape === "square") {
+                                  // ONE number (SH-11): the side is the grip's pull — a corner's larger
+                                  // one — and the edge or corner it was pulled from stays put, in the
+                                  // shape's own turned frame. Read against the box as the press found it
+                                  // (the grips measure from there), never the last frame's.
+                                  const from = (resizeFrom.current ??= before);
+                                  const wMoved = Math.abs(widthMm - from.widthMm) > 0.5;
+                                  const dMoved = Math.abs(depthMm - from.depthMm) > 0.5;
+                                  const side = Math.max(100, wMoved && dMoved ? Math.max(widthMm, depthMm) : dMoved ? depthMm : widthMm);
+                                  const t = ((part.rotation || 0) * Math.PI) / 180;
+                                  const [c, s] = [Math.cos(t), Math.sin(t)];
+                                  const lx = (x - from.x) * c + (y - from.y) * s;
+                                  const ly = -(x - from.x) * s + (y - from.y) * c;
+                                  // Where the side's centre goes along one axis: kept off the edge that stayed.
+                                  const along = (at: number, was: number, now: number) => {
+                                    const minStays = Math.abs(at - now / 2 + was / 2) < 0.5;
+                                    const maxStays = Math.abs(at + now / 2 - was / 2) < 0.5;
+                                    return minStays && !maxStays ? -was / 2 + side / 2 : maxStays && !minStays ? was / 2 - side / 2 : at;
+                                  };
+                                  const ax = along(lx, from.widthMm, widthMm);
+                                  const ay = along(ly, from.depthMm, depthMm);
+                                  x = from.x + ax * c - ay * s;
+                                  y = from.y + ax * s + ay * c;
+                                  widthMm = depthMm = side;
+                                }
                                 const patch: Partial<ShapePart> = {
                                   ...(usesDiameter(part.shape)
                                     ? { diameterMm: Math.round(widthMm * (part.shape === "quarter-circle" ? 2 : 1)) }
@@ -3166,6 +3157,7 @@ export function AppearanceModal({
                         onCommit={() => {
                           ctx.endSnap();
                           groupDrag.current = null;
+                          resizeFrom.current = null;
                           hist.commit();
                         }}
                       />
@@ -3409,15 +3401,18 @@ export function AppearanceModal({
                         {baseRound ? (
                           <>
                             <QuickUnit>{baseField.label === "רדיוס" ? "R" : "⌀"}</QuickUnit>
-                            <QuickNumber min={0}
+                            <QuickNumber min={MIN_SIZE_CM}
                               label={`${baseField.label} (ס״מ)`}
                               value={(roundSizeMm(base.shape, base) ?? 0) / baseField.factor / 10}
                               onChange={(v) => setBase({ diameterMm: Math.round(v * 10 * baseField.factor) })}
                             />
                           </>
+                        ) : base.shape === "square" && base.plane !== "front" ? (
+                          // A square is one number, its side (SH-11).
+                          <QuickNumber min={MIN_SIZE_CM} label="צלע (ס״מ)" value={mmToCm(squareSide(base) ?? 0)} onChange={(v) => setBase({ widthMm: Math.round(v * 10) })} />
                         ) : (
                           <>
-                            <QuickNumber min={0} label={base.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={mmToCm(base.widthMm ?? 0)} onChange={(v) => setBase({ widthMm: Math.round(v * 10) })} />
+                            <QuickNumber min={MIN_SIZE_CM} label={base.shape === "line" ? "אורך (ס״מ)" : "רוחב (ס״מ)"} value={mmToCm(base.widthMm ?? 0)} onChange={(v) => setBase({ widthMm: Math.round(v * 10) })} />
                             <QuickUnit>×</QuickUnit>
                             {base.plane === "front" ? (
                               // A front base: its width, its thickness, and its face's height is the item's.
@@ -3425,7 +3420,7 @@ export function AppearanceModal({
                             ) : base.shape === "line" ? (
                               <QuickNumber label="עובי (ס״מ)" decimals={1} min={0.1} value={(base.depthMm ?? 0) / 10} onChange={(v) => setBase({ depthMm: Math.max(1, Math.round(v * 10)) })} />
                             ) : (
-                              <QuickNumber min={0} label="עומק (ס״מ)" value={mmToCm(base.depthMm ?? 0)} onChange={(v) => setBase({ depthMm: Math.round(v * 10) })} />
+                              <QuickNumber min={MIN_SIZE_CM} label="עומק (ס״מ)" value={mmToCm(base.depthMm ?? 0)} onChange={(v) => setBase({ depthMm: Math.round(v * 10) })} />
                             )}
                           </>
                         )}
