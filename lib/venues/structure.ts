@@ -447,11 +447,31 @@ export const FEATURE_KIND_LABEL: Record<FeatureKind, string> = {
   table: "שולחן",
 };
 
+/** One wall standing in an old wall's place, and the share of the OLD wall's parameter it covers. */
+export interface WallPiece {
+  wallId: string;
+  from: number;
+  to: number;
+}
+
+/** A wall that was split (or joined into another) lives on as this: its id, and the walls standing in
+ *  its place from its node a to its node b (lib/venues/wall-split.ts). Every event's drapes and the
+ *  venue's own curtains hold wall ids, so the id must keep meaning the same stretch of wall —
+ *  `wallChain` resolves it, lib/studio/anchor.ts `wallTrack` draws along it. `curve` is the old
+ *  wall's bow, for a faithful join back. */
+export interface WallLineage {
+  id: string;
+  chain: WallPiece[];
+  curve?: EdgeCurve | null;
+}
+
 export interface VenueStructure {
   nodes: StructureNode[];
   walls: Wall[];
   entrances: StructureEntrance[];
   features: StructureFeature[];
+  /** Absent = no wall was ever split. Never read directly — go through `wallChain`/`hasWall`. */
+  wallLineage?: WallLineage[];
 }
 
 export function emptyStructure(): VenueStructure {

@@ -160,9 +160,9 @@ export function edgePathD(a: Point, b: Point, curve?: EdgeCurve | null): string 
 }
 
 // De Casteljau split of a cubic at parameter t → the two halves as their own control points.
-type Cubic = [Point, Point, Point, Point];
+export type Cubic = [Point, Point, Point, Point];
 const lerpPt = (p: Point, q: Point, t: number): Point => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t });
-function splitCubic(c: Cubic, t: number): { left: Cubic; right: Cubic } {
+export function splitCubic(c: Cubic, t: number): { left: Cubic; right: Cubic } {
   const [p0, p1, p2, p3] = c;
   const p01 = lerpPt(p0, p1, t);
   const p12 = lerpPt(p1, p2, t);

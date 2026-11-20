@@ -48,6 +48,7 @@
     "check:snap": "tsx lib/studio/snap.ts",
     "typecheck": "tsc --noEmit",
     "check:structure": "tsx lib/venues/structure.ts",
+    "check:wall-split": "tsx lib/venues/wall-split.ts",
     "check:pool": "tsx lib/venues/pool.ts",
     "check:rim": "tsx lib/venues/rim.ts",
     "check:climb": "tsx lib/venues/climb.ts",
