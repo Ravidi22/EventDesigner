@@ -115,6 +115,19 @@ const COPING_HIGH_MM = 100;
 export const BASIN_RIM_MM = 450;
 export const BASIN_WALL_MM = 220;
 export const BASIN_WATER_MM = 90;
+
+/** How high a pool's wall stands over what it stands on (2026-11-20, the user: "height on a pool
+ *  doesn't really work in the 3D"): the pool's own height when it has one (the /halls bar's "גובה")
+ *  — a raised pond, a basin on a terrace; else BASIN_RIM_MM on a platform, else 0 = SUNK, its water
+ *  WATER_DEPTH_MM under the floor. A water SURFACE is always sunk. */
+export function poolWallMm(f: Pick<StructureFeature, "kind" | "heightMm">, floorZ: number): number {
+  if (f.kind !== "pool") return 0;
+  if (f.heightMm > 0) return f.heightMm;
+  return floorZ > 0 ? BASIN_RIM_MM : 0;
+}
+
+/** A raised basin's water: BASIN_WATER_MM under its wall's top, or half way up a very low wall. */
+export const basinWaterZ = (wallMm: number): number => Math.max(wallMm - BASIN_WATER_MM, wallMm / 2);
 /** A tree's trunk, for what it stands on: a square this wide round its middle. */
 const TRUNK_PROBE_MM = 400;
 /** A door's frame: a trim this wide on each jamb, standing this far proud of both wall faces. */
@@ -521,8 +534,9 @@ const isWell = (f: StructureFeature): boolean => f.kind === "pool" || (f.kind ==
 function waterWells(structure: VenueStructure, floorOf: FloorOf): Well[] {
   const wells: Well[] = [];
   for (const f of structure.features) {
-    // A basin raised on a platform cuts nothing: the floor under the platform is out of sight.
-    if (!isWell(f) || floorOfFeature(f, floorOf) > 0) continue;
+    // A basin raised on a platform cuts nothing: the floor under the platform is out of sight. Nor
+    // does a pool whose wall stands over the floor (its height, 2026-11-20): its water is above it.
+    if (!isWell(f) || floorOfFeature(f, floorOf) > 0 || poolWallMm(f, 0) > 0) continue;
     const frame = featureFrame(f);
     // The WATER's edge (lib/venues/rim.ts insideOutlines): a pool's rim is floor, so the floor is cut
     // only where the water is — its whole footprint when it has no rim, nothing when it is all rim.
@@ -549,19 +563,21 @@ function holesIn(polygon: readonly Point[], wells: readonly Well[], into: Transf
  *  outline) and floor, the water plane at the top of the recess, and a coping kerb — COPING_MM
  *  wide, COPING_HIGH_MM high — standing on the floor round the rim (the rim itself is its hole, so
  *  it covers the seam between the floor's cut edge and the well's wall). */
-function waterWell(f: StructureFeature, outlines: readonly BuiltOutline[], out: SceneCollector, floorZ = 0, coping = true): void {
+function waterWell(f: StructureFeature, outlines: readonly BuiltOutline[], out: SceneCollector, floorZ = 0, coping = true, wallMm = 0): void {
   if (!outlines.length) return; // all rim, no water (lib/venues/rim.ts)
   const bottom = -(WATER_DEPTH_MM + WELL_BELOW_MM);
   const tint = hexOf(f.style?.fill);
   const water: MaterialRef = tint ? { ...surfaceMaterial("water", tint), opacity: 0.8 } : waterMaterial();
   const parts: Part[] = [];
-  if (floorZ > 0) {
-    // On a platform: a basin standing on its top — a dark floor a hair over the deck, a stone wall
-    // round the water BASIN_WALL_MM thick and BASIN_RIM_MM high, the water BASIN_WATER_MM under it.
+  if (wallMm > 0) {
+    // A RAISED basin — on a platform, or a pool given a height of its own: a dark floor a hair over
+    // what it stands on, the water a little under the top of its wall, and the wall round the water
+    // BASIN_WALL_MM thick and `wallMm` high in stone — unless the pool has a rim, which IS its wall
+    // (rimBody raises the band to the same height).
     for (const o of outlines) {
       parts.push({ shape: "plane", outline: o, at: vec3(0, 0, 2) });
-      parts.push({ shape: "plane", outline: o, at: vec3(0, 0, BASIN_RIM_MM - BASIN_WATER_MM), material: water });
-      parts.push({ shape: "extrude", outline: { outline: offsetOutline(o, BASIN_WALL_MM) }, holes: [o], h: BASIN_RIM_MM, at: vec3(0, 0, 0), material: BASIN_MATERIAL });
+      parts.push({ shape: "plane", outline: o, at: vec3(0, 0, basinWaterZ(wallMm)), material: water });
+      if (coping) parts.push({ shape: "extrude", outline: { outline: offsetOutline(o, BASIN_WALL_MM) }, holes: [o], h: wallMm, at: vec3(0, 0, 0), material: BASIN_MATERIAL });
     }
     out.body(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, WELL_MATERIAL, parts, [{ ...featureFrame(f), at: vec3(f.x, f.y, floorZ) }], { castShadow: false });
     return;
@@ -580,11 +596,12 @@ function waterWell(f: StructureFeature, outlines: readonly BuiltOutline[], out: 
  *  slab in its own material between the feature's outline and what lies inside it — `raisedMm` high
  *  off the floor it stands on (a lawn's kerb at 100), or FLUSH: a plane at `flushZ`, over whatever
  *  ground lies under it. The water's well is cut to the inside (waterWells), so the band is floor. */
-function rimBody(f: StructureFeature, out: SceneCollector, floorZ: number, flushZ: number): void {
+function rimBody(f: StructureFeature, out: SceneCollector, floorZ: number, flushZ: number, wallMm = 0): void {
   const r = rimOf(f);
   if (!r) return;
   const material = surfaceMaterial(r.rim.material, hexOf(r.rim.style?.fill));
-  const raised = Math.max(0, r.rim.raisedMm ?? 0);
+  // A raised pool's rim is its wall: the band stands as high as the wall.
+  const raised = Math.max(0, r.rim.raisedMm ?? 0, wallMm);
   const parts: Part[] = r.outer.map((outline) => {
     const poly = closedPolyline(outline);
     const holes = r.inner.filter((o) => o.outline.length > 0 && pointInPolygon(o.outline[0], poly));
@@ -637,7 +654,7 @@ function extrudedFeature(f: StructureFeature, outlines: readonly BuiltOutline[],
  *  — the basin in the pool's water, the bowl on its stem, the jet) from the feature's size, height
  *  and tint. Set in a POOL, it stands on the water — its basin rising out of it — rather than on
  *  the floor the pool is cut from, which would hang it WATER_DEPTH_MM in the air over the well. */
-function fountainBody(f: StructureFeature, wells: readonly Well[], out: SceneCollector, floorZ: number): void {
+function fountainBody(f: StructureFeature, wells: readonly Well[], out: SceneCollector, floorZ: number, raisedWater: number | null = null): void {
   const ctx: ItemContext = {
     product: undefined,
     resolved: undefined,
@@ -650,8 +667,22 @@ function fountainBody(f: StructureFeature, wells: readonly Well[], out: SceneCol
     author: false,
   };
   const inPool = floorZ === 0 && wells.some((w) => w.id !== f.id && w.room.some((o) => pointInPolygon({ x: f.x, y: f.y }, closedPolyline(o))));
-  const z = inPool ? -WATER_DEPTH_MM : floorZ;
+  const z = raisedWater ?? (inPool ? -WATER_DEPTH_MM : floorZ);
   out.item(`feature:${f.id}`, { type: "feature", id: f.id, label: f.label }, floorKindBody("fountain", ctx), roomTransform({ position: { x: f.x, y: f.y }, rotation: f.rotationDeg ?? 0 }, z));
+}
+
+/** The water a fountain stands in when it is set in a RAISED pool (poolWallMm): that pool's water
+ *  level over the room's floor, else null. */
+function raisedWaterAt(structure: VenueStructure, f: StructureFeature, floorOf: FloorOf): number | null {
+  for (const pool of structure.features) {
+    if (pool.id === f.id || pool.kind !== "pool") continue;
+    const floor = floorOfFeature(pool, floorOf);
+    const wall = poolWallMm(pool, floor);
+    if (wall <= 0) continue;
+    const frame = featureFrame(pool);
+    if (insideOutlines(pool).some((o) => pointInPolygon({ x: f.x, y: f.y }, closedPolyline(carryOutline(o, frame))))) return floor + basinWaterZ(wall);
+  }
+  return null;
 }
 
 /** The venue's own pergola (FeatureKind "pergola", lib/venues/pergola.ts): the catalog's pergola
@@ -904,8 +935,9 @@ function featureBodies(structure: VenueStructure, wells: readonly Well[], out: S
       case "pool": {
         const z = floorOfFeature(f, floorOf);
         const rimmed = !!rimOf(f);
-        waterWell(f, insideOutlines(f), out, z, !rimmed);
-        if (rimmed) rimBody(f, out, z, z > 0 ? 2 : overGround);
+        const wall = poolWallMm(f, z);
+        waterWell(f, insideOutlines(f), out, z, !rimmed, wall);
+        if (rimmed) rimBody(f, out, z, z > 0 ? 2 : overGround, wall);
         break;
       }
       case "column":
@@ -937,7 +969,7 @@ function featureBodies(structure: VenueStructure, wells: readonly Well[], out: S
         extrudedFeature(f, footprintOutlines(featureFootprint(f)), out, undefined, floorOfFeature(f, floorOf));
         break;
       case "fountain":
-        fountainBody(f, wells, out, floorOfFeature(f, floorOf));
+        fountainBody(f, wells, out, floorOfFeature(f, floorOf), raisedWaterAt(structure, f, floorOf));
         break;
       case "pergola":
         pergolaFeatureBody(f, out, floorOfFeature(f, floorOf));
@@ -1292,6 +1324,36 @@ if (isMain(import.meta.url)) {
       assert(c.parts.some((q) => q.shape === "lathe") && c.parts.some((q) => q.shape === "torus"), "…a round shaft over a base ring");
       const palms = rb.find((n) => n.id.startsWith("i:plant:palm:"))!;
       assert(palms.instances[0].at.z === 0, "a palm whose trunk is off the platform stands on the ground, whatever its crown overhangs");
+    }
+
+    // A POOL WITH A HEIGHT OF ITS OWN (2026-11-20): its wall stands that high over the ground and
+    // nothing is cut out of the ground; a fountain set in it stands on its water; a rimmed one is
+    // walled by its rim, raised to the same height.
+    {
+      const pond: StructureFeature = { id: "pond", kind: "pool", label: "", x: 0, y: 0, widthMm: 4000, depthMm: 2000, heightMm: 600, shape: "rect", rotationDeg: 0 };
+      const jet: StructureFeature = { id: "jet", kind: "fountain", label: "", x: 0, y: 0, widthMm: 800, depthMm: 800, heightMm: 1200, shape: "circle", rotationDeg: 0 };
+      const build = (features: StructureFeature[]) => {
+        const st: VenueStructure = { nodes: [], walls: [], entrances: [], features };
+        const col = new SceneCollector();
+        envelopeNodes({ doc: emptyDocument(), plan: eventPlan({ venueId: "v", zoneIds: [] }, { structure: st, zones: [], mmPerUnit: 1, access: "granted" }), structure: st, settings: DEFAULT_SETTINGS, author: true }, col);
+        return col.nodes();
+      };
+      const nodes2 = build([pond, jet]);
+      const pb = nodes2.find((n) => n.kind === "body" && n.id === "feature:pond") as Extract<(typeof nodes2)[number], { kind: "body" }>;
+      assert(!!pb && pb.parts.some((q) => q.shape === "extrude" && q.h === 600 && q.material === BASIN_MATERIAL) && !pb.parts.some((q) => q.shape === "ribbon"), "a pool 60 cm high is a basin whose stone wall stands 60 cm over the ground, not a well");
+      assert(pb.parts.some((q) => q.shape === "plane" && q.material?.kind === "water" && q.at.z === 600 - BASIN_WATER_MM), "…its water just under the wall's top");
+      const ground = nodes2.find((n) => n.kind === "body" && n.id === "ground") as Extract<(typeof nodes2)[number], { kind: "body" }>;
+      assert(!!ground && ground.parts[0].shape === "plane" && !ground.parts[0].holes, "…and the ground under it is whole");
+      const fj = nodes2.find((n) => n.kind === "body" && n.id === "feature:jet") as Extract<(typeof nodes2)[number], { kind: "body" }> | undefined;
+      const fz = fj ? fj.instances[0].at.z : NaN;
+      assert(near(fz, 600 - BASIN_WATER_MM), `a fountain in it stands on its water (z ${fz})`);
+      const sunk = build([{ ...pond, heightMm: 0 }]).find((n) => n.kind === "body" && n.id === "feature:pond") as Extract<(typeof nodes2)[number], { kind: "body" }>;
+      assert(sunk.parts.some((q) => q.shape === "ribbon"), "a pool of height 0 is still sunk in the floor");
+      const rimmed = build([{ ...pond, rim: { widthMm: 300, material: "paving" } }]);
+      const rimNode = rimmed.find((n) => n.kind === "body" && n.id === "rim:pond") as Extract<(typeof nodes2)[number], { kind: "body" }>;
+      const rimPool = rimmed.find((n) => n.kind === "body" && n.id === "feature:pond") as Extract<(typeof nodes2)[number], { kind: "body" }>;
+      assert(!!rimNode && rimNode.parts.every((q) => q.shape === "extrude" && q.h === 600), "a rimmed raised pool's rim is its wall, 60 cm high");
+      assert(!rimPool.parts.some((q) => q.material === BASIN_MATERIAL), "…with no stone wall beside it");
     }
 
     // TYPED WALL HEIGHTS (Wall.heightMm, spec 2026-11-07 §2): a typed height wins over the room —

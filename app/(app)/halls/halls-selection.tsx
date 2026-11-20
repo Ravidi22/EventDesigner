@@ -1282,10 +1282,11 @@ export function HallsSelection({
         )}
         {/* The ground has no height — the field only ever showed a 0 nothing read. */}
         {!surface && (
-          <PanelRow label="גובה (ס״מ)" htmlFor="feature-h">
-            <NumberField id="feature-h" decimals={0} min={0} step={10} commitOnBlur value={cmOf(feature.heightMm)} onChange={(cm) => patch({ heightMm: Math.round(cm * 10) })} className="w-20" />
+          <PanelRow label={feature.kind === "pool" ? "גובה הדופן (ס״מ)" : "גובה (ס״מ)"} htmlFor="feature-h">
+            <NumberField id="feature-h" decimals={0} min={0} step={10} commitOnBlur hideZero={feature.kind === "pool"} placeholder={feature.kind === "pool" ? "שקועה" : undefined} value={cmOf(feature.heightMm)} onChange={(cm) => patch({ heightMm: Math.round(cm * 10) })} className="w-20" />
           </PanelRow>
         )}
+        {feature.kind === "pool" && <Note>ריק — הבריכה שקועה ברצפה. גובה — הדופן עומדת מעל הרצפה והמים מעט מתחת לראשה (בתלת־ממד).</Note>}
         {/* A ח's counter (and a curved bar's band) is a depth of its own. */}
         {band !== null && (
           <>
