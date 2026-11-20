@@ -2,19 +2,23 @@ import type { Point } from "./hall";
 import type { SnapBox } from "./snap";
 import { isMain } from "../self-check";
 
-// Two of the same thing cannot stand in the same place.
+// Two things cannot stand in the same place.
 //
-// A plan is a drawing OF A ROOM, and the room is the authority: two staging decks cannot occupy the
-// same square metre, so a plan that shows them doing it is not a bold arrangement, it is wrong — and
-// wrong in the expensive direction, because the crew builds what the sheet says and finds out at
-// 6pm. Snapping already offered the RIGHT answer (an edge against an edge, no gap); nothing stopped
-// the drag going one pixel further and putting one deck on top of the other.
+// A plan is a drawing OF A ROOM, and the room is the authority: a table cannot stand in a sofa, a
+// deck cannot stand in a deck, and nothing stands in a wall. A plan that shows it is not a bold
+// arrangement, it is wrong — and wrong in the expensive direction, because the crew builds what the
+// sheet says and finds out at 6pm. Snapping already offered the RIGHT answer (an edge against an
+// edge, no gap); this stops the drag going one pixel further and putting one thing inside another.
 //
-// SAME KIND ONLY, and that restraint is the whole design. A chuppah stands ON a stage, a plinth goes
-// beside and behind a table, a rug lies UNDER everything — those are real arrangements and this file
-// must never break one. So a box is only ever pushed out of a box carrying the SAME `solid` key: a
-// deck out of a deck, a table out of a table, a bar out of a bar. Everything else may overlap freely
-// and the drawing order (lib/design-document/stacking.ts) says which is in front.
+// EVERY ELEMENT, AND ONE LIST OF EXCEPTIONS (the user, 2026-11-20: "needs all elements"). It used
+// to be same-kind only — a deck held off a deck, a table off a table, and a table walked straight
+// through a sofa, a bar or a wall. Now every pair of floor things holds, except the pairs in
+// MAY_OVERLAP below, each of which is a real arrangement the plan has to keep being able to draw:
+// a head table and a chuppah stand ON a stage, a rug lies UNDER everything, an aisle runs between
+// its rows of chairs. What is not standing on the floor at all — an item on a table, a candle
+// perched on a banquette, anything hung — is not a solid in the first place (canvas-stage's
+// solidKindOf), and neither is what the drag carries with it. A WALL (wallSolids) holds every
+// floor thing, stages and rugs included; a doorway is cut out of it.
 //
 // A NUDGE, NOT A SOLVER. Each pass finds the deepest overlap and pushes along its shorter axis —
 // the least it can move to be legal, which is also the direction that reads as "it slid along the
@@ -22,8 +26,131 @@ import { isMain } from "../self-check";
 // a table pushed into a row). A deliberate pile it cannot untangle keeps whatever improvement the
 // passes made and stops; it never makes an overlap deeper than it found it.
 
-/** A box that takes part in the rule, and the kind of thing it is. Two boxes are solid to each
- *  other iff their keys are equal. */
+/** The key of every wall segment (wallSolids). Nothing on the floor passes through one. */
+export const WALL_SOLID = "wall";
+
+/** The key a rug or a dance floor holds under (catalog-resolver holdKind): lying under everything,
+ *  it holds against walls alone. */
+export const FLOOR_COVER = "floor-cover";
+
+/** Any kind but a wall — and, unless the row names it twice, any kind but itself. */
+const ANY = "*";
+
+/**
+ * THE ONE LIST: the pairs of floor things that MAY overlap, each with why. Read both ways round.
+ * `*` is every OTHER kind (never a wall, never the kind itself — two stages hold, two chuppahs
+ * hold); a kind against itself is listed by name. Every pair not on this list holds.
+ *
+ * Kinds are the catalog's category ids (catalog-resolver solidKind), plus "table" for every table on
+ * the plan, "stage" for stages, decks and the venue's own staging, "bar" for bars hired and built,
+ * and FLOOR_COVER. A pair that was genuinely unclear was answered permissively (it may overlap) —
+ * the last group.
+ */
+export const MAY_OVERLAP: readonly (readonly [string, string, string])[] = [
+  // A floor to stand on.
+  ["stage", ANY, "a stage is floor: a head table, a chuppah, a bar, a flight stand on it"],
+  ["stage-surfaces", ANY, "a stage's surface is floor"],
+  [FLOOR_COVER, ANY, "a rug or a dance floor lies under everything"],
+  [FLOOR_COVER, FLOOR_COVER, "rugs are layered"],
+  ["pool", "fountains", "a fountain stands in the pool's water"],
+  // An aisle and what lines it.
+  ["aisles", "chairs", "an aisle runs between its rows of chairs"],
+  ["aisles", "sofas", "…or its sofas"],
+  ["aisles", "arches", "an aisle is walked through an arch"],
+  ["aisles", "gates", "…or a gate"],
+  ["aisles", "flower-arrangements", "flowers line it"],
+  ["aisles", "vases", "…on plinths"],
+  ["aisles", "candlesticks", "candles line it"],
+  ["aisles", "lamps", "…and lanterns"],
+  ["aisles", "columns", "…and columns"],
+  // Flowers dressing another piece.
+  ["flower-arrangements", "columns", "a sleeve of flowers round a column"],
+  ["flower-arrangements", "vases", "an arrangement set on a floor plinth"],
+  ["flower-arrangements", "arches", "flowers at an arch's feet"],
+  ["flower-arrangements", "gates", "…a gate's"],
+  ["flower-arrangements", "backdrops", "…a backdrop's"],
+  // Permissive — a canopy you stand UNDER, whose box is its roof or crown, not what stands on the floor.
+  ["chuppahs", ANY, "the couple and a kiddush table stand under a chuppah"],
+  ["pergolas", ANY, "a pergola's box is its roof; only its posts stand on the floor"],
+  ["trees", ANY, "a tree's box is its crown; its trunk takes a pot's worth of floor"],
+];
+
+const anyKinds = new Set(MAY_OVERLAP.filter((r) => r[1] === ANY).map((r) => r[0]));
+const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+const listedPairs = new Set(MAY_OVERLAP.filter((r) => r[1] !== ANY).map((r) => pairKey(r[0], r[1])));
+
+/** May things of kinds `a` and `b` stand in the same place? (MAY_OVERLAP — both ways round.) */
+export function mayOverlap(a: string, b: string): boolean {
+  if (a === WALL_SOLID || b === WALL_SOLID) return false;
+  if (listedPairs.has(pairKey(a, b))) return true;
+  if (a === b) return false;
+  return anyKinds.has(a) || anyKinds.has(b);
+}
+
+/** A door's opening on its wall: its two jambs (lib/studio/anchor.ts doorOpenings). */
+export interface WallGap {
+  a: Point;
+  b: Point;
+}
+
+/** A door is in a segment's line when both its jambs are this near it. */
+const DOOR_ON_WALL_MM = 50;
+
+/**
+ * Every wall as THIN SEGMENTS the hold reads like any other solid: a rectangle as long as the
+ * segment and no thickness, turned to it — so a thing pushed through a wall comes back flush against
+ * its line, an angled wall included. `walls` is lib/studio/wall-clip.ts wallPolylines (a bowed wall
+ * already cut into chords); a doorway (`doors`) is cut out of its wall, so a gate or an arch stands
+ * in it and a table carried through the door into the next room is not held at the jamb.
+ */
+export function wallSolids(walls: readonly (readonly Point[])[], doors: readonly WallGap[] = []): SolidBox[] {
+  const out: SolidBox[] = [];
+  for (const line of walls) {
+    for (let i = 0; i + 1 < line.length; i++) {
+      const p = line[i];
+      const q = line[i + 1];
+      const L = Math.hypot(q.x - p.x, q.y - p.y);
+      if (L < 1) continue;
+      const ux = (q.x - p.x) / L;
+      const uy = (q.y - p.y) / L;
+      // What of [0, L] the doors on this line leave standing.
+      let runs: [number, number][] = [[0, L]];
+      for (const d of doors) {
+        const across = (r: Point) => Math.abs((r.x - p.x) * uy - (r.y - p.y) * ux);
+        if (across(d.a) > DOOR_ON_WALL_MM || across(d.b) > DOOR_ON_WALL_MM) continue;
+        const sa = (d.a.x - p.x) * ux + (d.a.y - p.y) * uy;
+        const sb = (d.b.x - p.x) * ux + (d.b.y - p.y) * uy;
+        const lo = Math.min(sa, sb);
+        const hi = Math.max(sa, sb);
+        runs = runs.flatMap(([r0, r1]): [number, number][] =>
+          hi <= r0 || lo >= r1
+            ? [[r0, r1]]
+            : ([
+                [r0, Math.min(lo, r1)],
+                [Math.max(hi, r0), r1],
+              ] as [number, number][]).filter(([x0, x1]) => x1 - x0 >= 1),
+        );
+      }
+      const rotation = (Math.atan2(uy, ux) * 180) / Math.PI;
+      for (const [s0, s1] of runs) {
+        const len = s1 - s0;
+        const mid = (s0 + s1) / 2;
+        out.push({
+          x: p.x + ux * mid,
+          y: p.y + uy * mid,
+          widthMm: Math.abs(ux) * len,
+          depthMm: Math.abs(uy) * len,
+          solid: WALL_SOLID,
+          shape: { rotation, widthMm: len, depthMm: 0 },
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/** A box that takes part in the rule, and the kind of thing it is. Two boxes hold each other off
+ *  unless their kinds may overlap (mayOverlap). */
 export interface SolidBox extends SnapBox {
   solid: string;
 }
@@ -141,7 +268,7 @@ function separation(a: SolidBox, ax: number, ay: number, b: SolidBox): { x: numb
 
 /**
  * The delta that takes `movers` — one dragged item, or a whole selection moving as one — out of
- * every `obstacles` box of its own kind. `{ x: 0, y: 0 }` when there is nothing to resolve, which
+ * every `obstacles` box it may not overlap (mayOverlap). `{ x: 0, y: 0 }` when there is nothing to resolve, which
  * is the overwhelming majority of frames.
  *
  * ONE DELTA FOR ALL THE MOVERS, because that is what a group drag is: the arrangement inside the
@@ -157,7 +284,7 @@ export function pushApart(movers: SolidBox[], obstacles: SolidBox[], ignore?: Ig
       const m = movers[i];
       for (let j = 0; j < obstacles.length; j++) {
         const o = obstacles[j];
-        if (m.solid !== o.solid) continue;
+        if (mayOverlap(m.solid, o.solid)) continue;
         if (ignore?.(i, j)) continue;
         const out = separation(m, m.x + dx, m.y + dy, o);
         if (out && (!worst || out.depth > worst.depth)) worst = out;
@@ -206,7 +333,7 @@ export interface StartOverlaps extends Ignore {
  *  again even after it had been dragged clear across the room. */
 export function overlappingAtStart(movers: SolidBox[], obstacles: SolidBox[]): StartOverlaps {
   const pairs = new Set<string>();
-  const overlapping = (m: SolidBox, o: SolidBox) => m.solid === o.solid && separation(m, m.x, m.y, o) !== null;
+  const overlapping = (m: SolidBox, o: SolidBox) => !mayOverlap(m.solid, o.solid) && separation(m, m.x, m.y, o) !== null;
   movers.forEach((m, i) =>
     obstacles.forEach((o, j) => {
       if (overlapping(m, o)) pairs.add(`${i}:${j}`);
@@ -328,6 +455,38 @@ if (isMain(import.meta.url)) {
   assert(pushedOn.x === 0 && pushedOn.y === 0, "pushed well past the edge, it is no longer held — it follows the pointer");
   assert(nudgeApart([deck(9000, 0)], [deck(0, 0)], 150).x === 0, "clear of everything, nothing to say");
   assert(nudgeApart([deck(1000, 0)], [deck(0, 0)], 150, overlappingAtStart([deck(1000, 0)], [deck(0, 0)])).x === 0, "…and a pair already overlapping is still ignored");
+
+  // ── EVERY ELEMENT (the user, 2026-11-20): one list of pairs that may overlap; every other pair
+  // of floor things holds.
+  assert(pushApart([deck(3500, 0, "table")], [deck(0, 0, "sofas")]).x === 500, "a table pushed into a sofa is held off it");
+  assert(pushApart([deck(3500, 0, "bar")], [deck(0, 0, "columns")]).x === 500, "a bar is held off a column");
+  assert(pushApart([deck(3500, 0, "table")], [deck(0, 0, "stage")]).x === 0, "a table may stand on a stage");
+  assert(pushApart([deck(3500, 0, "chuppahs")], [deck(0, 0, "stage")]).x === 0, "…and so may a chuppah");
+  assert(pushApart([deck(3500, 0, FLOOR_COVER)], [deck(0, 0, "table")]).x === 0, "a rug lies under a table");
+  assert(pushApart([deck(3500, 0, "table")], [deck(0, 0, FLOOR_COVER)]).x === 0, "…whichever of them is dragged");
+  assert(pushApart([deck(3500, 0, "aisles")], [deck(0, 0, "chairs")]).x === 0, "an aisle runs between its rows of chairs");
+  assert(pushApart([deck(3500, 0, "table")], [deck(0, 0, "aisles")]).x === 500, "…but a table is held off it");
+  assert(!overlappingAtStart([deck(1000, 0, "table")], [deck(0, 0, "stage")])(0, 0), "a pair that may overlap is nothing the gesture remembers");
+  assert(overlappingAtStart([deck(1000, 0, "table")], [deck(0, 0, "sofas")])(0, 0), "…a pair that holds, already overlapping, is");
+  assert(mayOverlap("stage", "table") && mayOverlap("table", "stage") && !mayOverlap("stage", "stage"), "the table reads both ways round, and two stages hold");
+  assert(!mayOverlap("table", WALL_SOLID) && !mayOverlap(FLOOR_COVER, WALL_SOLID) && !mayOverlap("stage", WALL_SOLID), "nothing on the floor passes through a wall — not a rug, not a stage");
+  assert(mayOverlap(FLOOR_COVER, FLOOR_COVER), "two rugs may be layered");
+
+  // ── WALLS: every wall line is a thin segment in the same test.
+  const room = wallSolids([[{ x: 0, y: 0 }, { x: 10000, y: 0 }], [{ x: 10000, y: 0 }, { x: 10000, y: 8000 }]]);
+  assert(room.length === 2, "one obstacle per wall segment");
+  const intoWall = pushApart([deck(5000, 900, "table")], room); // 2000 deep: its top edge at −100
+  assert(intoWall.x === 0 && intoWall.y === 100, "a table pushed 10cm through a wall comes back flush against it");
+  assert(pushApart([deck(5000, 1000, "table")], room).y === 0, "flush against the wall is legal");
+  assert(pushApart([deck(8100, 3000, "stage")], room).x === -100, "a stage is held by a wall like everything else");
+  const slanted = wallSolids([[{ x: 0, y: 0 }, { x: 10000, y: 10000 }]]);
+  const diagonal = pushApart([deck(5300, 4700, "table", 1000, 1000)], slanted);
+  assert(diagonal.x > 0 && Math.abs(diagonal.x + diagonal.y) <= 1, "an angled wall pushes straight out across its line");
+  // A doorway is not a wall: the stretch between a door's jambs takes nothing.
+  const door = wallSolids([[{ x: 0, y: 0 }, { x: 10000, y: 0 }]], [{ a: { x: 4000, y: 0 }, b: { x: 6000, y: 0 } }]);
+  assert(door.length === 2, "a door cuts its wall in two");
+  assert(pushApart([deck(5000, 0, "gates", 1800, 400)], door).y === 0, "a gate stands in the doorway");
+  assert(pushApart([deck(3000, 0, "gates", 1800, 400)], door).y !== 0, "…but not in the wall beside it");
 
   console.log("collide self-check passed");
 }

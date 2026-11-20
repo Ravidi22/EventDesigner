@@ -41,7 +41,7 @@ export interface SnapContext {
    *
    *  A caller that only knows centres (a wall corner being dragged) leaves it off and gets exactly
    *  the alignment-only snap it always had. */
-  self?: { widthMm: number; depthMm: number };
+  self?: { widthMm: number; depthMm: number; flush?: FlushExtent };
   /** Everything the moving item could line up with, be spaced against, or butt up to — the caller
    *  drops the item itself from this list. Each box contributes THREE reference values per axis:
    *  its two edges and its centre. */
@@ -62,6 +62,18 @@ export interface SnapBox {
   /** A neighbour of the moving thing's OWN kind (collide.ts's solid key): meeting it edge to edge —
    *  flush — is claimed before any other line within reach (snapPoint). */
   flush?: boolean;
+  /** The extent a `flush` box is MET at, when that is not the box: a table's seat ring
+   *  (lib/studio/seat-ring.ts), so the next table goes flush where their chairs meet (QA MG-16).
+   *  Axis-aligned, in the room. Absent = the box. */
+  flushBox?: { x: number; y: number; widthMm: number; depthMm: number };
+}
+
+/** The extent the moving thing meets a `flushBox` at, about its own centre (dx, dy). */
+export interface FlushExtent {
+  dx: number;
+  dy: number;
+  widthMm: number;
+  depthMm: number;
 }
 
 /** A thing's true outline about its box's centre: a circle as wide as `widthMm` (`round`), else a
@@ -336,17 +348,24 @@ export function snapPoint(p: Point, ctx: SnapContext): SnapResult {
    *  room, and the 4cm stayed. */
   const flushOn = (axis: Axis, at: number): { value: number; guide: number } | null => {
     if (!ctx.self) return null;
-    const self = ctx.self;
+    // A box met at its flushBox is met by the mover's own flush extent (a ring against a ring); any
+    // other flush box by the mover's box.
+    const plain: FlushExtent = { dx: 0, dy: 0, widthMm: ctx.self.widthMm, depthMm: ctx.self.depthMm };
     const cross = crossOf(axis);
+    const off = (e: FlushExtent, a: Axis) => (a === "x" ? e.dx : e.dy);
     let best: { value: number; guide: number } | null = null;
     let err = tol;
-    for (const b of ctx.boxes ?? []) {
-      if (!b.flush || Math.abs(b[cross] - p[cross]) >= (sizeOn(b, cross) + sizeOn(self, cross)) / 2 - 1) continue;
+    for (const box of ctx.boxes ?? []) {
+      if (!box.flush) continue;
+      const b = box.flushBox ?? box;
+      const self = box.flushBox ? (ctx.self.flush ?? plain) : plain;
+      if (Math.abs(b[cross] - (p[cross] + off(self, cross))) >= (sizeOn(b, cross) + sizeOn(self, cross)) / 2 - 1) continue;
       const lo = b[axis] - sizeOn(b, axis) / 2;
       const hi = b[axis] + sizeOn(b, axis) / 2;
+      const half = sizeOn(self, axis) / 2;
       for (const [value, guide] of [
-        [hi + halfOn(axis), hi],
-        [lo - halfOn(axis), lo],
+        [hi + half - off(self, axis), hi],
+        [lo - half - off(self, axis), lo],
       ]) {
         const d = Math.abs(at - value);
         if (d < err) {
@@ -430,7 +449,8 @@ export function snapTurned(
     if (k === null) continue;
     const q = toFrame(b);
     const [w, d] = k % 2 ? [b.shape.depthMm, b.shape.widthMm] : [b.shape.widthMm, b.shape.depthMm];
-    local.push({ x: q.x, y: q.y, widthMm: w, depthMm: d, ...(b.flush ? { flush: true } : {}) });
+    // A box met at its ring (flushBox) is not flush in this frame, which knows only true sizes.
+    local.push({ x: q.x, y: q.y, widthMm: w, depthMm: d, ...(b.flush && !b.flushBox ? { flush: true } : {}) });
   }
   if (!local.length) return null;
   // No outline, no fixtures, and a 1mm "grid": in this frame the room's corners and grid mean nothing.
@@ -605,6 +625,16 @@ if (isMain(import.meta.url)) {
     assert(butt.point.x === 4000 && butt.guides.x === 2000, "a deck goes flush against its own kind before lining up with an unrelated edge");
     const otherRow = snapPoint({ x: 4040, y: 0 }, { ...near, boxes: [{ ...sameKind, y: 9000 }, table] });
     assert(otherRow.point.x === 4050, "…one in another row is no neighbour to be flush with — the nearest line wins as before");
+
+    // TABLES MEET AT THEIR CHAIRS (QA MG-16): a table and the one beside it go flush ring to ring —
+    // each one's chairs 340 out from its top — never top to top with the chairs through each other.
+    const ringed: SnapBox = { x: 0, y: 0, widthMm: 2000, depthMm: 1000, flush: true, flushBox: { x: 0, y: 0, widthMm: 2680, depthMm: 1680 } };
+    const selfRing = { widthMm: 2000, depthMm: 1000, flush: { dx: 0, dy: 0, widthMm: 2680, depthMm: 1680 } };
+    const rings = snapPoint({ x: 2700, y: 0 }, { ...near, self: selfRing, boxes: [ringed] });
+    assert(rings.point.x === 2680 && rings.guides.x === 1340, "a table goes flush against the next one where their chairs meet");
+    // A ring off-centre (chairs on one end only) is met by its own edge.
+    const oneEnd = snapPoint({ x: 2040, y: 0 }, { ...near, self: { widthMm: 2000, depthMm: 1000, flush: { dx: 170, dy: 0, widthMm: 2340, depthMm: 1000 } }, boxes: [{ ...ringed, flushBox: { x: 0, y: 0, widthMm: 2000, depthMm: 1000 } }] });
+    assert(oneEnd.point.x === 2000, "a table seated only at its far end goes top-to-top against a bare one");
   }
 
   // ── AT AN ANGLE (QA MG-4): two 4×2 stages along a 30° wall are snapped in their own frame, on

@@ -2,7 +2,10 @@ import type { Product } from "@/lib/catalog/types";
 import type { ChairRows } from "@/lib/design-document/types";
 import { chairRowsLayout } from "@/lib/design-document/chair-rows";
 import { catalogBox, footprintBounds, resolveFootprint } from "./footprint";
-import { solidKind, TABLE_SOLID } from "./catalog-resolver";
+import { holdKind, TABLE_SOLID } from "./catalog-resolver";
+import { FLOOR_COVER } from "./collide";
+import { seatRing, type SeatRing } from "./seat-ring";
+import { seatsAround } from "./seating";
 import { isMain } from "../self-check";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
 import { isTableSet } from "@/lib/catalog/composition";
@@ -29,6 +32,9 @@ export interface CarriedItem {
   /** Its footprint is a circle — held off other things as one (lib/studio/collide.ts), not as the
    *  square round it. */
   round?: boolean;
+  /** A TABLE with chairs: the ring they make with it (lib/studio/seat-ring.ts), in its own frame —
+   *  what it is held off the other tables by, so it lands where its chairs meet theirs (QA MG-16). */
+  ring?: SeatRing;
   /** Where it lands is decided by what is UNDER the pointer — a centrepiece by the table, a drape by
    *  the wall — so its drop point must not be pulled onto an alignment line first: a candlestick let
    *  go near the seam of a head table was snapped onto the neighbouring table's edge and landed on
@@ -48,7 +54,11 @@ export function carriedOf(product: Product): CarriedItem {
   // `solid` rides along for the same reason the size does: the DROP is the first moment the canvas
   // could otherwise know what it is being handed, and by then the deck has already landed on top of
   // another one (lib/studio/collide.ts).
-  return { productId: product.id, widthMm: b.w, depthMm: b.h, solid: solidKind(product), landing: landingOf(product), ...(f.kind === "circle" ? { round: true } : {}) };
+  const solid = holdKind(product);
+  // The chairs a table is dropped with (studio-screen tableFields: the row's count), round its shape.
+  const seats = solid === TABLE_SOLID ? Number(product.categoryFields?.seats) : 0;
+  const ring = seats > 0 ? seatRing({ widthMm: b.w, depthMm: b.h, round: f.kind === "circle" }, seatsAround(f, seats, undefined, product.appearance?.blockedSides ?? [])) : undefined;
+  return { productId: product.id, widthMm: b.w, depthMm: b.h, solid, landing: landingOf(product), ...(f.kind === "circle" ? { round: true } : {}), ...(ring ? { ring } : {}) };
 }
 
 /** See CarriedItem.landing. A composite lands as its parts about the point, like anything free. */
@@ -86,7 +96,7 @@ export function rowsTool(id: string): { productId: string; rows: boolean } {
 /** The block a chair lands as — the size the canvas's guides and the armed ghost measure. */
 export function carriedRowsOf(product: Product, spec: ChairRows): CarriedItem {
   const l = chairRowsLayout(spec, catalogBox(product));
-  return { productId: product.id, widthMm: l.widthMm, depthMm: l.depthMm, solid: solidKind(product), landing: "free" };
+  return { productId: product.id, widthMm: l.widthMm, depthMm: l.depthMm, solid: holdKind(product), landing: "free" };
 }
 
 export function carryRows(product: Product, spec: ChairRows): void {
@@ -117,5 +127,16 @@ if (isMain(import.meta.url)) {
   assert(carriedOf(row("sofas")).solid === "sofas", "every other floor category is solid against its own");
   const round = { ...row("tables"), dimensions: { diameterMm: 1800, heightMm: 750 }, appearance: { shape: "circle" } } as unknown as Product;
   assert(carriedOf(round).round === true && !carriedOf(row("tables")).round, "a round table is carried as round — held off the others as a circle");
+  // A rug lies under everything but is still held by a wall (collide.ts FLOOR_COVER).
+  assert(carriedOf(row("rugs")).solid === FLOOR_COVER && carriedOf(row("dance-floors")).solid === FLOOR_COVER, "a rug or a dance floor is carried as a floor cover");
+  // A composite lands as its parts, pasted about the point: its box holds nothing off.
+  assert(carriedOf({ ...row("composites"), composition: { tables: [], placements: [] } } as unknown as Product).solid === undefined, "a composite carries no hold of its own");
+  // A table with its chairs is held off the others by its seat ring (QA MG-16).
+  const seated = { ...row("tables"), categoryFields: { seats: 10 } } as unknown as Product;
+  const ring = carriedOf(seated).ring;
+  assert(!!ring && ring.widthMm > 1800 && ring.depthMm > 900, "a table with its catalog chairs is carried with the ring they make");
+  assert(!carriedOf(row("tables")).ring, "…a table with none has no ring but its top");
+  const roundSeated = carriedOf({ ...round, categoryFields: { seats: 10 } } as unknown as Product).ring;
+  assert(!!roundSeated?.round && roundSeated.widthMm > 1800, "…and a round one a round ring");
   console.log("drag-payload self-check passed");
 }

@@ -17,6 +17,7 @@ import type { BenchLookup } from "@/lib/design-document/bench";
 import type { SeatLookups } from "@/lib/design-document/seat-count";
 import { SOFA_CATEGORY, sofaSeatsOf, type SofaLookup } from "@/lib/catalog/sofa";
 import { isRailed } from "./rail";
+import { FLOOR_COVER } from "./collide";
 import { AISLE_CATEGORY, AISLE_PIECE_FIELD, aisleLayout, aisleRowBox, aisleSpecOf, canBeAislePiece, mergedAisle, type AisleLayout, type AislePlacement, type AisleSpec } from "@/lib/catalog/aisle";
 
 export interface Resolved {
@@ -49,20 +50,41 @@ export const TABLE_SOLID = "table";
 const SOLID_BY_CATEGORY: Record<string, string> = { stages: "stage", "stage-decks": "stage", bars: "bar", tables: TABLE_SOLID };
 
 /**
- * Which things cannot share the same floor as this one.
+ * What KIND of solid thing this is on the floor — the key lib/studio/collide.ts's one list of pairs
+ * that may overlap (MAY_OVERLAP) is read by — or undefined for what does not stand on the floor.
  *
- * Three exemptions, and each is a real arrangement the plan has to keep being able to draw: a RUG
- * is laid under things (sizing "stretch"), anything anchored to a table or hanging from the ceiling
- * is not standing on the floor at all, and a drape belongs to a wall. Everything else that stands
- * on the floor is solid against others OF ITS OWN KIND — deck against deck, bar against bar — and
- * free to overlap anything else, which is what keeps a חופה on a stage and a plinth beside a table
- * possible. See lib/studio/collide.ts for why the rule is same-kind-only.
+ * Three exemptions: a RUG is laid under things (sizing "stretch" — see holdKind), anything anchored
+ * to a table or hanging from the ceiling is not standing on the floor at all, and a drape belongs to
+ * a wall. Everything else that stands on the floor is a solid of its category's kind, and holds
+ * against every other solid but the pairs collide.ts lists — a חופה on a stage, an aisle between its
+ * chairs. This answer is also the "stacked on purpose" kind of the clearance halos (proximity.ts),
+ * which is why a rug is not given a kind here.
  */
 export function solidKind(product: Product): string | undefined {
   const cat = CATEGORY_BY_ID[product.category];
   if (product.layer !== "floor") return undefined;
   if (anchorOf(product) !== "free" || cat?.sizing === "stretch") return undefined;
   return SOLID_BY_CATEGORY[product.category] ?? product.category;
+}
+
+/** The kind the drag's HOLD reads (collide.ts): solidKind, and a rug or a dance floor — a floor row
+ *  stretched over the floor — as FLOOR_COVER, which overlaps everything but a wall. */
+export function holdKind(product: Product): string | undefined {
+  // A composite lands as its parts, pasted about the point — its box is no thing on the floor.
+  if (product.composition) return undefined;
+  const solid = solidKind(product);
+  if (solid) return solid;
+  const cat = CATEGORY_BY_ID[product.category];
+  return product.layer === "floor" && cat?.sizing === "stretch" && anchorOf(product) === "free" ? FLOOR_COVER : undefined;
+}
+
+/** The hold's kind for a catalog row by its category and layer alone — a venue's copy of a row
+ *  (lib/venues/item.ts), which is no Product of this catalog. */
+export function holdKindOf(category: string, layer: string): string | undefined {
+  const cat = CATEGORY_BY_ID[category];
+  if (layer !== "floor" || !cat || cat.anchor === "wall" || cat.anchor === "table") return undefined;
+  if (cat.sizing === "stretch") return FLOOR_COVER;
+  return SOLID_BY_CATEGORY[category] ?? category;
 }
 
 /** A stage's decks, as the fill sees them, out of the primed catalog (lib/design-document/stage.ts). */

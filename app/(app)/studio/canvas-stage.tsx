@@ -8,14 +8,14 @@ import type { Plane } from "@/lib/studio/planes";
 import { groupSeated, groupSeats } from "@/lib/design-document/groups";
 import { seatsAround, seatTransform, CHAIR_D_MM, CHAIR_W_MM, type Seat } from "@/lib/studio/seating";
 import { blockSeats } from "@/lib/design-document/block";
-import { aisleOf, benchOf, chairBlockOf, deckOf, resolve, TABLE_SOLID, type Resolved } from "@/lib/studio/catalog-resolver";
+import { aisleOf, benchOf, chairBlockOf, deckOf, holdKindOf, resolve, TABLE_SOLID, type Resolved } from "@/lib/studio/catalog-resolver";
 import { ChairBlock } from "@/components/chair-block";
 import { AisleDrawing } from "@/components/placed-piece";
 import { aisleWords } from "@/lib/catalog/aisle";
 import { CompositionPieces } from "@/components/composition-drawing";
 import { benchIsNumbered, standaloneBench } from "@/lib/design-document/bench";
 import { catalogVersion } from "@/lib/catalog/storage";
-import { wallSegment, wallTrack, nearestWall } from "@/lib/studio/anchor";
+import { doorOpenings, wallSegment, wallTrack, nearestWall } from "@/lib/studio/anchor";
 import { curtainDrop, isRailed, isRodRow, nearestBareRod, nearestSideRail, rodAt, rodDropLength, railClothLine, railLines, railMoved, railOf, rodPath, rodPointMoved, rodPostMm, rodThickMm, sideCandidates, sketchRailContext, type Rail, type RailLine } from "@/lib/studio/rail";
 import { RodMarks } from "@/components/curtain-cloth";
 import { RodDrawPane } from "@/components/rod-draw-pane";
@@ -28,7 +28,8 @@ import { curtainStyleOf } from "@/lib/catalog/symbols";
 import { toLocalFrame, fromLocalFrame, outlinePathD, rotatedExtent } from "@/lib/studio/geometry";
 import { bowFromPoint, bowHandle, cornerFromPoint, cornerHandle, inwardOf, rugOutline, rugShapeOf, withBow, withCorner, type RugBows, type RugCorners } from "@/lib/studio/rug-shape";
 import { carpetFootprint, carpetPathD, carpetShape } from "@/lib/studio/cover";
-import { nudgeApart, overlappingAtStart, pushApart, type SolidBox } from "@/lib/studio/collide";
+import { FLOOR_COVER, mayOverlap, nudgeApart, overlappingAtStart, pushApart, wallSolids, type SolidBox } from "@/lib/studio/collide";
+import { ringInRoom, seatRing } from "@/lib/studio/seat-ring";
 import { featureFootprint, featureMovable, type VenueStructure } from "@/lib/venues/structure";
 import { resolveFootprint, resolveContent, footprintBounds, catalogBox, clampSize, resizeAxes, type Footprint } from "@/lib/studio/footprint";
 import type { Point } from "@/lib/studio/hall";
@@ -94,7 +95,7 @@ import { signedArea } from "@/lib/studio/stage-fill";
 import { MIRROR_TRANSFORM, uprightTransform } from "@/lib/design-document/mirror";
 import { polysBox, type ClearanceIssue, type ClearanceSubject } from "@/lib/studio/proximity";
 import { itemGeometry } from "./plan-geometry";
-import { constrainAngleDeg, snapTurned, type BoxShape, type SnapBox } from "@/lib/studio/snap";
+import { constrainAngleDeg, snapTurned, type BoxShape, type FlushExtent, type SnapBox } from "@/lib/studio/snap";
 import type { AlignGuide } from "@/lib/studio/align";
 import { carriedItem, carriedOf, type CarriedItem } from "@/lib/studio/drag-payload";
 import type { Product } from "@/lib/catalog/types";
@@ -165,6 +166,35 @@ function cachedSeats(t: DesignTable): Seat[] {
   seatsCache.set(t, { version: catalogVersion, seats });
   return seats;
 }
+/** The room a lone table and its chairs take up together, in the room (lib/studio/seat-ring.ts) —
+ *  remembered per table object like its seats, so a drag frame re-derives only the table it moved. */
+type HoldBox = ReturnType<typeof ringInRoom>;
+const holdCache = new WeakMap<DesignTable, { version: number; hold: HoldBox }>();
+function cachedHold(t: DesignTable): HoldBox {
+  const hit = holdCache.get(t);
+  if (hit && hit.version === catalogVersion) return hit.hold;
+  const f = tableFootprint(t);
+  const b = footprintBounds(f);
+  const hold = ringInRoom(seatRing({ widthMm: b.w, depthMm: b.h, round: f.kind === "circle" }, cachedSeats(t)), t.position, t.rotation ?? 0, !!t.mirrored);
+  holdCache.set(t, { version: catalogVersion, hold });
+  return hold;
+}
+/** …and a BLOCK's, off the ring its group's chairs make (remembered per seats array). */
+const blockHoldCache = new WeakMap<readonly Seat[], HoldBox>();
+function blockHold(g: { centre: Point; rotation: number; widthMm: number; depthMm: number }, seats: readonly Seat[]): HoldBox {
+  const hit = blockHoldCache.get(seats);
+  if (hit) return hit;
+  const hold = ringInRoom(seatRing({ widthMm: g.widthMm, depthMm: g.depthMm }, seats), g.centre, g.rotation);
+  blockHoldCache.set(seats, hold);
+  return hold;
+}
+/** A hold box as the flush extent of the thing at `centre` (snap.ts FlushExtent). */
+const flushAbout = (hold: { x: number; y: number; widthMm: number; depthMm: number }, centre: Point): FlushExtent => ({
+  dx: hold.x - centre.x,
+  dy: hold.y - centre.y,
+  widthMm: hold.widthMm,
+  depthMm: hold.depthMm,
+});
 /** The placement as it faces on its table — the same object back for the same turn, so a memoised
  *  node on a turned table is not handed a fresh copy every frame. */
 const turnedCache = new WeakMap<Placement, { rotation: number; p: Placement }>();
@@ -783,9 +813,9 @@ export function CanvasStage({
             // Through its real shape, like everything else here: the venue's round bar is a
             // circle and a circle turned is the same circle.
             box: { x: f.x, y: f.y, ...turnedExtent(featureFootprint(f), f.rotationDeg ?? 0) },
-            // The venue's own stage is a stage: a deck dropped on top of the house staging is the
-            // same mistake as one dropped on another deck, and the crew cannot build either.
-            solid: f.kind === "stage" || f.kind === "bar" || f.kind === "pool" ? f.kind : undefined,
+            // The venue's own stage is a stage, its bar a bar, its column a column (featureSolid):
+            // a deck dropped on the house staging is the same mistake as one on another deck.
+            solid: featureSolid(f),
           });
         }
       }
@@ -896,6 +926,10 @@ export function CanvasStage({
   const areaCtx = useRef<CanvasLayerContext | null>(null);
   /** The venue's walls as polylines in the room — what a stage being drawn or reshaped may not cross. */
   const walls = useMemo(() => wallPolylines(plan.structure), [plan.structure]);
+  /** …and as the hold's thin segments (collide.ts wallSolids), each doorway cut out — what every
+   *  floor thing is held against during a drag, a drop and a click-to-place. Per venue, not per
+   *  frame: the walls are the property's and a sketch never moves them. */
+  const wallObstacles = useMemo(() => wallSolids(walls, doorOpenings(plan.structure)), [walls, plan.structure]);
   const finishArea = useCallback(
     (pts: Point[]) => {
       if (pts.length < 3) return;
@@ -1403,8 +1437,32 @@ export function CanvasStage({
     box: SnapBox;
     turned?: { x: number; y: number; shape: BoxShape };
     solid?: string;
+    /** A block of TABLES meets the next table at their chairs: the room its members' rings take up,
+     *  about the box's centre (tableHold, snap.ts FlushExtent). */
+    flush?: FlushExtent;
     snapshot: { ref: SelectionRef; origin: Point }[];
   } | null>(null);
+
+  /** Each table group by id, for its ring (tableHold). */
+  const tableGroupById = useMemo(() => new Map(tableGroups.map((g) => [g.id, g])), [tableGroups]);
+  /** A table's HOLD (QA MG-16): the room it and its chairs take up together (lib/studio/seat-ring.ts)
+   *  — a lone table's own ring, a grouped table's its BLOCK's — or undefined for one with no chairs,
+   *  whose top is its hold. What the magnet holds a table off everything by, and where the flush
+   *  snap between two tables meets: where their chairs meet. The spacing tool, the tape, the
+   *  clearance halos and the printed figures still measure table edge to table edge. */
+  const tableHold = (t: DesignTable): HoldBox | undefined => {
+    if (t.groupId) {
+      const g = tableGroupById.get(t.groupId);
+      const ring = g ? groupRingById.get(g.id) : undefined;
+      return g && ring?.seats.length ? blockHold(g, ring.seats) : undefined;
+    }
+    return t.seats ? cachedHold(t) : undefined;
+  };
+  const holdOfRef = (r: SelectionRef): HoldBox | undefined => {
+    if (r.kind !== "table") return undefined;
+    const t = tableById.get(r.id);
+    return t ? tableHold(t) : undefined;
+  };
 
   /** What a drag of `cargo` lines up WITH: everything on screen but the cargo itself — and nothing
    *  OVERHEAD unless overhead things are being carried. A chandelier is not on the floor: a table has
@@ -1434,14 +1492,19 @@ export function CanvasStage({
         if (p?.layer !== "ceiling") return true;
         return overheadCargo && !(p.over && cargoTables.has(p.over));
       })
-      .map((m) => (solid && m.solid === solid ? { ...m.box, flush: true } : m.box));
+      .map((m) => {
+        if (!solid || m.solid !== solid) return m.box;
+        // A table is met at its chairs (tableHold): its ring is the edge the next table goes to.
+        const hold = holdOfRef(m.ref);
+        return { ...m.box, flush: true, ...(hold ? { flushBox: hold } : {}) };
+      });
   };
 
   /** The canvas's snap for a box being dragged — or, for a thing standing AT AN ANGLE among things
    *  at the same angle, the snap in their common frame on their true sizes (snap.ts snapTurned): by
    *  its turned box, a 30° stage snapped "flush" stood 232mm off the 30° stage beside it. No guide
    *  lines for that one — the canvas draws them along the room's axes. */
-  const snapBox = (ctx: CanvasLayerContext, p: Point, self: SnapBox | undefined, boxes: SnapBox[]): Point => {
+  const snapBox = (ctx: CanvasLayerContext, p: Point, self: SnapBox | undefined, boxes: SnapBox[], flush?: FlushExtent): Point => {
     const turned = self?.shape;
     if (!freeDrag.current && turned && !turned.round) {
       const at = snapTurned(p, turned, boxes, ctx.mm(SNAP_TOL_PX));
@@ -1450,7 +1513,7 @@ export function CanvasStage({
         return at;
       }
     }
-    return snapUnlessFree(ctx, p, { boxes, self: self && { widthMm: self.widthMm, depthMm: self.depthMm } });
+    return snapUnlessFree(ctx, p, { boxes, self: self && { widthMm: self.widthMm, depthMm: self.depthMm, ...(flush ? { flush } : {}) } });
   };
 
   /** Whether this gesture has travelled far enough to be a deliberate move: until then nothing
@@ -1482,8 +1545,12 @@ export function CanvasStage({
 
   /** Freeze the collision sets for whatever this gesture is about to move. `refs` is the mover set —
    *  one item, or a whole selection — and `origin` is what its position is measured against. */
-  const asSolid = (e: { ref: SelectionRef; box: SnapBox; solid?: string }): SolidBox | null =>
-    e.solid ? { ...e.box, solid: e.solid } : null;
+  const asSolid = (e: { ref: SelectionRef; box: SnapBox; solid?: string }): SolidBox | null => {
+    if (!e.solid) return null;
+    // A table is held by its chairs, not its top (tableHold).
+    const hold = holdOfRef(e.ref);
+    return hold ? { ...hold, solid: e.solid } : { ...e.box, solid: e.solid };
+  };
 
   /** Everything solid on the plan except `exclude` — what a gesture must keep its cargo out of.
    *  Drawn from `alignTo`, not `movable`: a plane held back from the pointer is still furniture
@@ -1500,25 +1567,33 @@ export function CanvasStage({
    *  would have been inside. The size and kind come from the rail's drag payload — `dataTransfer`
    *  cannot be read until the drop, which is the whole reason that payload exists. A fresh item has
    *  no history, so nothing is exempt: it may not land overlapping at all. */
-  const clearedDrop = (p: Point, carried: CarriedItem | null = carriedItem()): Point => {
-    if (!carried?.solid) return p;
-    const box: SolidBox = {
-      x: p.x,
-      y: p.y,
-      widthMm: carried.widthMm,
-      depthMm: carried.depthMm,
-      solid: carried.solid,
-      // A round one is held off as the circle it is, not as the square round it.
-      ...(carried.round ? { shape: { round: true, rotation: 0, widthMm: carried.widthMm, depthMm: carried.depthMm } } : {}),
-    };
-    const clear = pushApart([box], solidObstacles([]));
+  const clearedDrop = (p: Point, carried: CarriedItem | null = carriedItem(), free = freeDrag.current): Point => {
+    if (!carried?.solid || free) return p;
+    const solid = carried.solid;
+    // A table with chairs lands where its chairs meet the next table's (QA MG-16).
+    const box: SolidBox = carried.ring
+      ? { ...ringInRoom(carried.ring, p), solid }
+      : {
+          x: p.x,
+          y: p.y,
+          widthMm: carried.widthMm,
+          depthMm: carried.depthMm,
+          solid,
+          // A round one is held off as the circle it is, not as the square round it.
+          ...(carried.round ? { shape: { round: true, rotation: 0, widthMm: carried.widthMm, depthMm: carried.depthMm } } : {}),
+        };
+    // Everything it may not stand in (collide.ts mayOverlap), and the walls.
+    const obstacles = [...solidObstacles([]), ...wallObstacles].filter((o) => !mayOverlap(solid, o.solid));
+    const clear = pushApart([box], obstacles);
     return { x: p.x + clear.x, y: p.y + clear.y };
   };
 
   const beginSolids = (refs: SelectionRef[], origin: Point) => {
     const inSet = (r: SelectionRef) => refs.some((x) => sameRef(x, r));
     const movers = movable.filter((m) => inSet(m.ref)).map(asSolid).filter((b): b is SolidBox => !!b);
-    const obstacles = movers.length ? solidObstacles(refs) : [];
+    // Everything solid and every wall — less what none of the movers is held off, so a frame never
+    // looks at a pair that may overlap. Collected ONCE, here: a frame costs a box test per pair.
+    const obstacles = movers.length ? [...solidObstacles(refs), ...wallObstacles].filter((o) => movers.some((m) => !mayOverlap(m.solid, o.solid))) : [];
     return { origin, movers, obstacles, ignore: overlappingAtStart(movers, obstacles) };
   };
 
@@ -1595,9 +1670,10 @@ export function CanvasStage({
         turned: commonFrameBox(picked.map((m) => m.box)),
         // The one solid kind they are (collide.ts) — what they go flush against first.
         solid: new Set(picked.map((m) => m.solid)).size === 1 ? picked[0]?.solid : undefined,
+        flush: picked.some((m) => holdOfRef(m.ref)) ? flushAbout(unionBox(picked.map((m) => holdOfRef(m.ref) ?? m.box)), unionBox(picked.map((m) => m.box))) : undefined,
         snapshot: picked.map((m) => ({ ref: m.ref, origin: { x: m.box.x, y: m.box.y } })),
       };
-      const { start, box, turned, solid, snapshot } = groupDrag.current;
+      const { start, box, turned, solid, flush, snapshot } = groupDrag.current;
       solids.current ??= beginSolids(snapshot.map((sn) => sn.ref), { x: box.x, y: box.y });
       draggingRefs.current = snapshot.map((sn) => sn.ref);
       // ONE BOX, SNAPPED ONCE, and the delta it comes back with is handed to every member. That is
@@ -1620,7 +1696,7 @@ export function CanvasStage({
         if (at && inFrame) {
           ctx.endSnap();
           snapped = { x: Math.round(moved.x + inFrame.x - at.x), y: Math.round(moved.y + inFrame.y - at.y) };
-        } else snapped = snapUnlessFree(ctx, moved, { boxes, self: { widthMm: box.widthMm, depthMm: box.depthMm } });
+        } else snapped = snapUnlessFree(ctx, moved, { boxes, self: { widthMm: box.widthMm, depthMm: box.depthMm, ...(flush ? { flush } : {}) } });
       }
       // …and then held flush against anything solid it has only just touched. The snap already
       // offers flush; this keeps it there for the last few pixels without trapping the drag.
@@ -1653,7 +1729,8 @@ export function CanvasStage({
     const from = solids.current.origin;
     if (!travelled.current && (!self || Math.hypot(p.x - from.x, p.y - from.y) >= ctx.mm(TRAVEL_PX))) travelled.current = true;
     const early = !travelled.current;
-    const snapped = early ? (ctx.endSnap(), { x: Math.round(p.x), y: Math.round(p.y) }) : snapBox(ctx, p, self, snapBoxesFor([ref], own?.solid));
+    const hold = self ? holdOfRef(ref) : undefined;
+    const snapped = early ? (ctx.endSnap(), { x: Math.round(p.x), y: Math.round(p.y) }) : snapBox(ctx, p, self, snapBoxesFor([ref], own?.solid), hold && self ? flushAbout(hold, self) : undefined);
     const clear = early ? { x: 0, y: 0 } : clearOf(snapped, ctx.mm(NUDGE_REACH_PX));
     let at = { x: snapped.x + clear.x, y: snapped.y + clear.y };
     draggingRefs.current = [ref];
@@ -2066,7 +2143,7 @@ export function CanvasStage({
         // A deck must not LAND on another deck either. The point arrives already snapped (the guides
         // were drawn under the incoming drag), so this only bites when the designer let go somewhere
         // that would have put one solid thing inside another — and it puts it against it instead.
-        const at = clearedDrop(p);
+        const at = clearedDrop(p, carriedItem(), e.altKey);
         onDropProduct(productId, at.x, at.y);
       }}
       dropSnap={() => {
@@ -2077,7 +2154,7 @@ export function CanvasStage({
         if (carried && carried.landing !== "free") return null;
         return {
           boxes: snapBoxesFor([], carried?.solid),
-          self: carried ? { widthMm: carried.widthMm, depthMm: carried.depthMm } : undefined,
+          self: carried ? { widthMm: carried.widthMm, depthMm: carried.depthMm, ...(carried.ring ? { flush: flushAbout(ringInRoom(carried.ring, { x: 0, y: 0 }), { x: 0, y: 0 }) } : {}) } : undefined,
         };
       }}
       backdrop={(ctx) => {
@@ -2743,7 +2820,7 @@ export function CanvasStage({
               // here, which stands on the floor, and it has no business squaring up to a chandelier.
               snapOptions={(item) => ({
                 boxes: snapBoxesFor([], item.solid),
-                self: { widthMm: item.widthMm, depthMm: item.depthMm },
+                self: { widthMm: item.widthMm, depthMm: item.depthMm, ...(item.ring ? { flush: flushAbout(ringInRoom(item.ring, { x: 0, y: 0 }), { x: 0, y: 0 }) } : {}) },
               })}
               clear={clearedDrop}
               onPlace={onPlaceArmed}
@@ -3749,22 +3826,49 @@ const CORNERS = [
 ] as const;
 const MIN_CARPET_MM = 300; // a rug you can still grab a corner of
 
-/** What KIND of solid thing a placement is, for the no-overlap rule — or undefined for anything the
- *  rule must not touch (lib/studio/collide.ts explains why it is same-kind-only).
- *
- *  Three exemptions, each of them a real arrangement: a RUG is laid under things, so it overlaps
- *  everything by definition; anything on a table or hanging from the ceiling is not standing on the
- *  floor at all; and a drape belongs to a wall. Everything else that stands on the floor is solid
- *  against others OF ITS OWN CATEGORY — deck against deck, bar against bar — and free to overlap
- *  anything else, which is what keeps a חופה on a stage and a plinth beside a table possible.
+/** What KIND of solid thing a placement is, for the hold (lib/studio/collide.ts: every pair holds
+ *  but the ones its MAY_OVERLAP lists) — or undefined for what is not standing on the floor.
  *
  *  The catalog answers the KIND (solidKind, lib/studio/catalog-resolver.ts, which is also what the
- *  rail's drag payload asks); this adds the two things only a PLACEMENT knows — that it has been
- *  put on a table or hung on a wall, and is therefore not standing on the floor whatever its
- *  category says. */
+ *  rail's drag payload asks); a rug or a dance floor is FLOOR_COVER, which overlaps everything but a
+ *  wall. This adds what only a PLACEMENT knows — that it has been put on a table, perched on a
+ *  banquette or hung on a rail, and is therefore not standing on the floor whatever its category
+ *  says. */
 function solidKindOf(p: Placement): string | undefined {
-  if (p.tableId || isRailed(p)) return undefined;
-  return resolve(p.variantId)?.solid;
+  if (p.tableId || p.perch || isRailed(p)) return undefined;
+  const r = resolve(p.variantId);
+  if (!r) return undefined;
+  if (r.solid) return r.solid;
+  return p.layer === "floor" && r.sizing === "stretch" && r.anchor === "free" ? FLOOR_COVER : undefined;
+}
+
+/** The hold's kind for a venue feature (collide.ts) — a catalog category's where there is one, so the
+ *  house column and a hired column are the same thing to the floor. The ground, a plant, a pergola
+ *  (its box is its roof), a built structure or platform (floor to stand on, or a building whose
+ *  walls hold already), a curtain and an LED strip are none. */
+function featureSolid(f: VenueStructure["features"][number]): string | undefined {
+  switch (f.kind) {
+    case "stage":
+    case "bar":
+    case "pool":
+      return f.kind;
+    case "column":
+      return "columns";
+    case "fountain":
+      return "fountains";
+    case "seating":
+      return "chairs";
+    case "screen":
+      return "led-screens";
+    case "stairs":
+      return "stage-stairs";
+    case "ramp":
+      return "stage-ramps";
+    case "item":
+      return f.item ? holdKindOf(f.item.category, f.item.layer) : undefined;
+    default:
+      return undefined;
+  }
 }
 
 /** The one box a set of boxes sits inside. What a group drag snaps as, and what a group rotate
