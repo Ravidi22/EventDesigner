@@ -1395,6 +1395,23 @@ const FeatureNode = memo(function FeatureNode({
                         mm={mm}
                       />
                     ))
+                  ) : f.shape === "half-circle" || f.shape === "quarter-circle" ? (
+                    // A half or a quarter circle grows from its CHORD or its CORNER (SH-7, QA
+                    // 2026-11-20): scaled about its box centre, a half-round butted against a table
+                    // walked off it. The grip sits on the rim, half way round.
+                    (() => {
+                      const g = anchoredRound(f);
+                      return (
+                        <ResizeHandle
+                          {...resizableAnchored(f, onResize, onCommit, clientToMm, minSizeMm)}
+                          cursor="cursor-nesw-resize"
+                          label={`שינוי גודל של ${f.label} — גרירה`}
+                          cx={f.x + g.anchor.x + g.r * Math.SQRT1_2}
+                          cy={f.y + g.anchor.y - g.r * Math.SQRT1_2}
+                          mm={mm}
+                        />
+                      );
+                    })()
                   ) : (
                     <ResizeHandle
                       {...resizableRadius(f, onResize, onCommit, clientToMm, minSizeMm)}
@@ -1405,6 +1422,20 @@ const FeatureNode = memo(function FeatureNode({
                       mm={mm}
                     />
                   )
+                ) : f.shape === "line" ? (
+                  // A LINE is lengthened from its ends only (SH-14): its depth and corner grips sat on
+                  // its middle and swallowed the press that should have moved it.
+                  ([1, -1] as const).map((sign) => (
+                    <ResizeHandle
+                      key={`w${sign}`}
+                      {...resizable(f, "width", sign, onResize, onCommit, clientToMm, minSizeMm)}
+                      cursor="cursor-ew-resize"
+                      label={`שינוי אורך של ${f.label} — גרירה`}
+                      cx={f.x + sign * (f.widthMm / 2)}
+                      cy={f.y}
+                      mm={mm}
+                    />
+                  ))
                 ) : (
                   <>
                     {/* A dashed box ties the corner handles to what they scale. */}
@@ -1464,7 +1495,9 @@ const FeatureNode = memo(function FeatureNode({
             {selected && onRotate && clientToMm && (
               <RotateHandle
                 pivot={{ x: f.x, y: f.y }}
-                reachMm={(usesDiameter(f.shape) ? f.widthMm : f.depthMm) / 2}
+                // A half circle's top is its apex, a quarter's its box's top (SH-7): read off the
+                // circle (its width), never the stored depth, which older rows kept a full circle deep.
+                reachMm={f.shape === "half-circle" ? f.widthMm / 4 : (usesDiameter(f.shape) ? f.widthMm : f.depthMm) / 2}
                 rotationDeg={f.rotationDeg ?? 0}
                 onRotate={(deg) => onRotate(f.id, deg)}
                 onCommit={onCommit}
@@ -1685,6 +1718,50 @@ function resizableRadius(
           const p = clientToMm(ev.clientX, ev.clientY);
           const d = Math.max(minMm, Math.round(Math.hypot(p.x - f.x, p.y - f.y) * 2));
           onResize(f.id, { widthMm: d, depthMm: d, x: f.x, y: f.y });
+        },
+        onEnd: (_ev, moved) => {
+          if (moved) onCommit?.();
+        },
+      });
+    },
+  };
+}
+
+/** A half or a quarter circle in its feature's own frame: the point it grows from — the chord's middle
+ *  (the circle's centre) of a half, the corner of a quarter — and its radius. Read off its width, as
+ *  featureFootprint draws it (a half: ⌀ = width, chord at the bottom; a quarter: R = width, corner at
+ *  bottom-left), whatever depth is stored. */
+function anchoredRound(f: Pick<StructureFeature, "shape" | "widthMm">): { anchor: { x: number; y: number }; r: number } {
+  return f.shape === "half-circle"
+    ? { anchor: { x: 0, y: f.widthMm / 4 }, r: f.widthMm / 2 }
+    : { anchor: { x: -f.widthMm / 2, y: f.widthMm / 2 }, r: f.widthMm };
+}
+
+// A half or a quarter circle's grip is a radius from its chord or its corner, which stays where it is
+// (SH-7): the box it reports is its real one — a half D × D/2, a quarter R × R.
+function resizableAnchored(
+  f: StructureFeature,
+  onResize?: (id: string, patch: { widthMm: number; depthMm: number; x: number; y: number }) => void,
+  onCommit?: () => void,
+  clientToMm?: (clientX: number, clientY: number) => { x: number; y: number },
+  minMm: number = MIN_FEATURE_MM,
+) {
+  if (!onResize || !clientToMm) return {};
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      e.stopPropagation();
+      const half = f.shape === "half-circle";
+      const { anchor } = anchoredRound(f);
+      const rot = f.rotationDeg ?? 0;
+      const centre = { x: f.x, y: f.y };
+      startPointerGesture(e, {
+        onMove: (ev) => {
+          const p = toLocalFrame(clientToMm(ev.clientX, ev.clientY), centre, rot);
+          const r = Math.max(half ? minMm / 2 : minMm, Math.hypot(p.x - anchor.x, p.y - anchor.y));
+          const local = half ? { x: anchor.x, y: anchor.y - r / 2 } : { x: anchor.x + r / 2, y: anchor.y - r / 2 };
+          const c = fromLocalFrame(local, centre, rot);
+          const w = Math.round(half ? 2 * r : r);
+          onResize(f.id, { widthMm: w, depthMm: half ? Math.round(r) : w, x: Math.round(c.x), y: Math.round(c.y) });
         },
         onEnd: (_ev, moved) => {
           if (moved) onCommit?.();

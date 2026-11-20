@@ -2466,7 +2466,8 @@ export function AppearanceModal({
       x: p.x,
       y: p.y,
       widthMm: w,
-      depthMm: ob ? ob.h || 600 : round || side ? w : p.depthMm || 600,
+      // A half circle's box is D × D/2 (SH-7) — at D × D its grip and knob floated off it.
+      depthMm: ob ? ob.h || 600 : p.shape === "half-circle" ? w / 2 : round || side ? w : p.depthMm || 600,
       heightMm: 0,
       shape: p.shape,
       ...(ob ? { outline: p.outline, ...(p.edgeCurves ? { edgeCurves: p.edgeCurves } : {}) } : {}),
@@ -3154,7 +3155,10 @@ export function AppearanceModal({
                                 // stays where it was. Only square to the plan — a turned edge has no
                                 // axis to line up.
                                 if (straight(part.rotation || 0)) {
-                                  if (usesDiameter(part.shape)) {
+                                  if (part.shape === "half-circle" || part.shape === "quarter-circle") {
+                                    // Grown from its chord or its corner by the feature layer (SH-7) —
+                                    // its edge is not where a centred circle's would be.
+                                  } else if (usesDiameter(part.shape)) {
                                     const edge = ctx.snap({ x: x + widthMm / 2, y }, snapOpts([id])).x;
                                     widthMm = depthMm = Math.max(100, 2 * (edge - x));
                                   } else {
