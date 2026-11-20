@@ -1340,7 +1340,11 @@ function shapeCore(stage: StageBuild, item: StageStair, deckOf: DeckLookup, join
     // side faces the room. Then carried onto the edge: the strip's centre line is half a depth out —
     // or, for an inner banquette standing on the deck, half a depth in, its chairs further in still.
     // On a curved side `at` follows the curve, so the cushions and the chairs bend with the rim.
-    const spec = benchSpecOf(item);
+    // An INNER banquette's room side is the stage's edge, a drop: nobody sits there and no chair
+    // stands there (QA BQ-6 — its chairs stood 6 cm off the stage in the air). The spec's room side
+    // is kept underneath, for the day it is set back outside.
+    const own = benchSpecOf(item);
+    const spec = inner ? { ...own, front: { kind: "none" as const } } : own;
     // Table-deep with chairs at it, seat-deep otherwise (benchDefaultDepth), unless typed.
     const depthMm = spec.depthMm && spec.depthMm > 0 ? spec.depthMm : benchDefaultDepth(spec);
     const lay = benchLayout(w, depthMm, spec);
@@ -3465,9 +3469,15 @@ if (isMain(import.meta.url)) {
   assert(bi.inner && bi.polygon.every((q) => q.x <= 3001 && q.x >= 3000 - BENCH_TABLE_DEPTH_MM - 1), "an inner banquette stands on the deck inside its edge");
   assert(bi.chairs.length === 4 && bi.chairs.every((c) => Math.abs(c.x - (3000 - BENCH_TABLE_DEPTH_MM - CHAIR_OFFSET_MM)) < 1 && Math.abs(c.facingDeg) < 1), "…its chairs further in behind it, still facing out");
   assert(bi.heightMm === BENCH_TOP_MM, "…its top at table height above the deck its chairs stand on");
-  const biSofa = edgeItemShape(tall.stage, { ...benchIn, bench: { back: { kind: "sofa" }, front: { kind: "chairs", seats: 2 } } }, deckOf)!;
-  assert(biSofa.cushions.every((q) => q.every((p) => p.x <= 3000 - BENCH_TABLE_DEPTH_MM / 2 + 1e-6 && p.x >= 3000 - BENCH_TABLE_DEPTH_MM - 1)), "an inner banquette's sofa side is on the inner half of its strip");
-  assert(biSofa.chairs.length === 2 && biSofa.chairs.every((c) => c.x > 3000 && Math.abs(Math.abs(c.facingDeg) - 180) < 1), "…and chairs on its room side stand off the stage, facing it");
+  const biSofaItem: StageStair = { ...benchIn, bench: { back: { kind: "sofa" }, front: { kind: "chairs", seats: 2 } } };
+  const biSofa = edgeItemShape(tall.stage, biSofaItem, deckOf)!;
+  const biDepth = biSofa.depthMm;
+  assert(biSofa.cushions.length > 0 && biSofa.cushions.every((q) => q.every((p) => p.x <= 3000 - biDepth / 2 + 1e-6 && p.x >= 3000 - biDepth - 1)), "an inner banquette's sofa side is on the inner half of its strip");
+  // QA BQ-6: its ROOM side is the stage's edge — a drop. Chairs there stood 6 cm off the stage in the
+  // air (at deck height in 3D); now it seats nobody, the spec's room side kept underneath.
+  assert(biSofa.chairs.length === 0 && biSofa.bench?.front.kind === "none" && biSofa.seats === biSofa.sofaSeats, "an inner banquette has no room side: no chair stands off the stage's edge");
+  assert(biSofaItem.bench?.front?.kind === "chairs" && edgeItemShape(tall.stage, { ...biSofaItem, inner: undefined }, deckOf)!.chairs.length === 2, "…and set back outside, its room side's chairs come back");
+  assert(benchSeats([{ ...tall, stage: { ...tall.stage, stairs: [biSofaItem] } }], deckOf) === biSofa.sofaSeats, "…nor are they counted in the seating");
   const withBenchIn = { ...tall, stage: { ...tall.stage, stairs: [benchIn] } };
   assert(skirtMm(withBenchIn, deckOf) === 20000, "the stage's face below an inner banquette is still skirted");
   assert(edgeGaps(withBenchIn, deckOf).reduce((t, g) => t + g.lengthMm, 0) === 20000 - 2400, "…and the banquette finishes its stretch");

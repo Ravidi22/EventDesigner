@@ -1615,6 +1615,7 @@ export function Inspector({
                     front={it.front}
                     backLabel="צד הבמה"
                     frontLabel="צד האולם"
+                    frontNote={it.inner ? "בנקט פנימי — צד האולם שלו הוא שפת הבמה, ואין בו ישיבה." : undefined}
                     heightMm={it.heightMm}
                     sofaHeightMm={it.sofaHeightMm}
                     heightNote="מעל הבמה — שולחן לכיסאות שעליה"
@@ -3055,6 +3056,7 @@ function BenchSidesFields({
   front,
   backLabel,
   frontLabel,
+  frontNote,
   heightMm,
   sofaHeightMm,
   heightNote,
@@ -3070,6 +3072,9 @@ function BenchSidesFields({
   front: BenchSideRow;
   backLabel: string;
   frontLabel: string;
+  /** Said in place of the front side when it cannot be set — an inner stage banquette's room side is
+   *  the stage's edge (QA BQ-6). */
+  frontNote?: string;
   heightMm: number;
   sofaHeightMm: number;
   /** What the top height is measured from, in words. */
@@ -3131,7 +3136,7 @@ function BenchSidesFields({
   return (
     <div className="space-y-2">
       {side("back", back, backLabel)}
-      {side("front", front, frontLabel)}
+      {frontNote ? <Note>{frontNote}</Note> : side("front", front, frontLabel)}
       {hasChairs && (
         <PanelRow label="גובה המשטח (ס״מ)" htmlFor={`${idPrefix}-h`}>
           <NumberField id={`${idPrefix}-h`} decimals={0} min={BENCH_TOP_RANGE_MM.min / 10} max={BENCH_TOP_RANGE_MM.max / 10} commitOnBlur value={cmOf(heightMm)} onChange={(cm) => onHeight(cm * 10)} className="w-20" />
