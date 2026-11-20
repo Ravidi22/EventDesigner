@@ -1392,11 +1392,16 @@ export function CanvasStage({
     const inCargo = (r: SelectionRef) => cargo.some((x) => sameRef(x, r));
     const overheadCargo = cargo.some((r) => r.kind === "placement" && placementById.get(r.id)?.layer === "ceiling");
     const cargoTables = new Set(cargo.filter((r) => r.kind === "table").map((r) => r.id));
+    // A carpet laid OVER something carried (Placement.cover, lib/studio/cover.ts) is re-laid onto it
+    // every frame (the reducer's settleCovers) — as a reference it stood where its stage had just
+    // been, and the stage lurched in steps and stopped short of its neighbour, held by its own carpet.
+    const cargoIds = new Set(cargo.filter((r) => r.kind !== "table").map((r) => r.id));
     return alignTo
       .filter((m) => {
         if (inCargo(m.ref)) return false;
         if (m.ref.kind !== "placement") return true;
         const p = placementById.get(m.ref.id);
+        if (p?.cover && cargoIds.has(p.cover.stageId ?? p.cover.featureId ?? "")) return false;
         if (p?.layer !== "ceiling") return true;
         return overheadCargo && !(p.over && cargoTables.has(p.over));
       })
@@ -2673,9 +2678,10 @@ export function CanvasStage({
               doc={doc}
               structure={plan.structure}
               // The same pull a drop gets: in line with the row it is joining, at the gap that row
-              // keeps.
+              // keeps — against the same references (snapBoxesFor): only a FREE item is snapped
+              // here, which stands on the floor, and it has no business squaring up to a chandelier.
               snapOptions={(item) => ({
-                boxes: alignTo.map((m) => m.box),
+                boxes: snapBoxesFor([]),
                 self: { widthMm: item.widthMm, depthMm: item.depthMm },
               })}
               clear={clearedDrop}
