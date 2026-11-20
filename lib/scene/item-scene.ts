@@ -291,6 +291,30 @@ if (isMain(import.meta.url)) {
   assert(!!shelf && shelf.shape === "extrude" && (shelf as { h: number }).h === 40, "a table's raised shape stands at its own height in the table's body");
   assert(tableBody.parts.filter((q) => q.shape === "extrude" && q.at.z === 750 - 30).length === 1, "…and the top is the table's own shape alone, not the shelf's too");
 
+  // SH-2 (QA 2026-11-20): a table's shapes keep the look and the body they were given. The top was
+  // built of every shape in the table's timber — a shape's own colour or texture, and "מתאר בלבד"
+  // on the first shape, never reached the room.
+  const topOf = (p: Product) => itemScene(p).scene.nodes.find((n): n is BodyNode => n.kind === "body" && n.tag.type === "table")!.parts.filter((q) => q.shape === "extrude" && q.at.z === 750 - 30);
+  const painted = row({
+    id: "tbl3",
+    category: "tables",
+    dimensions: { widthMm: 1800, depthMm: 900, heightMm: 750 },
+    appearance: { shape: "rect", content: "none", baseStyle: { fill: "#111111" }, parts: [{ id: "end", shape: "circle", diameterMm: 900, x: 900, y: 0, rotation: 0, texture: "marble" }] },
+  });
+  const paintedTop = topOf(painted);
+  assert(paintedTop.length === 2 && paintedTop[0].material?.colour === "#111111" && paintedTop[1].material?.texture === "marble", `each shape of the top in its own look: the black counter, the marble end (${JSON.stringify(paintedTop.map((q) => q.material))})`);
+  const plainBlack = row({ id: "tbl4", category: "tables", dimensions: { widthMm: 1800, depthMm: 900, heightMm: 750 }, appearance: { shape: "rect", content: "none", baseStyle: { fill: "#111111" } } });
+  const plainBlackBody = itemScene(plainBlack).scene.nodes.find((n): n is BodyNode => n.kind === "body" && n.tag.type === "table")!;
+  assert(plainBlackBody.parts.filter((q) => q.shape === "box" || q.shape === "cylinder").length >= 4, "…a plain rectangle in its own colour still stands on its four legs");
+  const outlineOnly = row({
+    id: "tbl5",
+    category: "tables",
+    dimensions: { widthMm: 2400, depthMm: 1200, heightMm: 750 },
+    appearance: { shape: "rect", content: "none", body: "none", parts: [{ id: "top", shape: "circle", diameterMm: 1000, x: 0, y: 0, rotation: 0 }] },
+  });
+  const outlineTop = topOf(outlineOnly);
+  assert(outlineTop.length === 1 && outlineTop[0].shape === "extrude" && Math.abs(Math.max(...outlineTop[0].outline.outline.map((v) => v.x)) - Math.min(...outlineTop[0].outline.outline.map((v) => v.x)) - 1000) < 1, `an outline-only first shape is no top: the round is (${outlineTop.length} tops)`);
+
   // Where the item's own floor stands in its room — the side views' z 0 (lib/element/elevation.ts
   // orthoFrame): the floor for a floor row, a hung row's underside — its row's hang height, else
   // the open sky's default — so the boxes and the room under them line up.

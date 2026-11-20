@@ -25,7 +25,7 @@ import { footprintOutlines, resolveFootprint } from "@/lib/studio/footprint";
 import type { Point } from "@/lib/studio/hall";
 import type { Product } from "@/lib/catalog/types";
 import type { Resolved } from "@/lib/studio/catalog-resolver";
-import { type CandleStyle, type ChairStyle, type ChuppahStyle, type SymbolKind, isCandleStyle, symbolOf } from "@/lib/catalog/symbols";
+import { SYMBOL_STYLES, type CandleStyle, type ChairStyle, type ChuppahStyle, type SymbolKind, isCandleStyle, symbolOf } from "@/lib/catalog/symbols";
 import { flowerDrawSpecOf } from "@/lib/catalog/flower-spec";
 import { type FlowerDrawSpec, darken, defaultFlowerForm, defaultMix, isPale, seedOf } from "@/lib/catalog/flower-draw";
 import { DEFAULT_TONE, packCircles } from "@/components/item-symbol";
@@ -248,6 +248,12 @@ const PROFILE_IS_PICTURE: ReadonlySet<SymbolKind> = new Set<SymbolKind>(["chande
 /** The pictures laid along their own outline, whatever it is — never into a box (lib/catalog/
  *  picture-frame.ts): a bar and a banquette along their band, a pergola and a dance floor on theirs. */
 const FOLLOWS_OUTLINE: ReadonlySet<SymbolKind> = new Set<SymbolKind>(["bar", "bench", "pergola", "dance-floor"]);
+/** The pictures whose versions (SYMBOL_STYLES — a chesterfield sofa, a palm, a fluted column…) the
+ *  ROOM does not build yet: each is one body in 3D whatever style the plan draws (a planned catalog
+ *  round). The shape editor labels their tiles "plan only" rather than promising the 3D (SH-3, QA
+ *  2026-11-20); the self-check below holds this list to the recipes, so a style built later says
+ *  the label is stale. */
+export const PLAN_ONLY_STYLES: ReadonlySet<SymbolKind> = new Set<SymbolKind>(["sofa", "vase", "tree", "column", "fountain", "arch"]);
 
 /** A build moved by (dx, dy) in the item's frame — a picture standing in its first shape's box. */
 function shifted(b: ItemBuild, dx: number, dy: number): ItemBuild {
@@ -1060,6 +1066,22 @@ if (isMain(import.meta.url)) {
     return { product: undefined, resolved: undefined, footprint, widthMm: w, depthMm: d, heightMm, tone: DEFAULT_TONE.candlestick, count: 1, author: false, ...extra };
   };
   const waxCandles = (b: ItemBuild) => b.parts.filter((p) => p.shape === "cylinder" && p.material?.colour === WAX);
+
+  // SH-3: which pictures' versions the ROOM builds. Every style of a kind built at one size: a kind in
+  // PLAN_ONLY_STYLES builds one body whatever its style, every other kind at least two — the editor's
+  // "plan only" label is true, and turns stale (this fails) the day one of them is built. A curtain is
+  // built on its rail (build.ts), not here.
+  for (const [k, set] of Object.entries(SYMBOL_STYLES)) {
+    if (!set || k === "curtain") continue;
+    const kind = k as SymbolKind;
+    const f = set.sample(set.styles[0]);
+    const built = (st: string) => JSON.stringify(itemBody(kind, ctxOf(f, 1200, { drawStyle: st as ItemContext["drawStyle"], count: 6, tone: "#b08850" })));
+    const first = built(set.styles[0]);
+    assert(first === built(set.styles[0]), `${kind}: one style builds the same body twice`);
+    const varies = set.styles.slice(1).some((st) => built(st) !== first);
+    assert(varies === !PLAN_ONLY_STYLES.has(kind), `${kind}: its styles ${varies ? "change" : "do not change"} the room — PLAN_ONLY_STYLES says otherwise`);
+  }
+
   const top = (p: Part) => (p.shape === "box" || p.shape === "cylinder" || p.shape === "extrude" || p.shape === "ribbon" ? p.at.z + p.h : p.shape === "sphere" ? p.at.z + p.r : p.shape === "lathe" ? Math.max(...p.profile.map((q) => q.z)) + p.at.z : p.at.z);
 
   // A five-arm ring: five candles, five flames at the top.

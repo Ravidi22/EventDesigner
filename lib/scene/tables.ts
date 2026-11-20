@@ -592,8 +592,11 @@ export function tableNodes(input: Pick<SceneInput, "doc" | "author"> & { setting
     const material = swatchMaterial(resolved, product, BARE_TABLE_TONE, "matte", true);
     if (!material.texture && !material.image) material.texture = "wood";
     const own = ownBodyParts(product, footprint, material);
-    const top = own ? own.rest : footprint;
-    out.body(`table:${t.id}`, { type: "table", id: t.id, label: product?.name }, material, [...tableTop(top, heightMm, !!cover), ...(own?.parts ?? [])], [frame]);
+    // A shape that is an outline only is no top (the rest leaves it out); a shape with its own colour
+    // or surface is a top in it, piece by piece (SH-2) — the top's first parts are its pieces, in order.
+    const top = own && !own.whole ? own.rest : footprint;
+    const topParts = tableTop(top, heightMm, !!cover).map((q, i) => (own?.materials[i] && q.shape === "extrude" ? { ...q, material: own.materials[i] } : q));
+    out.body(`table:${t.id}`, { type: "table", id: t.id, label: product?.name }, material, [...topParts, ...(own?.parts ?? [])], [frame]);
     if (cover) {
       const c = resolve(cover.variantId);
       const colour = hexOf(c?.swatch) ?? hexOf(c?.product.appearance?.style?.fill) ?? BARE_CLOTH_TONE;

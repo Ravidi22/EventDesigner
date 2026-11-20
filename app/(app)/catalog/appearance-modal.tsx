@@ -99,6 +99,7 @@ import { REVOLVE_FORMS, REVOLVE_LABEL, REVOLVE_PRESETS, revolveFormOf } from "@/
 import { BODY_UNREAD, BODY_WORD, LAMP_PROFILES, LAMP_SHADE_KEYS, LAMP_SHADE_LABEL, TREE_CROWNS, TREE_CROWN_KEYS, TREE_CROWN_LABEL } from "@/lib/catalog/body-profiles";
 import { ScenePane } from "./scene-pane";
 import { itemBaseZ, itemScene, itemSceneKey } from "@/lib/scene/item-scene";
+import { PLAN_ONLY_STYLES } from "@/lib/scene/items";
 import { Menu, type MenuItem } from "@/components/menu";
 import { StructureFeatures } from "@/components/venue-plan";
 import { Dim } from "@/components/venue-dims";
@@ -822,9 +823,15 @@ function StyleTiles({ kind, product, onPick, off, lead }: { kind: SymbolKind; pr
   const count = symbolCount(product, kind);
   const n = set.styles.length + (lead ? 1 : 0);
   const cols = n <= 2 ? "grid-cols-2" : n === 3 ? "grid-cols-3" : "grid-cols-4";
+  // The room builds one body for every version of these yet (lib/scene/items.ts PLAN_ONLY_STYLES,
+  // SH-3): the tiles say so rather than promise the 3D.
+  const planOnly = PLAN_ONLY_STYLES.has(kind);
   return (
     <div>
-      <span className={fieldLabelClassName}>{set.title}</span>
+      <span className={fieldLabelClassName}>
+        {set.title}
+        {planOnly && <span className="ms-1.5 font-normal text-muted">· בתוכנית בלבד</span>}
+      </span>
       <div className={`grid ${cols} gap-1`} role="radiogroup" aria-label={set.title}>
         {lead}
         {set.styles.map((st, i) => {
@@ -850,6 +857,7 @@ function StyleTiles({ kind, product, onPick, off, lead }: { kind: SymbolKind; pr
           );
         })}
       </div>
+      {planOnly && <Note>הסוג משנה את הציור בתוכנית בלבד — בתלת־ממד כל הסוגים נבנים עדיין באותה צורה.</Note>}
     </div>
   );
 }
@@ -1522,11 +1530,16 @@ function ShapePanel({
   groups,
   bodyTiles,
   bodyOff,
+  outlineOnlyRead,
   onOpenElevation,
 }: {
   /** The first shape of a picture nothing of which a profile would change (a bar, a runner, a rotunda):
    *  the body group is not offered. */
   bodyOff?: boolean;
+  /** Whether the room reads the first shape's "מתאר בלבד" (body "none"): an item the element model
+   *  builds (no picture — a table's top too) or flowers covering their shapes. A picture is built on
+   *  the first shape whatever it says (SH-2). */
+  outlineOnlyRead: boolean;
   /** Goes to the חזית view with this shape kept selected — the height drawn at full size, and the
    *  body dragged on it. */
   onOpenElevation?: () => void;
@@ -1632,14 +1645,23 @@ function ShapePanel({
               </PanelRow>
               {/* OUTLINE ONLY (ShapePart.body "none", the element model, Stage 3): the first shape is
                   the item's reach on the plan and builds nothing in the room — the other shapes are the
-                  body (a pergola: its posts, beams and slats under the roof's line). */}
-              <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => onChange({ body: part.body === "none" ? undefined : "none" })}>
-                {part.body === "none" ? "עם גוף — מלאה בגובה הפריט" : "מתאר בלבד — בלי גוף בתלת־ממד"}
-              </Button>
+                  body (a pergola: its posts, beams and slats under the roof's line). Offered only where
+                  the room reads it (SH-2): an item drawn as its category's picture is built on its first
+                  shape whatever it says — a switch that changes nothing in the 3D is not offered, and
+                  one already on is said to be plan only. */}
+              {(outlineOnlyRead || part.body === "none") && (
+                <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => onChange({ body: part.body === "none" ? undefined : "none" })}>
+                  {part.body === "none" ? "עם גוף — מלאה בגובה הפריט" : "מתאר בלבד — בלי גוף בתלת־ממד"}
+                </Button>
+              )}
               <Note>
-                {part.body === "none"
-                  ? "הצורה הראשונה היא קו המתאר של הפריט בלבד; הגוף בחדר הוא שאר הצורות — בפרגולה: העמודים, הקורות והרפפות."
-                  : "הצורה הראשונה עומדת על הרצפה בגובה הפריט — אותו גובה שבטופס."}
+                {!outlineOnlyRead
+                  ? part.body === "none"
+                    ? "״מתאר בלבד״ חל על התוכנית בלבד: בתלת־ממד הפריט נבנה לפי הציור של הקטגוריה שלו, על הצורה הראשונה."
+                    : "הצורה הראשונה עומדת על הרצפה בגובה הפריט — אותו גובה שבטופס. בתלת־ממד הפריט נבנה עליה לפי הציור של הקטגוריה שלו."
+                  : part.body === "none"
+                    ? "הצורה הראשונה היא קו המתאר של הפריט בלבד; הגוף בחדר הוא שאר הצורות — בפרגולה: העמודים, הקורות והרפפות."
+                    : "הצורה הראשונה עומדת על הרצפה בגובה הפריט — אותו גובה שבטופס."}
               </Note>
             </>
           ) : front ? (
@@ -2768,8 +2790,11 @@ export function AppearanceModal({
             })()}
             // No body at all where nothing would read it (lib/catalog/body-profiles.ts BODY_UNREAD, and
             // the styles of a profiled kind that are built their own way): a field that silently does
-            // nothing is worse than no field.
+            // nothing is worse than no field. A BAR's recipe builds every one of its shapes as counter
+            // or back bar (floor-kinds shapedBar): an added round shape's body was dropped too (SH-2).
+            outlineOnlyRead={!previewSymbol || ((previewSymbol === "flowers" || previewSymbol === "centerpiece") && !!footprint && followsShape(footprint))}
             bodyOff={(() => {
+              if (previewSymbol === "bar") return true;
               if (shapes[0]?.id !== one.id || !previewSymbol) return false;
               if (BODY_UNREAD.has(previewSymbol)) return true;
               if (previewSymbol === "chuppah") return drawStyleOf(preview) === "rotunda";

@@ -123,13 +123,18 @@ export function elementOf(product: Product | undefined, footprint: Footprint): {
 /** A category's recipe meets the element model: the shapes that SAID something about their bodies
  *  (ElementPart.own — a shelf a metre up, a raised tier) built by the model, and the footprint of
  *  the rest handed back for the recipe to draw as it always did (a table's top, its legs, its
- *  cloth). The rest keeps its place in the element's frame. Null when nothing is the model's. */
+ *  cloth). The rest keeps its place in the element's frame — never a shape that is an outline only
+ *  (`body: "none"`, the plan's reach), and each of its pieces with the material its shape asked for
+ *  (`materials`, by piece: its own colour or surface, else undefined = the recipe's): a table's top
+ *  was built of every shape in the table's timber, so neither ever reached the room (SH-2, QA
+ *  2026-11-20). `whole`: the rest is all of the footprint, which the recipe may then draw as it is (a
+ *  rectangle on its four legs). Null when no shape says anything the recipe would not draw itself. */
 export function ownBodyParts(
   product: Product | undefined,
   footprint: Footprint,
   body: MaterialRef,
   opts: { baseProfileIsPicture?: boolean; only?: (p: ResolvedPart) => boolean; /** Every shape but the first is the model's — the picture stands on the first alone (lib/catalog/picture-frame.ts). */ others?: boolean } = {},
-): { parts: Part[]; rest: Footprint } | null {
+): { parts: Part[]; rest: Footprint; materials: (MaterialRef | undefined)[]; whole: boolean } | null {
   const el = elementOf(product, footprint);
   if (!el) return null;
   // The base's own body of revolution is the model's too (a bowl on a table) — the user, 2026-11-07:
@@ -142,10 +147,15 @@ export function ownBodyParts(
   // only its front panels are the model's).
   const isOwn = (p: ResolvedPart) =>
     opts.only ? opts.only(p) : p.index === 0 ? (!!p.part.own && p.part.op.kind !== "revolve") || (!opts.baseProfileIsPicture && p.part.op.kind === "revolve") : !!p.part.own || !!opts.others;
-  if (!el.geometry.parts.some(isOwn)) return null;
-  const own = { ...el.geometry, parts: el.geometry.parts.filter(isOwn) };
-  const rest = el.geometry.parts.filter((p) => p.index === 0 || !p.part.own).flatMap((p) => p.pieces);
-  return { parts: elementParts(own, body), rest: { kind: "multi", parts: rest } };
+  const recipe = el.geometry.parts.filter((p) => p.index === 0 || !p.part.own);
+  const kept = recipe.filter((p) => p.part.op.kind !== "none");
+  const materials = kept.flatMap((p) => p.pieces.map(() => partMaterial(p, body)));
+  const ownParts = el.geometry.parts.filter(isOwn);
+  // Nothing taken for the model and nothing left out: the recipe's own footprint is the rest.
+  const whole = !ownParts.length && kept.length === el.geometry.parts.length;
+  if (whole && !materials.some(Boolean)) return null;
+  const own = { ...el.geometry, parts: ownParts };
+  return { parts: elementParts(own, body), rest: { kind: "multi", parts: kept.flatMap((p) => p.pieces) }, materials, whole };
 }
 
 /** The fallback body through the element model: the item's parts, each in its own surface, on the
@@ -212,6 +222,15 @@ if (isMain(import.meta.url)) {
   assert(split !== null && split.parts.length === 2 && restPieces.length === 1, "the back-bar and the shelf are the model's; the counter is left for the recipe");
   assert(JSON.stringify(restPieces[0].outline) === JSON.stringify(el.geometry.parts[0].pieces[0].outline), "…where it stands in the element's frame");
   assert(ownBodyParts(plain, { kind: "rect", widthMm: 1200, depthMm: 600 }, body) === null, "a row with no own bodies hands nothing over");
+  // SH-2: what the recipe keeps is never an outline-only shape, and each of its pieces carries the
+  // look its own shape asked for — a table's top was all timber, and built from an outline-only base.
+  const looked = row({ appearance: { shape: "rect", content: "none", baseStyle: { fill: "#111111" }, parts: [{ id: "end", shape: "circle", diameterMm: 600, x: 600, y: 0, rotation: 0, texture: "marble" }] } });
+  const lookedSplit = ownBodyParts(looked, elementGeometry(definitionOf(looked)).footprint, body)!;
+  assert(lookedSplit !== null && lookedSplit.whole && lookedSplit.parts.length === 0, "shapes with a look of their own are still the recipe's, whole");
+  assert(lookedSplit.materials[0]?.colour === "#111111" && lookedSplit.materials[1]?.texture === "marble", "…each piece in its own look");
+  const reach = row({ appearance: { shape: "rect", content: "none", body: "none", parts: [{ id: "top", shape: "circle", diameterMm: 600, x: 0, y: 0, rotation: 0 }] } });
+  const reachSplit = ownBodyParts(reach, elementGeometry(definitionOf(reach)).footprint, body)!;
+  assert(reachSplit !== null && !reachSplit.whole && reachSplit.rest.kind === "multi" && reachSplit.rest.parts.length === 1, "an outline-only first shape is left out of what the recipe builds");
   // A round base with a profile of its own: the lathe is the model's and the base's piece stays the
   // recipe's footprint, so a chandelier keeps its arms round a crystal heart.
   const heart = row({ appearance: { shape: "circle", content: "none", revolve: [{ r: 0.3, z: 0 }, { r: 1, z: 0.6 }, { r: 0.2, z: 1 }] }, dimensions: { diameterMm: 800, heightMm: 600 } });
