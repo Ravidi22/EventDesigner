@@ -1,5 +1,6 @@
 "use client";
 
+import { candleSpecOf } from "@/lib/catalog/candles";
 import { createElement, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { chandelierDrawOf } from "@/lib/catalog/chandelier";
 import { chuppahDrawOf } from "@/lib/catalog/chuppah";
@@ -4995,7 +4996,7 @@ function PlacementNodeView({
           overhead={overhead}
           chairStyle={chairStyleOf(product)}
           drawStyle={drawStyleOf(product)}
-          chandelier={chandelierDrawOf(product.appearance, product.variants)} chuppah={chuppahDrawOf(product.appearance)}
+          chandelier={chandelierDrawOf(product.appearance, product.variants)} chuppah={chuppahDrawOf(product.appearance)} candles={candleSpecOf(product.appearance)}
           postMm={pergolaPostOf(product)}
           rise={rise}
           turnDeg={rise ? placement.rotation : undefined}

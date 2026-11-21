@@ -53,6 +53,14 @@ import { shapedFlowersBody } from "./flower-cover";
 import { applyTransform, compose, turn } from "./frame";
 import { ENVELOPE, clothMaterial, glassMaterial, glossMaterial, materialRefOf, metalMaterial } from "./materials";
 import type { Material } from "@/lib/catalog/material";
+import { armLevels, candleLook, type CandleLook, type CandleSpec } from "@/lib/catalog/candles";
+
+/** What a candlestick's spec asks of every recipe (lib/catalog/candles.ts) — absent fields = the
+ *  recipe's own, as before. */
+interface CandleOpts {
+  look: CandleLook | null;
+  spec?: CandleSpec;
+}
 import { hexOf } from "./materials";
 import { borderBands } from "@/lib/catalog/border";
 import { type MaterialRef, type NodeTag, type Part, type Transform, type Vec3, transform, vec3 } from "./types";
@@ -73,6 +81,8 @@ const SEAT_THICK_MM = 40;
 const LEG_MM = 25;
 const CHIAVARI_LEG_R_MM = 12;
 const ARM_MM = 10;
+/** A rod of the "rods" style (מוטות על בסיס): ⌀12 mm. */
+const ROD_MM = 6;
 const PLATE_MM = 20;
 const RUNNER_MM = 8;
 /** A runner's contour band (lib/catalog/border.ts), laid on its top. */
@@ -198,7 +208,8 @@ const frameOf = (tone: string, material?: Material): MaterialRef => (material ? 
 /** A candle standing at (x, y) from `from` up to `top`: its holder cup in the metal, the wax, the
  *  flame emitter at its tip — and in a sleeve the glass round it 1.75× its radius (item-symbol.tsx:362
  *  candleAt: wax r, flame 0.5r, sleeve 1.75r). */
-function candle(b: ItemBuild, x: number, y: number, r: number, from: number, top: number, metal: MaterialRef, sleeve = false, flame = FLAME) {
+function candle(b: ItemBuild, x: number, y: number, r: number, from: number, top: number, metal: MaterialRef, sleeve = false, flame = FLAME, look?: CandleLook | null) {
+  if (look) return candleAs(b, x, y, from, metal, look, flame);
   const height = Math.max(10, top - from);
   // In a hurricane the GLASS reaches the top and the candle stands inside it, its flame under the rim.
   const wax = sleeve ? Math.max(10, height * 0.78) : height;
@@ -209,9 +220,107 @@ function candle(b: ItemBuild, x: number, y: number, r: number, from: number, top
   b.emitters.push({ at: vec3(x, y, from + wax), radiusMm: FLAME_R_MM, colour: ENVELOPE.flame, strength: flame });
 }
 
+/** One candle as its spec says (lib/catalog/candles.ts CandleLook), at its REAL size, standing at
+ *  `from`: a taper or a pillar on its cup, a הידורית (a glass cup with its wax low and its flame in
+ *  it), an LED candle (its flame fainter), a floating candle in a shallow bowl of water — each in its
+ *  guard when it has one (a straight glass or a tulip, open at the top). */
+function candleAs(b: ItemBuild, x: number, y: number, from: number, metal: MaterialRef, look: CandleLook, flame = FLAME) {
+  const r = look.dMm / 2;
+  const h = look.hMm;
+  let flameZ: number;
+  let strength = flame;
+  switch (look.kind) {
+    case "hadorit": {
+      const R = r * 1.08;
+      b.parts.push(lathe([{ r: 0, z: 0 }, { r: R, z: 0 }, { r: R, z: h }, { r: R - 2, z: h }, { r: R - 2, z: 4 }, { r: 0, z: 4 }], vec3(x, y, from), GLASS));
+      b.parts.push(cyl(r * 0.95, h * 0.4, vec3(x, y, from + 4), WAX_M));
+      flameZ = from + 4 + h * 0.4;
+      break;
+    }
+    case "led":
+      b.parts.push(cyl(r, h, vec3(x, y, from), WAX_M));
+      flameZ = from + h;
+      strength = flame * 0.6;
+      break;
+    case "floating": {
+      const R = r * 1.6;
+      const bowl = h * 2.2;
+      b.parts.push(lathe([{ r: 0, z: 0 }, { r: R * 0.7, z: 0 }, { r: R, z: bowl }, { r: R - 2, z: bowl }, { r: R * 0.7 - 2, z: 3 }, { r: 0, z: 3 }], vec3(x, y, from), GLASS));
+      b.parts.push(cyl(R * 0.9, 6, vec3(x, y, from + bowl * 0.55), { colour: WATER, kind: "water", opacity: 0.75 }));
+      b.parts.push(cyl(r, h * 0.5, vec3(x, y, from + bowl * 0.55)));
+      b.parts[b.parts.length - 1].material = WAX_M;
+      flameZ = from + bowl * 0.55 + h * 0.5;
+      break;
+    }
+    default: {
+      const cup = Math.min(25, h * 0.12);
+      b.parts.push(cyl(r * 1.15, cup, vec3(x, y, from), metal));
+      b.parts.push(cyl(r, h - cup, vec3(x, y, from + cup), WAX_M));
+      flameZ = from + h;
+    }
+  }
+  if (look.guard === "cylinder") b.parts.push(hurricane(look.guardDMm / 2, Math.max(look.guardHMm, flameZ - from + 30), vec3(x, y, from)));
+  else if (look.guard === "tulip") b.parts.push(tulipGlass(look.guardDMm / 2, Math.max(look.guardHMm, flameZ - from + 30), vec3(x, y, from)));
+  b.emitters.push({ at: vec3(x, y, flameZ), radiusMm: FLAME_R_MM, colour: ENVELOPE.flame, strength });
+}
+
+/** A tulip hurricane: a narrow foot swelling to a bulb a third of the way up and flaring at an open
+ *  lip — the seven-light crystal piece's glasses (Ravid's photograph). A 3 mm wall. */
+function tulipGlass(R: number, h: number, at: Vec3): Part {
+  const t = Math.min(3, R * 0.12);
+  const outer: [number, number][] = [[0, 0], [0.42, 0], [0.4, 0.05], [0.82, 0.3], [1, 0.55], [0.86, 0.82], [0.94, 1]];
+  const pts = [...outer.map(([r, z]) => ({ r: R * r, z: h * z })), ...[...outer].reverse().filter(([, z]) => z > 0.02).map(([r, z]) => ({ r: Math.max(0, R * r - t), z: h * z }))];
+  pts.push({ r: 0, z: t });
+  return lathe(pts, at, GUARD_GLASS);
+}
+
+/** Crystal drops hanging from `at` (an arm's end or between arms): one pear, or — "full" — a short
+ *  chain of three beads ending in a pear. */
+function crystalDrop(b: ItemBuild, x: number, y: number, z: number, size: number, full: boolean) {
+  const bead = Math.max(4, size * 0.45);
+  let at = z;
+  if (full)
+    for (let k = 0; k < 3; k++) {
+      at -= bead * 1.8;
+      b.parts.push(sphere(bead, vec3(x, y, at), CRYSTAL));
+    }
+  b.parts.push(sphere(size, vec3(x, y, at - size * 1.4), CRYSTAL));
+}
+
+/** RODS ON A BASE (CandleStyle "rods" — Ravid's acrylic photograph): a low slab that is the
+ *  footprint, `n` thin rods along its long side at stepped heights (CandleSpec.heights, default
+ *  "stepped"), a candle on each rod's top in its guard (default a straight glass). In the row's
+ *  material, acrylic or metal. */
+function candleRods(ctx: ItemContext, n: number): ItemBuild {
+  const { widthMm: w, depthMm: d, heightMm: h, tone, footprint } = ctx;
+  const metal = frameOf(tone, ctx.material);
+  const b = make(metal);
+  const slab = Math.min(30, h * 0.06);
+  for (const outline of footprintOutlines(footprint)) b.parts.push({ shape: "extrude", outline, h: slab, at: vec3(0, 0, 0) });
+  const spec = ctx.candles;
+  const look = candleLook({ guard: "cylinder", ...spec }, true)!;
+  const along = w >= d;
+  const L = (along ? w : d) * 0.8;
+  const top = Math.max(slab + 50, h - Math.max(look.guardHMm, look.hMm));
+  const levels = armLevels(n, spec?.heights ?? "stepped", Math.max(slab + 50, top * 0.45), top - Math.max(slab + 50, top * 0.45), spec?.stepHeightsMm);
+  for (let i = 0; i < n; i++) {
+    const s = n === 1 ? 0 : -L / 2 + (i * L) / (n - 1);
+    const x = along ? s : 0;
+    const y = along ? 0 : s;
+    b.parts.push(cyl(ROD_MM, levels[i] - slab, vec3(x, y, slab), metal));
+    b.parts.push(cyl(Math.max(look.guardDMm, look.dMm) * 0.55, 6, vec3(x, y, levels[i]), metal));
+    candleAs(b, x, y, levels[i] + 6, metal, look);
+  }
+  return b;
+}
+
 /** A hurricane glass round a candle: a tube OPEN at the top with a 3 mm wall and a floor, reaching a
  *  to the top of the piece, the flame inside it — a lathe, because a closed cylinder put a lid over the flame and the
  *  flame stood on it (QA CN-1). */
+/** A wind guard's glass: clear, but enough of it to be seen (a hurricane at the window pane's 0.22
+ *  was a ghost round the flame). */
+const GUARD_GLASS: MaterialRef = { colour: "#eef5f9", kind: "glass", opacity: 0.34 };
+
 function hurricane(R: number, h: number, at: Vec3): Part {
   const t = Math.min(3, R * 0.15);
   return lathe([
@@ -221,7 +330,7 @@ function hurricane(R: number, h: number, at: Vec3): Part {
     { r: R - t, z: h },
     { r: R - t, z: t },
     { r: 0, z: t },
-  ], at, GLASS);
+  ], at, GUARD_GLASS);
 }
 
 /** A candle at the size it really is. The plan draws a candelabrum's candles fat enough to see from
@@ -237,10 +346,22 @@ function foot(b: ItemBuild, R: number, metal: MaterialRef) {
   b.parts.push(lathe([{ r: R, z: 0 }, { r: R, z: 8 }, { r: R * 0.6, z: 25 }, { r: R * 0.3, z: 45 }], vec3(0, 0, 0), metal));
 }
 
-/** An arm from the hub out to `p` at height `z`: a thin bar lying along its bearing. */
-function arm(b: ItemBuild, p: Point, z: number, material: MaterialRef) {
+/** An arm from the hub out to `p` at height `z`: a thin bar lying along its bearing — or, an S-arm
+ *  (CandleSpec.armShape), a curve leaving the stem lower, dipping and rising into the candle's cup,
+ *  a string of beads thick enough to read as one bar. */
+function arm(b: ItemBuild, p: Point, z: number, material: MaterialRef, shape?: CandleSpec["armShape"]) {
   const len = Math.hypot(p.x, p.y);
   if (len < 1) return;
+  if (shape === "s") {
+    const N = Math.max(12, Math.min(48, Math.round(len / (ARM_MM * 0.5))));
+    const z0 = z - len * 0.35;
+    for (let i = 0; i <= N; i++) {
+      const s = i / N;
+      const zs = z0 + (z - z0) * (s * s * (3 - 2 * s)) - len * 0.08 * Math.sin(2 * Math.PI * s);
+      b.parts.push(sphere(ARM_MM * 0.75, vec3(p.x * s, p.y * s, zs), material));
+    }
+    return;
+  }
   const deg = (Math.atan2(p.y, p.x) * 180) / Math.PI;
   b.parts.push(box(len, ARM_MM, ARM_MM, vec3(p.x / 2, p.y / 2, z - ARM_MM / 2), material, deg));
 }
@@ -558,14 +679,18 @@ function candlestickBody(ctx: ItemContext): ItemBuild {
   const style = isCandleStyle(ctx.drawStyle) ? ctx.drawStyle : long ? "row" : "ring";
   // A turned body of its own (ItemContext.profile): the candlestick itself in its metal or crystal,
   // its candles standing on it — never a solid beside the recipe's stem and foot.
-  if (ctx.profile && round && (style === "ring" || style === "sleeves" || style === "tiered")) return turnedCandlestick(ctx, n, style === "sleeves");
+  // The spec's candles, guards, heights and crystal (lib/catalog/candles.ts); none = the old candles.
+  const o: CandleOpts = { look: candleLook(ctx.candles, style === "sleeves"), spec: ctx.candles };
+  if (ctx.profile && round && (style === "ring" || style === "sleeves" || style === "tiered")) return turnedCandlestick(ctx, n, style === "sleeves", o);
   switch (style) {
     case "row":
-      return candleRow(w, d, h, n, long, false, tone, ctx.material);
+      return candleRow(w, d, h, n, long, false, tone, ctx.material, o);
     case "sleeves":
-      return long ? candleRow(w, d, h, n, long, true, tone, ctx.material) : candleRing(w, d, h, n, true, tone, ctx.material);
+      return long ? candleRow(w, d, h, n, long, true, tone, ctx.material, o) : candleRing(w, d, h, n, true, tone, ctx.material, o);
     case "tiered":
-      return candleTiers(w, d, h, n, tone, ctx.material);
+      return candleTiers(w, d, h, n, tone, ctx.material, o);
+    case "rods":
+      return candleRods(ctx, n);
     case "cluster":
       return glassCluster(w, d, h, n, "pillar", tone);
     case "floating":
@@ -579,7 +704,7 @@ function candlestickBody(ctx: ItemContext): ItemBuild {
     case "fire":
       return fireBurner(w, d, h, round, tone);
     default:
-      return candleRing(w, d, h, n, false, tone, ctx.material);
+      return candleRing(w, d, h, n, false, tone, ctx.material, o);
   }
 }
 
@@ -587,7 +712,7 @@ function candlestickBody(ctx: ItemContext): ItemBuild {
  *  lower 0.78 of its height, in the piece's metal or crystal; one candle standing on its top — or,
  *  for a candelabrum, its candles on a ring of arms springing from the top of the body, a centre one
  *  on an odd count. */
-function turnedCandlestick(ctx: ItemContext, n: number, sleeves: boolean): ItemBuild {
+function turnedCandlestick(ctx: ItemContext, n: number, sleeves: boolean, o?: CandleOpts): ItemBuild {
   const { widthMm: w, depthMm: d, heightMm: h, tone } = ctx;
   const R = Math.min(w, d) / 2;
   const metal = frameOf(tone, ctx.material);
@@ -595,7 +720,7 @@ function turnedCandlestick(ctx: ItemContext, n: number, sleeves: boolean): ItemB
   const bodyH = h * 0.78;
   b.parts.push(turnedPart(ctx, ctx.profile!, metal, bodyH));
   if (n <= 1) {
-    candle(b, 0, 0, Math.min(R * (sleeves ? 0.32 : 0.5), PILLAR_R_MM), bodyH, h, metal, sleeves);
+    candle(b, 0, 0, Math.min(R * (sleeves ? 0.32 : 0.5), PILLAR_R_MM), bodyH, h, metal, sleeves, FLAME, o?.look);
     return b;
   }
   const ring = n % 2 === 1 ? n - 1 : n;
@@ -605,10 +730,10 @@ function turnedCandlestick(ctx: ItemContext, n: number, sleeves: boolean): ItemB
   const arms = armMaterial(tone, ctx.material);
   for (let i = 0; i < ring; i++) {
     const p = polar(reach, -90 + (i * 360) / ring);
-    arm(b, p, armZ, arms);
-    candle(b, p.x, p.y, real(r, sleeves), armZ, h * 0.95, metal, sleeves);
+    arm(b, p, armZ, arms, o?.spec?.armShape);
+    candle(b, p.x, p.y, real(r, sleeves), armZ, h * 0.95, metal, sleeves, FLAME, o?.look);
   }
-  if (n % 2 === 1) candle(b, 0, 0, real(r * 0.95, sleeves), bodyH, h, metal, sleeves);
+  if (n % 2 === 1) candle(b, 0, 0, real(r * 0.95, sleeves), bodyH, h, metal, sleeves, FLAME, o?.look);
   return b;
 }
 
@@ -616,14 +741,14 @@ function turnedCandlestick(ctx: ItemContext, n: number, sleeves: boolean): ItemB
  *  (item-symbol.tsx:392 candleRing): reach 0.68 R (0.62 in sleeves), candle r = min(0.21 R,
  *  0.55 of the ring's pitch), the hub 0.2 R. The arms stand at 0.55 h; the ring's candles reach
  *  0.95 h and the centre one crowns it at h. */
-function candleRing(w: number, d: number, h: number, n: number, sleeves: boolean, tone: string, material?: Material): ItemBuild {
+function candleRing(w: number, d: number, h: number, n: number, sleeves: boolean, tone: string, material?: Material, o?: CandleOpts): ItemBuild {
   const R = Math.min(w, d) / 2;
   const metal = frameOf(tone, material);
   const b = make(metal);
   if (n <= 1) {
     // item-symbol.tsx:395: a foot 0.92 R wide and one candle 0.5 R (0.32 R in its sleeve).
     b.parts.push(cyl(R * 0.92, 15, vec3(0, 0, 0), metal));
-    candle(b, 0, 0, Math.min(R * (sleeves ? 0.32 : 0.5), PILLAR_R_MM), 15, h, metal, sleeves);
+    candle(b, 0, 0, Math.min(R * (sleeves ? 0.32 : 0.5), PILLAR_R_MM), 15, h, metal, sleeves, FLAME, o?.look);
     return b;
   }
   const ring = n % 2 === 1 ? n - 1 : n;
@@ -636,10 +761,16 @@ function candleRing(w: number, d: number, h: number, n: number, sleeves: boolean
   const arms = armMaterial(tone, material);
   for (let i = 0; i < ring; i++) {
     const p = polar(reach, -90 + (i * 360) / ring);
-    arm(b, p, armZ, arms);
-    candle(b, p.x, p.y, real(r, sleeves), armZ, h * 0.95, metal, sleeves);
+    arm(b, p, armZ, arms, o?.spec?.armShape);
+    candle(b, p.x, p.y, real(r, sleeves), armZ, h * 0.95, metal, sleeves, FLAME, o?.look);
+    // Crystal drops (CandleSpec.drops): between the arms, and — full — on a chain under each arm too.
+    if (o?.spec?.drops && o.spec.drops !== "none") {
+      const q = polar(reach * 0.85, -90 + ((i + 0.5) * 360) / ring);
+      crystalDrop(b, q.x, q.y, armZ - 10, Math.max(8, R * 0.04), o.spec.drops === "full");
+      if (o.spec.drops === "full") crystalDrop(b, p.x * 0.7, p.y * 0.7, armZ - 10, Math.max(8, R * 0.04), true);
+    }
   }
-  if (n % 2 === 1) candle(b, 0, 0, real(r * 0.95, sleeves), armZ + 15, h, metal, sleeves);
+  if (n % 2 === 1) candle(b, 0, 0, real(r * 0.95, sleeves), armZ + 15, h, metal, sleeves, FLAME, o?.look);
   return b;
 }
 
@@ -647,8 +778,8 @@ function candleRing(w: number, d: number, h: number, n: number, sleeves: boolean
  *  candles at 0.76 R, an inner ring at 0.4 R turned half a step, one crowning the middle, crystal
  *  drops at 0.9 R between the outer arms. Under seven candles it is a ring. Outer arms at 0.42 h,
  *  inner at 0.58 h, the crown to h. */
-function candleTiers(w: number, d: number, h: number, n: number, tone: string, material?: Material): ItemBuild {
-  if (n < 7) return candleRing(w, d, h, n, false, tone, material);
+function candleTiers(w: number, d: number, h: number, n: number, tone: string, material?: Material, o?: CandleOpts): ItemBuild {
+  if (n < 7) return candleRing(w, d, h, n, false, tone, material, o);
   const R = Math.min(w, d) / 2;
   const metal = frameOf(tone, material);
   const arms = armMaterial(tone, material);
@@ -665,25 +796,30 @@ function candleTiers(w: number, d: number, h: number, n: number, tone: string, m
   b.parts.push(cyl(R * 0.16, 30, vec3(0, 0, zInner - 15), metal));
   for (let i = 0; i < outer; i++) {
     const p = polar(R * 0.76, -90 + (i * 360) / outer);
-    arm(b, p, zOuter, arms);
-    candle(b, p.x, p.y, real(ro), zOuter, h * 0.74, metal);
-    // A crystal drop hanging between the arms.
+    arm(b, p, zOuter, arms, o?.spec?.armShape);
+    candle(b, p.x, p.y, real(ro), zOuter, h * 0.74, metal, false, FLAME, o?.look);
+    // A crystal drop hanging between the arms — none, or full chains, when the spec says so.
     const q = polar(R * 0.9, -90 + ((i + 0.5) * 360) / outer);
-    b.parts.push(sphere(R * 0.035, vec3(q.x, q.y, zOuter - h * 0.08), GLASS));
+    const drops = o?.spec?.drops ?? "some";
+    if (drops === "some") b.parts.push(sphere(R * 0.035, vec3(q.x, q.y, zOuter - h * 0.08), GLASS));
+    else if (drops === "full") {
+      crystalDrop(b, q.x, q.y, zOuter - 10, Math.max(8, R * 0.035), true);
+      crystalDrop(b, p.x, p.y, zOuter - 10, Math.max(8, R * 0.03), true);
+    }
   }
   for (let i = 0; i < inner; i++) {
     const p = polar(R * 0.4, -90 + ((i + 0.5) * 360) / inner);
-    arm(b, p, zInner, arms);
-    candle(b, p.x, p.y, real(ri), zInner, h * 0.9, metal);
+    arm(b, p, zInner, arms, o?.spec?.armShape);
+    candle(b, p.x, p.y, real(ri), zInner, h * 0.9, metal, false, FLAME, o?.look);
   }
-  candle(b, 0, 0, real(ro), zInner + 20, h, metal);
+  candle(b, 0, 0, real(ro), zInner + 20, h, metal, false, FLAME, o?.look);
   return b;
 }
 
 /** Candles in a line on a bar (item-symbol.tsx:375 candleRow): r = min(0.34 D, L/(2.3 n)) — 0.2 D
  *  and L/(3.8 n) in sleeves — over 0.84 L (0.78), the bar 0.24 D deep on a long piece, else
  *  min(0.12 D, 0.05 L) on a round foot min(0.36 D, 0.16 L). The bar stands at 0.5 h. */
-function candleRow(w: number, d: number, h: number, n: number, long: boolean, sleeves: boolean, tone: string, material?: Material): ItemBuild {
+function candleRow(w: number, d: number, h: number, n: number, long: boolean, sleeves: boolean, tone: string, material?: Material, o?: CandleOpts): ItemBuild {
   return along(w, d, (L, D) => {
     const metal = frameOf(tone, material);
     const b = make(metal);
@@ -699,7 +835,13 @@ function candleRow(w: number, d: number, h: number, n: number, long: boolean, sl
       b.parts.push(cyl(Math.max(8, bar * 0.4), barZ, vec3(0, 0, 0), metal));
     }
     b.parts.push(box(L * 0.92, bar, barT, vec3(0, 0, barZ - barT / 2), metal));
-    for (let i = 0; i < n; i++) candle(b, n === 1 ? 0 : -span / 2 + (i * span) / (n - 1), 0, real(r, sleeves), barZ, h, metal, sleeves);
+    // The arms' heights (CandleSpec.heights): each candle on a post of its own up from the bar.
+    const levels = armLevels(n, o?.spec?.heights, barZ, h * 0.3, o?.spec?.stepHeightsMm);
+    for (let i = 0; i < n; i++) {
+      const x = n === 1 ? 0 : -span / 2 + (i * span) / (n - 1);
+      if (levels[i] > barZ + 1) b.parts.push(cyl(Math.max(6, bar * 0.25), levels[i] - barZ, vec3(x, 0, barZ), metal));
+      candle(b, x, 0, real(r, sleeves), levels[i], h, metal, sleeves, FLAME, o?.look);
+    }
     return b;
   });
 }
@@ -1124,6 +1266,22 @@ if (isMain(import.meta.url)) {
     return { product: undefined, resolved: undefined, footprint, widthMm: w, depthMm: d, heightMm, tone: DEFAULT_TONE.candlestick, count: 1, author: false, ...extra };
   };
   const waxCandles = (b: ItemBuild) => b.parts.filter((p) => p.shape === "cylinder" && p.material?.colour === WAX);
+
+  // §5.3 — the candle spec (lib/catalog/candles.ts). No spec = the candles it always built.
+  const ring5 = (extra: Partial<ItemContext>) => itemBody("candlestick", ctxOf({ kind: "circle", diameterMm: 400 }, 600, { count: 5, drawStyle: "ring", ...extra }));
+  const lathesOf = (b: ItemBuild) => b.parts.filter((p) => p.shape === "lathe").length;
+  assert(lathesOf(ring5({})) === lathesOf(ring5({ candles: undefined })), "(no spec builds what it built)");
+  assert(lathesOf(ring5({ candles: { guard: "tulip" } })) - lathesOf(ring5({})) === 5, "a tulip guard round each of five candles");
+  const tallPillar = ring5({ candles: { kind: "pillar", heightMm: 200 } });
+  assert(waxCandles(tallPillar).some((p) => (p as { h: number }).h > 150), "a pillar candle stands its own real height");
+  const hadorit = ring5({ candles: { kind: "hadorit" } });
+  assert(lathesOf(hadorit) >= 5, "a הידורית is a glass cup with its wax in it");
+  assert(ring5({ candles: { armShape: "s" } }).parts.filter((p) => p.shape === "sphere").length > ring5({}).parts.filter((p) => p.shape === "sphere").length + 40, "S-arms are curves of beads, not bars");
+  assert(ring5({ candles: { drops: "full" } }).parts.filter((p) => p.shape === "sphere").length - ring5({}).parts.filter((p) => p.shape === "sphere").length === 4 * 8, "full drops: a chain of three and a pear under each of the four arms and between them");
+  const rods = itemBody("candlestick", ctxOf({ kind: "rect", widthMm: 600, depthMm: 160 }, 600, { count: 5, drawStyle: "rods" }));
+  const rodTops = rods.parts.filter((p) => p.shape === "cylinder" && (p as { rBottom: number }).rBottom === ROD_MM).map((p) => (p as { h: number }).h);
+  assert(rodTops.length === 5 && new Set(rodTops.map((x) => Math.round(x))).size === 5, "rods on a base: five rods at five heights (stepped)");
+  assert(lathesOf(rods) === 5, "…each candle in its glass");
 
   // SH-3: which pictures' versions the ROOM builds. Every style of a kind built at one size: a kind in
   // PLAN_ONLY_STYLES builds one body whatever its style, every other kind at least two — the editor's

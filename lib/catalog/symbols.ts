@@ -201,15 +201,16 @@ export function chairStyleOf(product: Product | undefined): ChairStyle | undefin
  *  of candles on a bar, anything else its candles round a stem, which is what every row drew before
  *  there was a choice. The count is still the row's `arms` — candles, cylinders, glasses — so the
  *  plan and the packing list agree on how many there are. */
-export type CandleStyle = "ring" | "row" | "tiered" | "sleeves" | "cluster" | "floating" | "pillars" | "powder" | "lantern" | "fire";
+export type CandleStyle = "ring" | "row" | "tiered" | "sleeves" | "rods" | "cluster" | "floating" | "pillars" | "powder" | "lantern" | "fire";
 
-export const CANDLE_STYLES: CandleStyle[] = ["ring", "row", "tiered", "sleeves", "cluster", "floating", "pillars", "powder", "lantern", "fire"];
+export const CANDLE_STYLES: CandleStyle[] = ["ring", "row", "tiered", "sleeves", "rods", "cluster", "floating", "pillars", "powder", "lantern", "fire"];
 
 export const CANDLE_STYLE_LABEL: Record<CandleStyle, string> = {
   ring: "קנים במעגל",
   row: "קנים בשורה",
   tiered: "קומות (קריסטל)",
   sleeves: "שרוולי זכוכית",
+  rods: "מוטות על בסיס",
   cluster: "מקבץ צילינדרים",
   floating: "נר צף",
   pillars: "נרות עמוד במגש",
@@ -223,6 +224,7 @@ export const CANDLE_STYLE_HINT: Record<CandleStyle, string> = {
   row: "קנים במישור אחד, כמו פמוט 5 קנים קלאסי — מלמעלה הם קו",
   tiered: "שתי טבעות נרות ונר במרכז, עם נטיפי קריסטל — פמוט 13 או 25 קנים",
   sleeves: "כל נר בתוך שרוול/הוריקן זכוכית",
+  rods: "מוטות בגבהים שונים על בסיס אחד, נר בראש כל מוט — פמוט אקריליק מדורג",
   cluster: "צילינדרי זכוכית בגדלים שונים, נר עמוד בכל אחד — מקבץ סוליטר",
   floating: "צילינדר זכוכית עם מים ונר צף",
   pillars: "נרות עמוד על מגש או צלחת",

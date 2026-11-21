@@ -1,5 +1,6 @@
 "use client";
 
+import { candleSpecOf } from "@/lib/catalog/candles";
 import { createElement } from "react";
 import { chandelierDrawOf } from "@/lib/catalog/chandelier";
 import { chuppahDrawOf } from "@/lib/catalog/chuppah";
@@ -101,7 +102,7 @@ export function PlanGlyph({ product, mmPerPx }: { product: Product; mmPerPx: num
           overhead={product.layer === "ceiling"}
           chairStyle={chairStyleOf(product)}
           drawStyle={drawStyleOf(product)}
-          chandelier={chandelierDrawOf(product.appearance, product.variants)} chuppah={chuppahDrawOf(product.appearance)}
+          chandelier={chandelierDrawOf(product.appearance, product.variants)} chuppah={chuppahDrawOf(product.appearance)} candles={candleSpecOf(product.appearance)}
           postMm={pergolaPostOf(product)}
           rise={climbRise(product)}
           border={symbol === "runner" ? border : undefined}

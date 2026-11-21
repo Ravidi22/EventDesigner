@@ -114,6 +114,7 @@ import { NumberField } from "@/components/number-field";
 import { Segmented, segmentClass } from "@/components/segmented";
 import { ColorField, StyleFields } from "@/components/style-fields";
 import { isMaterial, MATERIAL_LABEL, MATERIALS, METAL_FINISHES } from "@/lib/catalog/material";
+import { ARM_SHAPE_LABEL, CANDLE_DROPS_LABEL, CANDLE_GUARD_LABEL, CANDLE_GUARDS, CANDLE_HEIGHTS, CANDLE_HEIGHTS_LABEL, CANDLE_KIND_LABEL, CANDLE_KINDS, CANDLE_SIZE, candlePatch, candleSpecOf, GUARD_SIZE, type CandleHeights } from "@/lib/catalog/candles";
 import { fieldLabelClassName } from "@/components/control";
 import { CurtainStyleTiles } from "@/components/curtain-style-tiles";
 import { curtainStyleOf } from "@/lib/catalog/symbols";
@@ -849,7 +850,7 @@ function StyleTiles({ kind, product, onPick, off, lead }: { kind: SymbolKind; pr
               className={tileClass(on)}
             >
               <svg viewBox={`${-b.w / 2 - pad} ${-b.h / 2 - pad} ${b.w + pad * 2} ${b.h + pad * 2}`} className="h-10 w-full" aria-hidden>
-                <ItemSymbol kind={kind} footprint={f} count={count} tone={tone} drawStyle={st} chandelier={chandelierDrawOf(product.appearance, product.variants)} chuppah={chuppahDrawOf(product.appearance)} />
+                <ItemSymbol kind={kind} footprint={f} count={count} tone={tone} drawStyle={st} chandelier={chandelierDrawOf(product.appearance, product.variants)} chuppah={chuppahDrawOf(product.appearance)} candles={candleSpecOf(product.appearance)} />
               </svg>
               <span className="w-full truncate text-center text-[10px] leading-tight text-ink-soft">{set.label[st]}</span>
             </button>
@@ -947,6 +948,8 @@ function bodyTilesOf(kind: SymbolKind | null): RevolveTiles | undefined {
 }
 
 function PictureFields({
+  arms,
+  onArms,
   product,
   preview,
   symbol,
@@ -961,6 +964,9 @@ function PictureFields({
   /** Sets the FIRST shape's body (its `revolve`) — a chandelier's silhouette. Absent when the first
    *  shape cannot have one (not round). */
   onProfile?: (revolve: RevolvePoint[] | undefined) => void;
+  /** A candlestick's arm count (categoryFields.arms), edited here beside its picture (§5.3). */
+  arms?: number;
+  onArms?: (n: number) => void;
   /** Goes to the חזית view with the first shape selected, where its body is dragged at full size. */
   onEditInView?: () => void;
 }) {
@@ -1074,6 +1080,74 @@ function PictureFields({
           </div>
         </div>
       )}
+
+      {/* The candles themselves (lib/catalog/candles.ts CandleSpec — §5.3): what burns, how big, in
+          what glass, how high each arm stands, what crystal hangs, how the arms curve — and how many
+          arms. Every field blank = the candlestick it always was; a default is never stored. */}
+      {product.category === "candlesticks" &&
+        (() => {
+          const spec = candleSpecOf(preview.appearance);
+          const set = (patch: Parameters<typeof candlePatch>[1]) => onChange({ candles: candlePatch(spec, patch) as Record<string, unknown> | undefined });
+          const kind = spec?.kind ?? "taper";
+          const guard = spec?.guard ?? (drawStyleOf(preview) === "sleeves" || drawStyleOf(preview) === "rods" ? "cylinder" : "none");
+          const n = Math.max(1, arms ?? 0);
+          const cm = (mm?: number) => (mm ? Math.round(mm / 10) : 0);
+          return (
+            <div className="space-y-2.5">
+              {onArms && (
+                <PanelRow label="מספר קנים / נרות" htmlFor="cs-arms">
+                  <NumberField id="cs-arms" decimals={0} min={1} max={49} value={n} onChange={(v) => onArms(Math.max(1, Math.round(v)))} className="w-20" />
+                </PanelRow>
+              )}
+              <Segmented label="סוג הנר" value={kind} options={CANDLE_KINDS.map((k) => [k, CANDLE_KIND_LABEL[k]] as const)} onChange={(k) => set({ kind: k })} />
+              <div className="grid grid-cols-2 gap-2">
+                <PanelRow label="קוטר הנר (ס״מ)" htmlFor="cs-d" stack>
+                  <NumberField id="cs-d" decimals={1} min={0.5} max={30} value={(spec?.diameterMm ?? CANDLE_SIZE[kind].d) / 10} onChange={(v) => set({ diameterMm: Math.round(v * 10) })} className="w-20" />
+                </PanelRow>
+                <PanelRow label="גובה הנר (ס״מ)" htmlFor="cs-h" stack>
+                  <NumberField id="cs-h" decimals={0} min={1} max={100} value={cm(spec?.heightMm ?? CANDLE_SIZE[kind].h)} onChange={(v) => set({ heightMm: Math.round(v * 10) })} className="w-20" />
+                </PanelRow>
+              </div>
+              <Segmented label="מגן רוח" value={guard} options={CANDLE_GUARDS.map((g) => [g, CANDLE_GUARD_LABEL[g]] as const)} onChange={(g) => set({ guard: g })} />
+              {guard !== "none" && (
+                <div className="grid grid-cols-2 gap-2">
+                  <PanelRow label="קוטר הזכוכית (ס״מ)" htmlFor="cs-gd" stack>
+                    <NumberField id="cs-gd" decimals={0} min={2} max={60} value={cm(spec?.guardDiameterMm ?? GUARD_SIZE[guard].d)} onChange={(v) => set({ guard, guardDiameterMm: Math.round(v * 10) })} className="w-20" />
+                  </PanelRow>
+                  <PanelRow label="גובה הזכוכית (ס״מ)" htmlFor="cs-gh" stack>
+                    <NumberField id="cs-gh" decimals={0} min={5} max={150} value={cm(spec?.guardHeightMm ?? GUARD_SIZE[guard].h)} onChange={(v) => set({ guard, guardHeightMm: Math.round(v * 10) })} className="w-20" />
+                  </PanelRow>
+                </div>
+              )}
+              <PanelRow label="גובה הקנים" htmlFor="cs-heights" stack>
+                <Select id="cs-heights" value={spec?.heights ?? "equal"} onChange={(v) => set({ heights: v as CandleHeights })} options={CANDLE_HEIGHTS.map((h) => ({ value: h, label: CANDLE_HEIGHTS_LABEL[h] }))} />
+              </PanelRow>
+              {spec?.heights === "typed" && (
+                <div className="flex flex-wrap gap-1.5" role="group" aria-label="גובה כל קנה">
+                  {Array.from({ length: n }, (_, i) => (
+                    <NumberField
+                      key={i}
+                      aria-label={`גובה קנה ${i + 1} (ס״מ)`}
+                      decimals={0}
+                      min={0}
+                      max={300}
+                      value={cm(spec.stepHeightsMm?.[i])}
+                      onChange={(v) => {
+                        const next = Array.from({ length: n }, (_, k) => spec.stepHeightsMm?.[k] ?? 0);
+                        next[i] = Math.round(v * 10);
+                        set({ stepHeightsMm: next });
+                      }}
+                      className="w-14"
+                    />
+                  ))}
+                </div>
+              )}
+              <Segmented label="טיפות קריסטל" value={spec?.drops ?? (drawStyleOf(preview) === "tiered" ? "some" : "none")} options={(["none", "some", "full"] as const).map((dv) => [dv, CANDLE_DROPS_LABEL[dv]] as const)} onChange={(dv) => set({ drops: dv })} />
+              <Segmented label="צורת הזרוע" value={spec?.armShape ?? "straight"} options={(["straight", "s"] as const).map((a) => [a, ARM_SHAPE_LABEL[a]] as const)} onChange={(a) => set({ armShape: a })} />
+              <Note>הנרות נבנים בתלת־ממד בגודל האמיתי שלהם; על התוכנית הם מצוירים גדולים יותר כדי שייראו. מגן רוח מצויר על התוכנית כטבעת זכוכית סביב הנר.</Note>
+            </div>
+          );
+        })()}
 
       {/* Which version of the picture — a chuppah's colonnade, a chandelier's crystal tiers, a corner
           sofa, a palm, a gate's round entrance… (SYMBOL_STYLES). */}
@@ -2049,7 +2123,7 @@ export function AppearanceModal({
   /** The drawer's draft, read once — this component is mounted by the act of opening it. */
   product: Product;
   /** `variants` only when a shade's colour was edited here. */
-  onSave: (patch: { dimensions: Product["dimensions"]; appearance: MapAppearance; variants?: Product["variants"] }) => void;
+  onSave: (patch: { dimensions: Product["dimensions"]; appearance: MapAppearance; variants?: Product["variants"]; categoryFields?: Product["categoryFields"] }) => void;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -2686,7 +2760,9 @@ export function AppearanceModal({
     const look = stretch || !list.length ? { dimensions: draft.dimensions, appearance: { shape: shapeOf(draft), content, ...draft.appearance } } : lookOf(draft, list);
     // A shade's colour edited here goes back with the look (QA VS-1) — only when one changed.
     const recoloured = draft.variants.some((v) => v.swatch !== product.variants.find((o) => o.id === v.id)?.swatch);
-    onSave(recoloured ? { ...look, variants: draft.variants } : look);
+    // …and so does a candlestick's arm count, edited beside its picture (§5.3).
+    const armsChanged = draft.categoryFields?.arms !== product.categoryFields?.arms;
+    onSave({ ...look, ...(recoloured ? { variants: draft.variants } : {}), ...(armsChanged ? { categoryFields: draft.categoryFields } : {}) });
     onClose();
   };
   // ✕ and ביטול ask before they throw edits away (QA VS-7); with nothing done they just close.
@@ -2749,6 +2825,8 @@ export function AppearanceModal({
             preview={preview}
             symbol={previewSymbol}
             onChange={setAppearance}
+            arms={Number(draft.categoryFields?.arms) || symbolCount(draft, "candlestick")}
+            onArms={(arms) => hist.set((d) => ({ ...d, look: { ...d.look, categoryFields: { ...d.look.categoryFields, arms } } }))}
             onEditInView={() => {
               if (shapes[0]) setSel([shapes[0].id]);
               showView("front");
@@ -3441,7 +3519,7 @@ export function AppearanceModal({
                             overhead={preview.layer === "ceiling"}
                             chairStyle={chairStyleOf(preview)}
                             drawStyle={drawStyleOf(preview)}
-                            chandelier={chandelierDrawOf(preview.appearance, preview.variants)} chuppah={chuppahDrawOf(preview.appearance)}
+                            chandelier={chandelierDrawOf(preview.appearance, preview.variants)} chuppah={chuppahDrawOf(preview.appearance)} candles={candleSpecOf(preview.appearance)}
                             postMm={pergolaPostOf(preview)}
                             rise={climbRise(preview)}
                             border={previewSymbol === "runner" ? borderOf(undefined, preview) : undefined}

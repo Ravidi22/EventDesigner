@@ -3,6 +3,7 @@
 // import it without importing each other.
 import { materialRefOf } from "./materials";
 import type { Material } from "@/lib/catalog/material";
+import type { CandleSpec } from "@/lib/catalog/candles";
 import type { Footprint } from "@/lib/studio/footprint";
 import { buildHollow, footprintOutlines } from "@/lib/studio/footprint";
 import type { Product, RevolvePoint } from "@/lib/catalog/types";
@@ -37,6 +38,9 @@ export interface ItemContext {
   /** What the item is made of — the shade's, else the row's (lib/catalog/material.ts materialOf).
    *  Absent = every recipe's own guess, as before. */
   material?: Material;
+  /** A candlestick's candles, guards, arm heights and crystal (lib/catalog/candles.ts). Absent = the
+   *  candles it always built. */
+  candles?: CandleSpec;
   /** symbolCount: arms, bulbs, candles. */
   count: number;
   chairStyle?: ChairStyle;

@@ -93,8 +93,10 @@ export function materialRefOf(material: Material, colour?: string): MaterialRef 
       return { colour: c, kind: "glass", opacity: 0.45 };
     case "crystal":
       return crystalMaterial();
+    // Acrylic reads as the bright, edged block it is — cut-glass's surface, a little less clear
+    // (plain glass at a third opacity vanished in the room — the skill's decision 6).
     case "acrylic":
-      return { colour: hexOf(colour) ?? MATERIAL_TONE.acrylic, kind: "glass", opacity: 0.35 };
+      return { colour: hexOf(colour) ?? MATERIAL_TONE.acrylic, kind: "crystal", opacity: 0.62 };
     case "stone":
       return { colour: c, kind: "matte", texture: "paving" };
     case "marble":

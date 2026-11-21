@@ -34,6 +34,7 @@ import { CeilingDrapeSymbol, SailSymbol } from "./ceiling-cloth";
 import type { CurtainStyle } from "@/lib/catalog/symbols";
 import { CASCADE, EMPIRE, FITTING_COLOUR, chandelierOf, chandelierTiers, crystalBeads, empireCrownR, equalGlobes, glassFinishOf, ringGlobe, type ChandelierDraw, type CrystalBead } from "@/lib/catalog/chandelier";
 import { CHUPPAH_FINISH_COLOUR, chuppahLayout, chuppahOf, cloudFlowers, cloudPieces, type ChuppahDraw } from "@/lib/catalog/chuppah";
+import type { CandleSpec } from "@/lib/catalog/candles";
 import { FlowerDrawing } from "./flower-symbol";
 import { SurfaceFill } from "./surface-fill";
 import { defaultMix, seedOf, type FlowerDrawSpec, type FlowerForm } from "@/lib/catalog/flower-draw";
@@ -145,6 +146,9 @@ export interface ItemSymbolProps {
   /** A chuppah's posts, roof and flowers (MapAppearance.chuppah, lib/catalog/chuppah.ts) and its roof's
    *  section. Absent = the chuppah it always was, drawn exactly as before. */
   chuppah?: ChuppahDraw;
+  /** A candlestick's candles and guards (MapAppearance.candles, lib/catalog/candles.ts): a guard is
+   *  drawn as the glass round each candle. Absent = the candlestick it always was. */
+  candles?: CandleSpec;
   /** For a flight or a ramp: the height it climbs and which way (climbRise, lib/studio/climb-item.ts). */
   rise?: PlacementClimb & { heightMm: number };
   /** How the caller turns and flips the item — so a ramp's slope, written along it, reads upright. */
@@ -169,7 +173,7 @@ export interface ItemSymbolProps {
   label?: string;
 }
 
-function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, drawStyle, chandelier: chandelierSpec, chuppah: chuppahSpec, rise, turnDeg, mirrored, textMm, bench, chairs = true, border, postMm, label }: ItemSymbolProps) {
+function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, drawStyle, chandelier: chandelierSpec, chuppah: chuppahSpec, candles, rise, turnDeg, mirrored, textMm, bench, chairs = true, border, postMm, label }: ItemSymbolProps) {
   // A pergola — posts on its outline's corners, its roof across them — is the venue's own drawing
   // (components/pergola-glyph.tsx), on ANY outline: a bowed or rounded one too (symbolOf lets it
   // through), so it is drawn before the primitive-box rule below. On paper its posts are solid ink.
@@ -215,7 +219,7 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
   let body: ReactNode;
   switch (kind) {
     case "candlestick":
-      body = candlestick(w, h, round, count, c, line, drawStyle as CandleStyle | undefined);
+      body = candlestick(w, h, round, count, c, line, drawStyle as CandleStyle | undefined, !!candles?.guard && candles.guard !== "none");
       break;
     case "lamp":
       body = lamp(w, h, round, c, line, drawStyle as LampStyle | undefined);
@@ -477,11 +481,14 @@ function plainFlowers(w: number, h: number, tone: string | undefined, form?: Flo
  *  footprint: a long piece a row of candles on a bar, anything else its candles round a stem. Each
  *  candle wears its flame, which is what makes it read as light. `n` is the row's arms: candles,
  *  cylinders or glasses, whichever the style is made of. */
-function candlestick(w: number, h: number, round: boolean, n: number, c: Colours, line: Line, style?: CandleStyle) {
+function candlestick(w: number, h: number, round: boolean, n: number, c: Colours, line: Line, style?: CandleStyle, guarded = false) {
   const long = !round && Math.max(w, h) / Math.min(w, h) >= 1.8;
   switch (style ?? (long ? "row" : "ring")) {
     case "row":
-      return candleRow(w, h, n, long, false, c, line);
+      return candleRow(w, h, n, long, guarded, c, line);
+    // Rods on a base: from above, a row of candles in their glasses along the base.
+    case "rods":
+      return candleRow(w, h, n, true, true, c, line);
     case "sleeves":
       return long ? candleRow(w, h, n, long, true, c, line) : candleRing(w, h, n, true, c, line);
     case "tiered":
@@ -499,7 +506,7 @@ function candlestick(w: number, h: number, round: boolean, n: number, c: Colours
     case "fire":
       return fireBurner(w, h, round, c, line);
     default:
-      return candleRing(w, h, n, false, c, line);
+      return candleRing(w, h, n, guarded, c, line);
   }
 }
 

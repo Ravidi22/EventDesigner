@@ -462,6 +462,9 @@ export interface MapAppearance {
   shadeMaterials?: Record<string, string>;
   /** The BASE shape's own material — ShapePart.material for the first shape (lib/catalog/shape-list.ts). */
   baseMaterial?: string;
+  /** A candlestick's candles, wind guards, arm heights and crystal (lib/catalog/candles.ts
+   *  CandleSpec). Absent = the drawing it always was. Typed loosely here; read through candleSpecOf. */
+  candles?: Record<string, unknown>;
   /** A RUG's or a CLOTH's contour (lib/catalog/border.ts): a coloured band inside its edge, a second
    *  one inside a gap, the fringe in a colour of its own. The row's; a placement may override it
    *  (Placement.border). Absent = the drawing it always had. Ignored on every other category. */
