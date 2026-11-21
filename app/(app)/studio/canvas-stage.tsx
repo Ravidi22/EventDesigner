@@ -13,7 +13,7 @@ import { ChairBlock } from "@/components/chair-block";
 import { AisleDrawing } from "@/components/placed-piece";
 import { aisleWords } from "@/lib/catalog/aisle";
 import { CompositionPieces } from "@/components/composition-drawing";
-import { benchIsNumbered, standaloneBench } from "@/lib/design-document/bench";
+import { benchIsNumbered, standaloneBench, type BenchLayout } from "@/lib/design-document/bench";
 import { catalogVersion } from "@/lib/catalog/storage";
 import { doorOpenings, wallSegment, wallTrack, nearestWall } from "@/lib/studio/anchor";
 import { curtainDrop, type CurtainDrop, isRailed, isRodRow, nearestBareRod, nearestSideRail, rodAt, rodDropLength, railClothLine, railLines, railMoved, railOf, rodPath, rodPointMoved, rodPostMm, rodThickMm, sideCandidates, sketchRailContext, type Rail, type RailLine } from "@/lib/studio/rail";
@@ -310,6 +310,7 @@ export function CanvasStage({
   onEdgeItemSelect,
   onEdgeItemMenu,
   onEdgeItemChange,
+  onBenchSofa,
   stairPick,
   onPickStair,
   onContextMenu,
@@ -475,7 +476,10 @@ export function CanvasStage({
   /** An edge item slid along its side or resized by its grips. */
   /** `from`: the stage's items when the gesture began — a resize trims its neighbours against them
    *  (shareSide); a slide passes nothing and trims nothing. */
-  onEdgeItemChange?: (stageId: string, item: StageStair, from?: StageStair[]) => void;
+  onEdgeItemChange?: (stageId: string, item: StageStair, from?: StageStair[], alone?: boolean) => void;
+  /** A standalone banquette's sofa slid along it (BenchSide.offsetMm, §2.1) — every frame of the drag;
+   *  the release ends it through onEndDrag. */
+  onBenchSofa?: (placementId: string, side: "back" | "front", offsetMm: number) => void;
   /** Placing a flight of stairs: the sides it may stand against, in room coordinates. A click on one
    *  reports which side and how far along it. */
   stairPick?: { level?: string; edge: number; a: Point; b: Point }[] | null;
@@ -1278,6 +1282,16 @@ export function CanvasStage({
   }, [selection, doc]);
 
   /** The one selected stage, for its edge items' grips and its bare stretches. */
+  // A lone STANDALONE banquette picked, with a sofa on a side: its sofa slides along it (§2.1). Not a
+  // banquette laid along a shape (its cushions follow the shape's spine), nor a locked one.
+  const sofaBench = useMemo(() => {
+    if (selection.length !== 1 || selection[0].kind !== "placement") return null;
+    const p = doc.placements.find((x) => x.id === selection[0].id);
+    if (!p || p.locked || p.stage || (p.scale ?? 1) !== 1) return null;
+    const lay = standaloneBench(p, benchOf);
+    if (!lay || lay.shaped) return null;
+    return lay.back.kind === "sofa" || lay.front.kind === "sofa" ? { p, lay } : null;
+  }, [selection, doc]);
   const edgingStage = useMemo(() => {
     if (selection.length !== 1 || selection[0].kind !== "placement") return null;
     const p = doc.placements.find((x) => x.id === selection[0].id);
@@ -1487,7 +1501,27 @@ export function CanvasStage({
     // every frame (the reducer's settleCovers) — as a reference it stood where its stage had just
     // been, and the stage lurched in steps and stopped short of its neighbour, held by its own carpet.
     const cargoIds = new Set(cargo.filter((r) => r.kind !== "table").map((r) => r.id));
-    return alignTo
+    // A banquette on the floor carried alone meets a STAGE's banquettes end to end or at a right angle
+    // — the stage's banquette continued off the stage, or a ר (bug round 2026-11-21 §2.2): each of
+    // their strips is a flush reference, as another loose banquette already is.
+    const loneBench = cargo.length === 1 && cargo[0].kind === "placement" ? placementById.get(cargo[0].id) : undefined;
+    const stageBenchBoxes: SnapBox[] =
+      loneBench && !loneBench.stage && standaloneBench(loneBench, benchOf)
+        ? doc.placements.flatMap((sp) =>
+            sp.stage
+              ? (sp.stage.stairs ?? []).flatMap((st) => {
+                  const sh = st.kind === "bench" ? edgeItemShape(sp.stage!, st, deckOf) : null;
+                  if (!sh) return [];
+                  const pts = sh.polygon.map((q) => toRoom(sp as StagePlacement, q));
+                  const xs = pts.map((q) => q.x);
+                  const ys = pts.map((q) => q.y);
+                  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+                  return [{ x: (x0 + x1) / 2, y: (y0 + y1) / 2, widthMm: x1 - x0, depthMm: y1 - y0, flush: true }];
+                })
+              : [],
+          )
+        : [];
+    return [...stageBenchBoxes, ...alignTo
       .filter((m) => {
         if (inCargo(m.ref)) return false;
         if (m.ref.kind !== "placement") return true;
@@ -1501,7 +1535,7 @@ export function CanvasStage({
         // A table is met at its chairs (tableHold): its ring is the edge the next table goes to.
         const hold = holdOfRef(m.ref);
         return { ...m.box, flush: true, ...(hold ? { flushBox: hold } : {}) };
-      });
+      })];
   };
 
   /** The canvas's snap for a box being dragged — or, for a thing standing AT AN ANGLE among things
@@ -2615,12 +2649,22 @@ export function CanvasStage({
               mm={ctx.mm}
               active={activeEdgeItem ?? null}
               onSelect={(itemId) => onEdgeItemSelect(edgingStage.id, itemId)}
-              onChange={(item, from) => onEdgeItemChange(edgingStage.id, item, from)}
+              onChange={(item, from, alone) => onEdgeItemChange(edgingStage.id, item, from, alone)}
               onEnd={onEndDrag}
               onContext={(itemId) => {
                 edgeContext.current = { stageId: edgingStage.id, itemId };
                 onEdgeItemSelect(edgingStage.id, itemId);
               }}
+            />
+          )}
+
+          {sofaBench && onBenchSofa && (
+            <BenchSofaHandles
+              p={sofaBench.p}
+              lay={sofaBench.lay}
+              ctx={ctx}
+              onMove={(side, offsetMm) => onBenchSofa(sofaBench.p.id, side, offsetMm)}
+              onEnd={() => onEndDrag([{ kind: "placement", id: sofaBench.p.id }])}
             />
           )}
 
@@ -6063,6 +6107,79 @@ function curtainDropAt(product: Product, at: Point, doc: DesignDocumentContent, 
   const side = nearestSideRail(sideCandidates(arranged.features, doc, (v) => resolve(v)?.product), at);
   const rails = CATEGORY_BY_ID[product.category]?.rails;
   return curtainDrop({ p: at, wall: near, side, rod: nearestBareRod(doc.placements, (v) => isRodRow(resolve(v)?.product), at), takes: (t) => !rails || rails.includes(t), rodHeightMm: 0 });
+}
+
+/** A standalone banquette's sofa runs, held by a dashed outline: a press slides the run along the
+ *  banquette (BenchSide.offsetMm), held on it by the layout; a press anywhere else on the banquette
+ *  still moves the banquette (§2.1). Drawn in the banquette's own frame, as PlacementNode draws it. */
+function BenchSofaHandles({
+  p,
+  lay,
+  ctx,
+  onMove,
+  onEnd,
+}: {
+  p: Placement;
+  lay: BenchLayout;
+  ctx: CanvasLayerContext;
+  onMove: (side: "back" | "front", offsetMm: number) => void;
+  onEnd: () => void;
+}) {
+  const r = ((p.rotation || 0) * Math.PI) / 180;
+  const flip = p.mirrored ? -1 : 1;
+  /** A pointer as mm along the banquette, from its middle. */
+  const alongOf = (clientX: number, clientY: number) => {
+    const w = ctx.clientToMm(clientX, clientY);
+    return flip * ((w.x - p.position.x) * Math.cos(r) + (w.y - p.position.y) * Math.sin(r));
+  };
+  const half = lay.depthMm / 2;
+  return (
+    <g transform={`translate(${p.position.x} ${p.position.y})${p.rotation ? ` rotate(${p.rotation})` : ""}${p.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}`}>
+      {(["back", "front"] as const).map((key) => {
+        const sd = lay[key];
+        if (sd.kind !== "sofa" || sd.seats <= 0) return null;
+        const run = sd.widthMm ?? lay.widthMm;
+        const c = sd.offsetMm ?? 0;
+        const sign = key === "back" ? -1 : 1;
+        const y0 = sign * half;
+        const y1 = sign * (half - (sd.depthMm ?? half));
+        return (
+          <rect
+            key={key}
+            x={c - run / 2}
+            y={Math.min(y0, y1)}
+            width={run}
+            height={Math.abs(y1 - y0)}
+            fill="transparent"
+            stroke="var(--color-accent)"
+            strokeWidth={1.5}
+            strokeDasharray="5 3"
+            vectorEffect="non-scaling-stroke"
+            className="cursor-ew-resize touch-none"
+            aria-label="ספה — גרירה לאורך הבנקט"
+            onPointerDown={(e) => {
+              if (e.button !== 0) return;
+              e.stopPropagation();
+              const s0 = alongOf(e.clientX, e.clientY);
+              const at0 = { x: e.clientX, y: e.clientY };
+              let moved = false;
+              startPointerGesture(e, {
+                onMove: (m) => {
+                  if (!moved && Math.hypot(m.clientX - at0.x, m.clientY - at0.y) < 4) return;
+                  moved = true;
+                  onMove(key, Math.round((c + alongOf(m.clientX, m.clientY) - s0) / 10) * 10);
+                },
+                onEnd: () => {
+                  if (moved) onEnd();
+                },
+              });
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        );
+      })}
+    </g>
+  );
 }
 
 /** The plan while a catalog item is armed on the rail. A pane over everything, like the template

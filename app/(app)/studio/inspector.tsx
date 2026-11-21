@@ -236,7 +236,17 @@ export interface BenchSideRow extends BenchSideLayout {
 /** What the bar may change about one side of a banquette: what it is, how many sit there
  *  (`seats: null` = back to one per 60cm), and — a sofa — its run along the banquette, its seat
  *  depth (`null` = the whole length / the half strip) and whether it counts as seating. */
-export type BenchSidePatch = { kind?: BenchSideKind; seats?: number | null; widthMm?: number | null; depthMm?: number | null; notSeating?: boolean };
+export type BenchSidePatch = {
+  kind?: BenchSideKind;
+  seats?: number | null;
+  widthMm?: number | null;
+  depthMm?: number | null;
+  /** A sofa's run's middle along the banquette (`null` = centred) — BenchSide.offsetMm. */
+  offsetMm?: number | null;
+  notSeating?: boolean;
+  /** "מול השולחן": the host lays the run in front of the nearest table on that side (§2.1). */
+  faceTable?: true;
+};
 
 /** What the bar shows for a STANDALONE banquette (Placement.bench): how it is laid, what the
  *  designer set, and whether it currently carries a number. */
@@ -3137,6 +3147,19 @@ function BenchSidesFields({
             {row.widthMm !== undefined && lengthMm !== undefined && row.widthMm < lengthMm && <BarButton icon={Undo2} label={`לכל האורך (${cmOf(lengthMm)})`} onClick={() => onSide(key, { widthMm: null })} />}
             <NumberField id={`${idPrefix}-${key}-sw`} decimals={0} min={60} max={1200} commitOnBlur value={cmOf(row.widthMm ?? lengthMm ?? 0)} onChange={(cm) => onSide(key, { widthMm: cm * 10 })} className="w-20" />
           </PanelRow>
+          {/* Where the run stands along the banquette — dragged on the plan, or put back across from
+              the table in front of it (§2.1). */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => onSide(key, { faceTable: true })}>
+              מול השולחן
+            </Button>
+            {row.offsetMm ? (
+              <Button type="button" variant="outline" size="sm" onClick={() => onSide(key, { offsetMm: null })}>
+                למרכז הבנקט
+              </Button>
+            ) : null}
+          </div>
+          <Note>גוררים את הספה על התוכנית כדי להזיז אותה לאורך הבנקט.</Note>
           {/* The seat as DRAWN, between a floor no higher than its default and the most the other
               side leaves (bench.ts sofaSeatMax) — the write is held to the same (QA BQ-2). */}
           <PanelRow label="עומק המושב (ס״מ)" htmlFor={`${idPrefix}-${key}-sd`}>

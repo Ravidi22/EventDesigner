@@ -132,6 +132,8 @@ export interface BenchSideLayout {
    *  the other side — QA BQ-2) — what the bar shows. */
   widthMm?: number;
   depthMm?: number;
+  /** A sofa side's run's middle along the strip, held so the run stays on it (0 = centred). */
+  offsetMm?: number;
   /** …the deepest its seat may be beside the other side as laid, and its seat when nobody typed one —
    *  the bar's field runs between them. */
   depthMaxMm?: number;
@@ -222,22 +224,66 @@ export function benchBlocks(lay: Pick<BenchLayout, "widthMm" | "depthMm" | "back
   const sofaBlocks = (s: BenchSideLayout, key: "back" | "front", seat: number, t: number) => {
     if (!sofa(s)) return;
     const r = Math.min(w, s.widthMm ?? w);
+    const c = s.offsetMm ?? 0;
     const sign = key === "back" ? -1 : 1;
     const edge = sign * h;
     const inner = sign * (h - seat);
     const behind = sign * (h - seat - t);
-    out.push({ x0: -r / 2, x1: r / 2, ...span(edge, inner), kind: "seat", side: key });
-    if (t > 0.5) out.push({ x0: -r / 2, x1: r / 2, ...span(inner, behind), kind: "back", side: key });
+    out.push({ x0: c - r / 2, x1: c + r / 2, ...span(edge, inner), kind: "seat", side: key });
+    if (t > 0.5) out.push({ x0: c - r / 2, x1: c + r / 2, ...span(inner, behind), kind: "back", side: key });
     if (r < w - 1)
       for (const [x0, x1] of [
-        [-w / 2, -r / 2],
-        [r / 2, w / 2],
+        [-w / 2, c - r / 2],
+        [c + r / 2, w / 2],
       ])
-        out.push({ x0, x1, ...span(edge, behind), kind: coreKind, side: coreSide });
+        if (x1 - x0 > 0.5) out.push({ x0, x1, ...span(edge, behind), kind: coreKind, side: coreSide });
   };
   sofaBlocks(lay.back, "back", sb, tb);
   sofaBlocks(lay.front, "front", sf, tf);
   return out;
+}
+
+/** How far out a table may stand from a sofa side and still be the one it faces (§2.1). */
+export const SOFA_TABLE_REACH_MM = 2500;
+/** A new sofa's run when no table is in front of it (DECIDE 9). */
+export const SOFA_DEFAULT_RUN_MM = 1800;
+
+/** A banquette as it stands in the room: its middle, its own +x (`u`, along it) and +y (`n`, toward
+ *  its front side) as unit vectors, its length and depth. */
+export interface BenchFrame {
+  centre: Point;
+  u: Point;
+  n: Point;
+  lengthMm: number;
+  depthMm: number;
+}
+
+/** Where a sofa side's run goes by default — IN FRONT OF A TABLE (bug round 2026-11-21 §2.1,
+ *  DECIDE 9): the nearest table (or block — its members' corners together) standing on that side
+ *  within SOFA_TABLE_REACH_MM gives the run its length along the banquette and its middle, held on
+ *  the banquette. With no table there, SOFA_DEFAULT_RUN_MM, centred. `tables` are each table's (or
+ *  block's) corners in the room. */
+export function sofaFacingTable(frame: BenchFrame, side: "back" | "front", tables: readonly (readonly Point[])[]): { offsetMm: number; widthMm: number } {
+  const L = frame.lengthMm;
+  const sign = side === "front" ? 1 : -1;
+  const halfD = frame.depthMm / 2;
+  let best: { gap: number; lo: number; hi: number } | null = null;
+  for (const corners of tables) {
+    if (!corners.length) continue;
+    const along = corners.map((q) => (q.x - frame.centre.x) * frame.u.x + (q.y - frame.centre.y) * frame.u.y);
+    const out = corners.map((q) => sign * ((q.x - frame.centre.x) * frame.n.x + (q.y - frame.centre.y) * frame.n.y));
+    const lo = Math.min(...along);
+    const hi = Math.max(...along);
+    // On that side, within reach, and facing some of the banquette.
+    if (Math.max(...out) <= halfD || Math.min(...out) - halfD > SOFA_TABLE_REACH_MM) continue;
+    if (hi <= -L / 2 || lo >= L / 2) continue;
+    const gap = Math.max(0, Math.min(...out) - halfD);
+    if (!best || gap < best.gap) best = { gap, lo, hi };
+  }
+  const widthMm = Math.min(L, Math.round((best ? best.hi - best.lo : SOFA_DEFAULT_RUN_MM) / 10) * 10);
+  const room = Math.max(0, (L - widthMm) / 2);
+  const offsetMm = best ? Math.round(Math.max(-room, Math.min(room, (best.lo + best.hi) / 2))) : 0;
+  return { offsetMm, widthMm };
 }
 
 /** Lay a banquette `widthMm` long and `depthMm` deep out of its spec. */
@@ -276,11 +322,14 @@ export function benchLayout(widthMm: number, depthMm: number, spec?: BenchSpec):
     const kind = side?.kind ?? fallback;
     // A sofa seats along ITS run, not the whole strip's — and goes back to one per 60 cm of it.
     const run = kind === "sofa" ? sofaRun(side) : w;
+    // Its middle, held so the run stays on the strip — a sofa as long as the strip has nowhere to go.
+    const room = Math.max(0, (w - run) / 2);
+    const offsetMm = kind === "sofa" && side?.offsetMm ? Math.max(-room, Math.min(room, Math.round(side.offsetMm))) : 0;
     return {
       kind,
       seats: sideSeats(run, side, fallback),
       autoSeats: sideSeats(run, { kind }, fallback),
-      ...(kind === "sofa" ? { widthMm: run, depthMm: seat, depthMaxMm: Math.max(seatMin, sofaSeatMax(d, other)), depthDefaultMm: seatDefault, ...(side?.notSeating ? { notSeating: true as const } : {}) } : {}),
+      ...(kind === "sofa" ? { widthMm: run, depthMm: seat, ...(offsetMm ? { offsetMm } : {}), depthMaxMm: Math.max(seatMin, sofaSeatMax(d, other)), depthDefaultMm: seatDefault, ...(side?.notSeating ? { notSeating: true as const } : {}) } : {}),
     };
   };
   const back = sideOf(spec?.back, DEFAULT_BACK, seatB, { kind: frontKind, ...(frontKind === "sofa" ? { depthMm: seatF } : {}) });
@@ -302,8 +351,9 @@ export function benchLayout(widthMm: number, depthMm: number, spec?: BenchSpec):
     // A sofa: its run centred on the strip, its seat from the edge in (as held above), the backrest
     // line at the seat's inner edge.
     const run = side.widthMm ?? w;
+    const c = side.offsetMm ?? 0;
     const seatDepth = side.depthMm ?? seatDefault;
-    const xAt = (i: number) => -run / 2 + (i * run) / n;
+    const xAt = (i: number) => c - run / 2 + (i * run) / n;
     const edge = sign * half;
     const inner = sign * (half - seatDepth);
     for (let i = 0; i < n; i++) {
@@ -317,8 +367,8 @@ export function benchLayout(widthMm: number, depthMm: number, spec?: BenchSpec):
       ]);
     }
     backs.push([
-      { x: -run / 2, y: inner },
-      { x: run / 2, y: inner },
+      { x: c - run / 2, y: inner },
+      { x: c + run / 2, y: inner },
     ]);
   };
   lay(back, -1);
@@ -482,7 +532,7 @@ export function benchSideRows(item: Pick<StageStair, "bench" | "seats" | "height
 export function patchBenchSide(
   spec: BenchSpec | undefined,
   side: "back" | "front",
-  patch: { kind?: BenchSideKind; seats?: number | null; widthMm?: number | null; depthMm?: number | null; notSeating?: boolean },
+  patch: { kind?: BenchSideKind; seats?: number | null; widthMm?: number | null; depthMm?: number | null; offsetMm?: number | null; notSeating?: boolean },
   laid?: Pick<BenchLayout, "widthMm" | "depthMm" | "back" | "front">,
 ): BenchSpec {
   const cur: BenchSide = spec?.[side] ?? { kind: side === "back" ? DEFAULT_BACK : DEFAULT_FRONT };
@@ -496,9 +546,18 @@ export function patchBenchSide(
   else if (patch.widthMm !== undefined) next.widthMm = Math.max(0, Math.round(patch.widthMm));
   if (patch.depthMm === null) delete next.depthMm;
   else if (patch.depthMm !== undefined) next.depthMm = Math.max(0, Math.round(patch.depthMm));
+  if (patch.offsetMm === null || patch.offsetMm === 0) delete next.offsetMm;
+  else if (patch.offsetMm !== undefined) next.offsetMm = Math.round(patch.offsetMm);
   const out: BenchSpec = { ...spec, [side]: next };
   if (laid && next.kind === "sofa") {
     if (patch.widthMm != null && next.widthMm !== undefined && next.widthMm >= laid.widthMm - 0.5) delete next.widthMm;
+    // A run the whole strip long has no middle of its own; any other is held on the strip, as drawn.
+    if (next.widthMm === undefined) delete next.offsetMm;
+    else if (next.offsetMm !== undefined) {
+      const room = Math.max(0, (laid.widthMm - next.widthMm) / 2);
+      next.offsetMm = Math.round(Math.max(-room, Math.min(room, next.offsetMm)));
+      if (!next.offsetMm) delete next.offsetMm;
+    }
     if (patch.depthMm != null && next.depthMm !== undefined) {
       const other = side === "back" ? "front" : "back";
       const them = laid[other];
@@ -609,6 +668,29 @@ if (isMain(import.meta.url)) {
   assert(shortSofa.cushions.every((q) => Math.min(...q.map((p) => p.y)) === -300 && Math.max(...q.map((p) => p.y)) === 100), "…and 40cm deep from the edge in");
   assert(shortSofa.backs[0][0].x === -1200 && shortSofa.backs[0][1].x === 1200 && shortSofa.backs[0][0].y === 100, "…the backrest along the run at the seat's inner edge");
   assert(shortSofa.back.widthMm === 2400 && shortSofa.back.depthMm === 400, "…and the layout says what was laid");
+  // §2.1: a sofa stands where it was put along its banquette — absent = centred, to the digit.
+  assert(shortSofa.back.offsetMm === undefined, "a sofa with no offset is centred and says nothing of an offset");
+  const moved = benchLayout(6000, 600, { back: { kind: "sofa", widthMm: 2400, depthMm: 400, offsetMm: 1000 } });
+  assert(moved.back.offsetMm === 1000 && moved.cushions.every((q) => q.every((p) => p.x >= -200 - 1e-6 && p.x <= 2200 + 1e-6)) && moved.backs[0][0].x === -200 && moved.backs[0][1].x === 2200, "a sofa 1 m off the middle: its cushions and backrest run −0.2…2.2 m");
+  const pinned = benchLayout(6000, 600, { back: { kind: "sofa", widthMm: 2400, offsetMm: 9000 } });
+  assert(pinned.back.offsetMm === 1800 && pinned.cushions.every((q) => q.every((p) => p.x <= 3000 + 1e-6)), "…held on the banquette: an offset past its end stops at the end");
+  const seat = moved.blocks.find((bk) => bk.kind === "seat");
+  assert(!!seat && seat.x0 === -200 && seat.x1 === 2200 && moved.blocks.filter((bk) => bk.side === "back" && bk.kind !== "seat" && bk.kind !== "back").every((bk) => bk.x1 <= -200 + 1e-6 || bk.x0 >= 2200 - 1e-6), "…and the room raises its seat there, the strip on either side as before");
+  assert(benchLayout(6000, 600, { back: { kind: "sofa", offsetMm: 900 } }).back.offsetMm === undefined, "a sofa the whole length has nowhere to move");
+  const written = patchBenchSide({ back: { kind: "sofa", widthMm: 2400 } }, "back", { offsetMm: 5000 }, benchLayout(6000, 600, { back: { kind: "sofa", widthMm: 2400 } }));
+  assert(written.back?.offsetMm === 1800, "patchBenchSide holds a typed offset on the banquette");
+  assert(patchBenchSide({ back: { kind: "sofa", widthMm: 2400, offsetMm: 600 } }, "back", { widthMm: 6000 }, benchLayout(6000, 600, { back: { kind: "sofa", widthMm: 2400 } })).back?.offsetMm === undefined, "…and a run made the whole length drops it");
+  // The default: in front of the table on that side.
+  const frame = { centre: { x: 0, y: 0 }, u: { x: 1, y: 0 }, n: { x: 0, y: 1 }, lengthMm: 6000, depthMm: 600 };
+  const box = (cx: number, cy: number, w: number, d: number) => [{ x: cx - w / 2, y: cy - d / 2 }, { x: cx + w / 2, y: cy - d / 2 }, { x: cx + w / 2, y: cy + d / 2 }, { x: cx - w / 2, y: cy + d / 2 }];
+  const front = sofaFacingTable(frame, "front", [box(1200, 1500, 2400, 1200), box(-2000, 4000, 1800, 1800)]);
+  assert(front.widthMm === 2400 && front.offsetMm === 1200, "a sofa facing a 2.4 m table 0.9 m in front takes its length and stands across from it");
+  assert(sofaFacingTable(frame, "back", [box(1200, 1500, 2400, 1200)]).widthMm === SOFA_DEFAULT_RUN_MM, "…a table on the OTHER side is not in front of the back side: 1.8 m, centred");
+  assert(sofaFacingTable(frame, "front", [box(1200, 3900, 2400, 1200)]).offsetMm === 0, "…nor is one 3 m out");
+  const head = sofaFacingTable(frame, "front", [[...box(-1200, 1300, 2400, 800), ...box(1200, 1300, 2400, 800)]]);
+  assert(head.widthMm === 4800 && head.offsetMm === 0, "a head table of two: the block's whole length");
+  const longer = sofaFacingTable(frame, "front", [box(2500, 1300, 4000, 800)]);
+  assert(longer.widthMm === 4000 && longer.offsetMm === 1000, "a table running past the banquette's end: its length, held on the banquette");
   assert(benchLayout(3000, 600, { back: { kind: "sofa", depthMm: 5000 } }).cushions.every((q) => Math.max(...q.map((p) => p.y)) <= 280), "a seat deeper than the strip stops short of its far edge");
   const widened = patchBenchSide(patchBenchSide(undefined, "back", { kind: "sofa", widthMm: 2000, depthMm: 350 }), "back", { widthMm: null });
   assert(widened.back?.widthMm === undefined && widened.back?.depthMm === 350, "null puts a sofa's run back to the whole length and keeps its depth");

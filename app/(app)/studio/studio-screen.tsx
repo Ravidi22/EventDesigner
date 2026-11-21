@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { amend, apply as applyAction, dispatch, undo, redo, initHistory, type Action, type History, type RetypedTable } from "@/lib/design-document/actions";
 import { dropOrphanPerches } from "@/lib/design-document/perch";
+import { keepTouching, typedWidth } from "@/lib/design-document/edge-touch";
 import { deleteSketchTemplate, fetchSketchTemplateContent, fetchSketchTemplates, saveSketchTemplate, setSketchPhoto } from "@/lib/studio/sketch-actions";
 import { uploadFile } from "@/lib/files/upload";
 import type { SketchTemplateSummary } from "@/lib/studio/sketches";
-import type { BenchSpec, ChairRows, DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageEdgeKind, StagePiece, StageStair, StageTemplate } from "@/lib/design-document/types";
+import type { BenchSide, BenchSpec, ChairRows, DesignDocumentContent, DesignTable, Placement, Point as DocPoint, StageBuild, StageEdgeKind, StagePiece, StageStair, StageTemplate } from "@/lib/design-document/types";
 import { NEW_BLOCK, chairRowsCount, chairRowsLayout, chairRowsMove, cleanRows } from "@/lib/design-document/chair-rows";
 import { carriedRowsOf, rowsTool, rowsToolId } from "@/lib/studio/drag-payload";
 import { emptyDocument } from "@/lib/design-document/types";
@@ -21,7 +22,7 @@ import { ALL_PLANES_VISIBLE, PLANES, type Plane } from "@/lib/studio/planes";
 import type { Point } from "@/lib/studio/hall";
 import { pointInPolygon } from "@/lib/venues/faces";
 import { benchOf, coverOn, deckOf, defaultVariantId, firstVariantId, primeEventShades, resolve, shadesOf } from "@/lib/studio/catalog-resolver";
-import { BENCH_TABLE_DEPTH_MM, benchIsNumbered, benchSideRows, patchBenchSide, standaloneBench } from "@/lib/design-document/bench";
+import { BENCH_TABLE_DEPTH_MM, benchIsNumbered, benchSideRows, benchSpecOf, patchBenchSide, sofaFacingTable, standaloneBench, type BenchFrame } from "@/lib/design-document/bench";
 import { seatLookups } from "@/lib/studio/catalog-resolver";
 import { seatCount } from "@/lib/design-document/seat-count";
 import { productById } from "@/lib/catalog/storage";
@@ -297,6 +298,66 @@ function isStagePiece(p: Placement | undefined): p is Placement {
 /** The history with its PRESENT rid of the dressing perched on a banquette that went (QA EI-11) —
  *  in place, in whatever entry the edit made; the same object when nothing went. Never on a drag
  *  frame (see lib/design-document/perch.ts). */
+/** Each table's — or block's — corners in the room: what a new sofa looks for in front of it (§2.1). */
+function tableCorners(doc: DesignDocumentContent): DocPoint[][] {
+  return unitsOf(doc).map(({ frame: f }) => {
+    const r = ((f.rotation ?? 0) * Math.PI) / 180;
+    const c = Math.cos(r);
+    const s = Math.sin(r);
+    return [
+      [-1, -1],
+      [1, -1],
+      [1, 1],
+      [-1, 1],
+    ].map(([a, b]) => {
+      const x = (a * f.widthMm) / 2;
+      const y = (b * f.depthMm) / 2;
+      return { x: f.position.x + x * c - y * s, y: f.position.y + x * s + y * c };
+    });
+  });
+}
+
+/** A stage's banquette as it stands in the room — its middle, its own axes (+y its room side) and its
+ *  size; null when it is not a banquette. */
+function stageBenchFrame(sp: StagePlacement, st: StageStair): BenchFrame | null {
+  const shape = edgeItemShape(sp.stage, st, deckOf);
+  if (!shape?.bench || shape.midline.length < 2) return null;
+  const a = toRoom(sp, shape.midline[0]);
+  const b = toRoom(sp, shape.midline[shape.midline.length - 1]);
+  const base = toRoom(sp, shape.base);
+  const foot = toRoom(sp, shape.foot);
+  const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  const o = Math.hypot(foot.x - base.x, foot.y - base.y) || 1;
+  // Its front (+y) is the side's outward normal: toward its foot, or — an inner one, standing on the
+  // deck with its foot inward — away from it.
+  const k = shape.inner ? -1 : 1;
+  return {
+    centre: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
+    u: { x: (b.x - a.x) / L, y: (b.y - a.y) / L },
+    n: { x: (k * (foot.x - base.x)) / o, y: (k * (foot.y - base.y)) / o },
+    lengthMm: shape.bench.widthMm,
+    depthMm: shape.bench.depthMm,
+  };
+}
+
+/** A standalone banquette's frame: its own +x along it, +y its front, as drawn. */
+function placedBenchFrame(p: Placement, lengthMm: number, depthMm: number): BenchFrame {
+  const r = ((p.rotation || 0) * Math.PI) / 180;
+  const flip = p.mirrored ? -1 : 1;
+  return { centre: p.position, u: { x: flip * Math.cos(r), y: flip * Math.sin(r) }, n: { x: -Math.sin(r), y: Math.cos(r) }, lengthMm, depthMm };
+}
+
+/** A side's edit as the bench writes it: a side becoming a SOFA, or "מול השולחן", lays its run in
+ *  front of the nearest table on that side (bench.ts sofaFacingTable) unless a run was typed with it. */
+function sofaSidePatch(doc: DesignDocumentContent, key: "back" | "front", patch: BenchSidePatch | undefined, was: BenchSide["kind"], frame: BenchFrame | null): BenchSidePatch | undefined {
+  if (!patch) return patch;
+  const { faceTable, ...rest } = patch;
+  const becoming = rest.kind === "sofa" && was !== "sofa" && rest.widthMm === undefined && rest.offsetMm === undefined;
+  if (!frame || (!faceTable && !becoming)) return rest;
+  const at = sofaFacingTable(frame, key, tableCorners(doc));
+  return { ...rest, widthMm: at.widthMm, offsetMm: at.offsetMm || null };
+}
+
 function prunePerches(h: History): History {
   const present = dropOrphanPerches(h.present);
   return present === h.present ? h : { ...h, present };
@@ -3575,8 +3636,13 @@ export function StudioScreen({
           let bench: BenchSpec | undefined = st.bench;
           // …a sofa's run and seat written as they will be drawn, against the banquette as laid.
           const laid = patch.back || patch.front ? edgeItemShape(s, st, deckOf)?.bench : undefined;
-          if (patch.back) bench = patchBenchSide({ ...benchOld, ...(legacyBack ? { back: legacyBack } : {}) }, "back", patch.back, laid);
-          if (patch.front) bench = patchBenchSide({ ...benchOld, ...bench, ...(legacyBack && !bench?.back ? { back: legacyBack } : {}) }, "front", patch.front, laid);
+          // …and a side that becomes a sofa, or is put "מול השולחן", in front of the table (§2.1).
+          const frame = patch.back || patch.front ? stageBenchFrame({ ...soleStage, stage: s } as StagePlacement, st) : null;
+          const spec0 = benchSpecOf(st);
+          const backPatch = sofaSidePatch(doc, "back", patch.back, spec0.back?.kind ?? "chairs", frame);
+          const frontPatch = sofaSidePatch(doc, "front", patch.front, spec0.front?.kind ?? "none", frame);
+          if (backPatch) bench = patchBenchSide({ ...benchOld, ...(legacyBack ? { back: legacyBack } : {}) }, "back", backPatch, laid);
+          if (frontPatch) bench = patchBenchSide({ ...benchOld, ...bench, ...(legacyBack && !bench?.back ? { back: legacyBack } : {}) }, "front", frontPatch, laid);
           if (patch.sofaHeightMm !== undefined) bench = { ...benchOld, ...bench, sofaHeightMm: Math.round(patch.sofaHeightMm) };
           if (patch.heightMm !== undefined) bench = { ...benchOld, ...bench, heightMm: Math.round(patch.heightMm) };
           if (patch.depthMm !== undefined) bench = { ...benchOld, ...bench, depthMm: Math.round(patch.depthMm) };
@@ -3597,7 +3663,24 @@ export function StudioScreen({
         };
         // A width typed, or "the whole side": the item takes that stretch and its neighbours on the
         // side give way (shareSide) — two items never stand through each other.
-        return patch.widthMm !== undefined || patch.full ? { ...stage, stairs: shareSide(stage, stairId) } : stage;
+        // A TYPED width holds the end in a corner, else the end against a neighbour, else its middle
+        // (QA EI-13); what it now overlaps is cut and a flush neighbour closes up to it (§2.3).
+        if (patch.widthMm !== undefined && !patch.full) {
+          const typed = typedWidth(stage, stairId, patch.widthMm);
+          const sized = typed
+            ? {
+                ...stage,
+                stairs: stage.stairs.map((x) => {
+                  if (x.id !== stairId) return x;
+                  const { full: _f, ...rest } = x;
+                  return { ...rest, t: typed.t, widthMm: typed.widthMm, ...(typed.full ? { full: true } : {}) };
+                }),
+              }
+            : stage;
+          const cut = { ...sized, stairs: shareSide(sized, stairId) };
+          return { ...cut, stairs: keepTouching(cut, stairId, s.stairs ?? []) };
+        }
+        return patch.full ? { ...stage, stairs: shareSide(stage, stairId) } : stage;
       })(soleStage.stage);
       batch([...carried.map((x) => ({ type: "removePlacement" as const, id: x.id })), { type: "setPlacementStage", id: soleStage.id, stage: nextStage }]);
       if (patch.kind) ensureStageParts();
@@ -4353,15 +4436,25 @@ export function StudioScreen({
   }, [soleStage]);
   /** The right-click menu of a stair/banquette on the selected stage — its verbs, never the stage's. */
   const edgeItemMenu = useCallback(
-    (_stageId: string, itemId: string): ContextMenuItem[] => [
+    (stageId: string, itemId: string): ContextMenuItem[] => [
       { label: "העתקה · Ctrl+C", icon: Copy, onSelect: () => latestEdge.current.copy() },
       { label: "גזירה · Ctrl+X", icon: Scissors, onSelect: () => latestEdge.current.cut() },
       { label: "שכפול לצדו · Ctrl+D", icon: Copy, onSelect: () => latestEdge.current.duplicate() },
+      // A banquette's two sides traded — the chairs to the room, the sofa to the stage (§2.4).
+      ...(latestEdge.current.isBench(stageId, itemId) ? [{ label: "היפוך הצדדים", icon: ArrowLeftRight, onSelect: () => latestEdge.current.flip(stageId, itemId) }] : []),
       { label: "מחיקה", icon: Trash2, onSelect: () => latestEdge.current.remove(itemId) },
     ],
     [],
   );
-  const latestEdge = useRef({ copy: copyEdge, cut: cutEdge, duplicate: duplicateEdge, remove: (id: string) => removeStair(id) });
+  const benchItemOf = (stageId: string, itemId: string) => doc.placements.find((x) => x.id === stageId)?.stage?.stairs?.find((st) => st.id === itemId && st.kind === "bench");
+  const latestEdge = useRef({
+    copy: copyEdge,
+    cut: cutEdge,
+    duplicate: duplicateEdge,
+    remove: (id: string) => removeStair(id),
+    isBench: (stageId: string, itemId: string) => !!benchItemOf(stageId, itemId),
+    flip: (_stageId: string, _itemId: string) => {},
+  });
   latestEdge.current = {
     copy: copyEdge,
     cut: cutEdge,
@@ -4370,6 +4463,18 @@ export function StudioScreen({
       removeStair(id);
       setActiveEdge(null);
     },
+    isBench: (stageId: string, itemId: string) => !!benchItemOf(stageId, itemId),
+    flip: (stageId: string, itemId: string) =>
+      patchStage(stageId, (s) => ({
+        ...s,
+        stairs: (s.stairs ?? []).map((st) => {
+          if (st.id !== itemId) return st;
+          // Written whole in the new form, the legacy count (a back side's) folded in by benchSpecOf.
+          const spec = benchSpecOf(st);
+          const { seats: _legacy, ...rest } = st;
+          return { ...rest, bench: { ...spec, back: spec.front ?? { kind: "none" }, front: spec.back ?? { kind: "chairs" } } };
+        }),
+      })),
   };
   const edgeVerbs = useMemo(() => ({ copy: () => latestEdge.current.copy(), cut: () => latestEdge.current.cut(), duplicate: () => latestEdge.current.duplicate() }), []);
 
@@ -4428,8 +4533,12 @@ export function StudioScreen({
       let bench: BenchSpec = { ...p.bench };
       // …a sofa's run and seat written as they will be drawn, against the banquette as laid.
       const laid = standaloneBench(p, benchOf) ?? undefined;
-      if (patch.back) bench = patchBenchSide(bench, "back", patch.back, laid);
-      if (patch.front) bench = patchBenchSide(bench, "front", patch.front, laid);
+      // …and a side that becomes a sofa, or is put "מול השולחן", in front of the table (§2.1).
+      const frame = laid && (patch.back || patch.front) ? placedBenchFrame(p, laid.widthMm, laid.depthMm) : null;
+      const back = sofaSidePatch(doc, "back", patch.back, laid?.back.kind ?? "chairs", frame);
+      const front = sofaSidePatch(doc, "front", patch.front, laid?.front.kind ?? "none", frame);
+      if (back) bench = patchBenchSide(bench, "back", back, laid);
+      if (front) bench = patchBenchSide(bench, "front", front, laid);
       if (patch.heightMm !== undefined) bench.heightMm = Math.round(patch.heightMm);
       if (patch.sofaHeightMm !== undefined) bench.sofaHeightMm = Math.round(patch.sofaHeightMm);
       if (patch.seated !== undefined) bench.seated = Math.max(0, Math.round(patch.seated));
@@ -6088,7 +6197,13 @@ export function StudioScreen({
               setSelected([{ kind: "placement", id: stageId }]);
               setActiveEdge(itemId);
             }}
-            onEdgeItemChange={(stageId, item, from) => {
+            onBenchSofa={(id, side, offsetMm) => {
+              const p = doc.placements.find((x) => x.id === id);
+              const laid = p ? standaloneBench(p, benchOf) : null;
+              if (!p || !laid) return;
+              drag({ type: "setPlacementBench", id, bench: patchBenchSide(p.bench, side, { offsetMm }, laid) });
+            }}
+            onEdgeItemChange={(stageId, item, from, alone) => {
               const was = doc.placements.find((x) => x.id === stageId);
               if (!was?.stage) return;
               // A grip pushed into a neighbour divides the side: the neighbour is trimmed against
@@ -6096,7 +6211,9 @@ export function StudioScreen({
               // (no `from`) was held off its neighbours by the canvas and changes nothing else.
               const base = from ?? was.stage.stairs ?? [];
               const stage = { ...was.stage, stairs: base.map((st) => (st.id === item.id ? item : st)) };
-              drag({ type: "setPlacementStage", id: stageId, stage: from ? { ...stage, stairs: shareSide(stage, item.id) } : stage });
+              // …and a neighbour that stood flush against it closes up to it again (§2.3) — unless Alt.
+              const cut = from ? { ...stage, stairs: shareSide(stage, item.id) } : stage;
+              drag({ type: "setPlacementStage", id: stageId, stage: from && !alone ? { ...cut, stairs: keepTouching(cut, item.id, from) } : cut });
             }}
             onStageOutline={(id, stage, position) => drag({ type: "setPlacementStage", id, stage, position })}
             onAreaRefused={showHint}

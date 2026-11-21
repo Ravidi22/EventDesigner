@@ -280,6 +280,11 @@ export interface BenchSide {
    *  band. Read only on a sofa side (lib/design-document/bench.ts). */
   widthMm?: number;
   depthMm?: number;
+  /** A SOFA side's run's MIDDLE, mm along the banquette from the banquette's own middle (+ = its +x
+   *  end) — absent = centred, as every sofa was. Held so the run stays on the banquette. Set in
+   *  front of the nearest table when the side becomes a sofa ("מול השולחן"), dragged on the plan;
+   *  stored, so a table moved later leaves it where it is (bug round 2026-11-21 §2.1). */
+  offsetMm?: number;
   /** A SOFA side that is not seating ("לא נספר כישיבה"): its sitters are left out of the studio's
    *  seating readout. The count only — the banquette still seats them, so it keeps its number, and a
    *  sofa packs no chairs either way. Read only on a sofa side. */

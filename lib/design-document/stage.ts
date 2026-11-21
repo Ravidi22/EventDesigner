@@ -1061,6 +1061,9 @@ export interface EdgeItemShape {
   /** …and its blocks as the room raises them (./bench.ts benchBlocks), carried onto the edge — each
    *  with its `outline` in the stage's frame, following a curved side. Only on a bench. */
   blocks?: BenchBlock[];
+  /** Each sofa side's run on a bench (seat edge to backrest), in the stage's frame — what a press
+   *  drags along the banquette (bug round 2026-11-21 §2.1). */
+  sofas?: { side: "back" | "front"; polygon: Point[] }[];
 }
 export type StairShape = EdgeItemShape;
 
@@ -1193,7 +1196,10 @@ function findJoints(stage: StageBuild, deckOf: DeckLookup, items: readonly Stage
           if (len(P.p, Q.p) > JOINT_MM) continue;
           let how: "flush" | "mitred" | null = null;
           if (dot(P.d, Q.d) < -0.995 && dot(P.v, Q.v) > 0.99) how = "flush";
-          else if (A.kind === "stairs" && Math.abs(crossOf(P.d, Q.d)) > 0.17 && dot(P.v, Q.d) > 0.05 && dot(Q.v, P.d) > 0.05) how = "mitred";
+          // Banquettes meeting at an inside corner are mitred too — a ר of banquettes, each its own
+          // piece, reads as one bend instead of two strips standing through each other (bug round
+          // 2026-11-21 §2.2, DECIDE 1). They join no run of steps: only stairs share a count.
+          else if (Math.abs(crossOf(P.d, Q.d)) > 0.17 && dot(P.v, Q.d) > 0.05 && dot(Q.v, P.d) > 0.05) how = "mitred";
           if (!how) continue;
           links.push({ a: i, ea, b: j, eb, how });
           if (A.kind === "stairs") parent[find(j)] = find(i);
@@ -1297,6 +1303,7 @@ function shapeCore(stage: StageBuild, item: StageStair, deckOf: DeckLookup, join
     backs?: [Point, Point][];
     bench?: BenchLayout;
     blocks?: BenchBlock[];
+    sofas?: { side: "back" | "front"; polygon: Point[] }[];
   }): EdgeItemShape => {
     // A mitred end cuts each line across the item where its neighbour's crosses it; the outline is
     // then the edge line out and the far line back, as it always was (strip).
@@ -1332,6 +1339,7 @@ function shapeCore(stage: StageBuild, item: StageStair, deckOf: DeckLookup, join
     backs: s.backs ?? [],
     bench: s.bench,
     ...(s.blocks ? { blocks: s.blocks } : {}),
+    ...(s.sofas?.length ? { sofas: s.sofas } : {}),
     };
   };
   if (kind === "barrier" || kind === "backdrop") {
@@ -1379,6 +1387,19 @@ function shapeCore(stage: StageBuild, item: StageStair, deckOf: DeckLookup, join
       cushions: lay.cushions.map((q) => q.map(carry)),
       backs: lay.backs.map(([a, b]) => [carry(a), carry(b)] as [Point, Point]),
       bench: lay,
+      // Each sofa side's run, seat edge to backrest — what a press drags along the banquette (§2.1).
+      sofas: (["back", "front"] as const).flatMap((key) => {
+        const sd = lay[key];
+        if (sd.kind !== "sofa" || sd.seats <= 0) return [];
+        const r = sd.widthMm ?? w;
+        const c = sd.offsetMm ?? 0;
+        const sign = key === "back" ? -1 : 1;
+        const half = lay.depthMm / 2;
+        const edgeY = sign * half;
+        const innerY = sign * (half - (sd.depthMm ?? half));
+        const stops = [c - r / 2, ...xs.filter((x) => x > c - r / 2 + 1 && x < c + r / 2 - 1), c + r / 2];
+        return [{ side: key, polygon: [...stops.map((x) => carry({ x, y: edgeY })), ...[...stops].reverse().map((x) => carry({ x, y: innerY }))] }];
+      }),
       // Each block carried onto the edge, sampled at the side's own stops so it bends with a curve.
       blocks: lay.blocks.map((b) => {
         const stops = [b.x0, ...xs.filter((x) => x > b.x0 + 1 && x < b.x1 - 1), b.x1];
@@ -2393,8 +2414,12 @@ function joinRuns(stage: StageBuild): StageStair[] {
       const { full: _f, ...rest } = run.it;
       out.push({ ...rest, t: (run.from + run.to) / 2 / run.L, widthMm: Math.round(run.to - run.from), ...(whole ? { full: true } : {}) });
     };
+    // Banquettes that only TOUCH stay two (bug round 2026-11-21, Ravid's answer): each carries its own
+    // sofa, seats and dressing, and Ctrl+D lays a copy flush beside one. Flights still join — a run of
+    // stairs is one flight. Overlapping banquettes are resolveOverlaps' (the narrower keeps its stretch).
+    const joins = (next: { from: number }) => (edgeKind(run.it) === "bench" ? false : next.from <= run.to + 2);
     for (const next of list.slice(1)) {
-      if (next.from <= run.to + 2) run.to = Math.max(run.to, next.to);
+      if (joins(next)) run.to = Math.max(run.to, next.to);
       else {
         flush();
         run = { ...next };
@@ -4097,6 +4122,38 @@ if (isMain(import.meta.url)) {
     const other = pieces.find((it) => it.id !== "b")!;
     assert(kept.bench?.front?.kind === "sofa" && kept.bench?.back?.seats === 8, "…one piece keeps the sofa and the typed chairs");
     assert(other.bench?.front?.kind === "none" && other.bench?.back?.kind === "chairs" && other.bench?.back?.seats === undefined, "…the other has no sofa and seats automatically");
+  }
+  // §2.2: two banquettes meeting at an L-shaped stage's INSIDE corner are mitred, as stairs are — a
+  // ר of banquettes, two pieces, one bend; neither stands through the other.
+  {
+    const lOut = [
+      { x: -3000, y: -2000 },
+      { x: 3000, y: -2000 },
+      { x: 3000, y: 0 },
+      { x: 0, y: 0 },
+      { x: 0, y: 2000 },
+      { x: -3000, y: 2000 },
+    ];
+    const lStage: StageBuild = {
+      outline: lOut,
+      front: 0,
+      decks: [],
+      heightMm: 400,
+      stairs: [
+        { id: "b1", kind: "bench", edge: 2, t: 0.5, widthMm: 3000, full: true },
+        { id: "b2", kind: "bench", edge: 3, t: 0.5, widthMm: 2000, full: true },
+      ],
+    };
+    const s1 = edgeItemShape(lStage, lStage.stairs![0], deckOf)!;
+    const s2 = edgeItemShape(lStage, lStage.stairs![1], deckOf)!;
+    assert(s1.ends.includes("mitred") && s2.ends.includes("mitred"), `two banquettes at an inside corner are mitred (${s1.ends} / ${s2.ends})`);
+    let both = 0;
+    for (let x = 0; x <= 1200; x += 20)
+      for (let y = 0; y <= 1200; y += 20) {
+        const q = { x, y };
+        if (insidePoly(q, s1.polygon) && insidePoly(q, s2.polygon) && !onBoundary(q, s1.polygon, 3) && !onBoundary(q, s2.polygon, 3)) both++;
+      }
+    assert(both === 0, `…and share no floor at the corner (${both} samples in both)`);
   }
   console.log("stage self-check passed");
 }

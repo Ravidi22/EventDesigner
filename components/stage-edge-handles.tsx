@@ -21,6 +21,8 @@ import {
   type WallDistance,
 } from "@/lib/design-document/stage";
 import { startPointerGesture } from "@/lib/studio/gesture";
+import { benchSpecOf, patchBenchSide } from "@/lib/design-document/bench";
+import { slideRoom } from "@/lib/design-document/edge-touch";
 import { WalkingLine, slopeTextSize } from "@/components/climb-glyph";
 
 // A stage's EDGE ITEMS — its flights of stairs and its ramps — on a plan: how they are drawn, how
@@ -245,7 +247,7 @@ export function EdgeItemHandles({
   /** `from` is the stage's items as they stood when the press began — a grip pushed into a neighbour
    *  trims it against THAT, so pulling back gives the neighbour back (lib/design-document/stage.ts
    *  shareSide). Absent on a slide, which never trims. */
-  onChange: (item: StageStair, from?: StageStair[]) => void;
+  onChange: (item: StageStair, from?: StageStair[], alone?: boolean) => void;
   onEnd: () => void;
   /** A right-click on an item: it is picked, and the menu that opens is ITS (copy, duplicate,
    *  delete) — never the stage's, whose שכפול and מחיקה would act on the whole stage (QA EI-4). */
@@ -275,10 +277,11 @@ export function EdgeItemHandles({
   /** A position on a closed rim, read on the turn nearest `ref` — a pointer just past the seam is
    *  L+10 to a grip at L−100, not 10. */
   const unwrap = (s: number, ref: number, L: number) => s + L * Math.round((ref - s) / L);
-  const write = (item: StageStair, from: number, to: number, L: number, closed: boolean, base?: StageStair[]) => {
+  // `alone` (Alt held): the neighbours are cut where it overlaps them, never grown back (§2.3).
+  const write = (item: StageStair, from: number, to: number, L: number, closed: boolean, base?: StageStair[], alone?: boolean) => {
     const mid = (from + to) / 2;
     const full = closed ? to - from >= L - 1 : from <= 1 && to >= L - 1;
-    onChange({ ...item, t: (closed ? ((mid % L) + L) % L : mid) / L, widthMm: Math.round(to - from), full: full || undefined }, base);
+    onChange({ ...item, t: (closed ? ((mid % L) + L) % L : mid) / L, widthMm: Math.round(to - from), full: full || undefined }, base, alone);
   };
   /** Has this press travelled far enough to be a drag (and stays one once it has). */
   const armed = (st: NonNullable<typeof start.current>, ev: { clientX: number; clientY: number }) => {
@@ -323,7 +326,7 @@ export function EdgeItemHandles({
         const edgePt = (v: number) => toRoom(p, itemSidePoint(p.stage, item, v) ?? e.a);
         // Its stretch of the edge, as a line to hold it by (following a curved side).
         const held = Array.from({ length: 17 }, (_, k) => edgePt(span.from + ((span.to - span.from) * k) / 16));
-        const slide = (ev: { clientX: number; clientY: number }) => {
+        const slide = (ev: { clientX: number; clientY: number; altKey?: boolean }) => {
           const st = start.current;
           if (!st || !armed(st, ev)) return;
           const a = along(st.item, ev.clientX, ev.clientY);
@@ -344,14 +347,16 @@ export function EdgeItemHandles({
             else if (a.L - (from + w) < SNAP) from = a.L - w;
             else if (Math.abs(from + w / 2 - a.L / 2) < SNAP) from = a.L / 2 - w / 2;
           }
-          // …and held between its NEIGHBOURS on the side: a slide stops against the next item and
-          // is pulled flush to it, never through it (freeStretch, read when the press began).
+          // …and held between its NEIGHBOURS on the side — but a neighbour standing FLUSH against it
+          // gives way down to its least width, the joint moving with the item (§2.3); Alt holds it off
+          // them as before. Pulled to the flush spots on the way (freeStretch, read at the press).
           if (st.free) {
-            from = Math.max(st.free.from, Math.min(st.free.to - w, from));
-            if (from - st.free.from < SNAP) from = st.free.from;
-            else if (st.free.to - (from + w) < SNAP) from = st.free.to - w;
+            const room = closed ? st.free : slideRoom({ ...p.stage, stairs: st.items }, st.item, st.free, !!ev.altKey);
+            from = Math.max(room.from, Math.min(room.to - w, from));
+            if (Math.abs(from - st.free.from) < SNAP) from = st.free.from;
+            else if (Math.abs(st.free.to - (from + w)) < SNAP) from = st.free.to - w;
           }
-          write(st.item, from, from + w, a.L, closed);
+          write(st.item, from, from + w, a.L, closed, closed ? undefined : st.items, !!ev.altKey);
         };
         const press = (ev: React.PointerEvent) => {
           ev.stopPropagation();
@@ -434,7 +439,7 @@ export function EdgeItemHandles({
                   const { st, a } = got;
                   const s = closed ? unwrap(a.s, st.from, a.L) : a.s;
                   const from = Math.min(st.to - MIN_EDGE_ITEM_MM, closed ? Math.max(st.to - a.L, Math.round(s / 50) * 50) : Math.max(0, snapEnd(s, a.L)));
-                  write(st.item, from, st.to, a.L, closed, st.items);
+                  write(st.item, from, st.to, a.L, closed, st.items, ev.altKey);
                   setReadout({ at: beside(edgePt(from)), text: cm(st.to - from) });
                 }}
               />
@@ -452,10 +457,53 @@ export function EdgeItemHandles({
                   const { st, a } = got;
                   const s = closed ? unwrap(a.s, st.to, a.L) : a.s;
                   const to = Math.max(st.from + MIN_EDGE_ITEM_MM, closed ? Math.min(st.from + a.L, Math.round(s / 50) * 50) : Math.min(a.L, snapEnd(s, a.L)));
-                  write(st.item, st.from, to, a.L, closed, st.items);
+                  write(st.item, st.from, to, a.L, closed, st.items, ev.altKey);
                   setReadout({ at: beside(edgePt(to)), text: cm(to - st.from) });
                 }}
               />
+              {/* A sofa side's run: pressed, it slides along the banquette and nothing else moves —
+                  a press anywhere else on the banquette still slides the banquette (§2.1). */}
+              {shape.bench &&
+                (shape.sofas ?? []).map((sofa) => (
+                  <polygon
+                    key={sofa.side}
+                    points={sofa.polygon.map((q) => toRoom(p, q)).map((q) => `${q.x},${q.y}`).join(" ")}
+                    fill="transparent"
+                    stroke="var(--color-accent)"
+                    strokeWidth={1.5}
+                    strokeDasharray="5 3"
+                    vectorEffect="non-scaling-stroke"
+                    className="cursor-ew-resize touch-none"
+                    aria-label="ספה — גרירה לאורך הבנקט"
+                    onPointerDown={(ev) => {
+                      if (ev.button !== 0) return;
+                      ev.stopPropagation();
+                      const a0 = along(item, ev.clientX, ev.clientY);
+                      const lay = shape.bench!;
+                      if (!a0) return;
+                      const from = lay[sofa.side].offsetMm ?? 0;
+                      const at0 = { x: ev.clientX, y: ev.clientY };
+                      let moved = false;
+                      startPointerGesture(ev, {
+                        onMove: (m) => {
+                          if (!moved && Math.hypot(m.clientX - at0.x, m.clientY - at0.y) < DRAG_PX) return;
+                          moved = true;
+                          const a = along(item, m.clientX, m.clientY);
+                          if (!a) return;
+                          // Whole centimetres; the layout holds it on the banquette.
+                          const offsetMm = Math.round((from + a.s - a0.s) / 10) * 10;
+                          onChange({ ...item, bench: patchBenchSide(benchSpecOf(item), sofa.side, { offsetMm }, lay) });
+                          setReadout({ at: beside(toRoom(p, shape.base)), text: offsetMm ? `${offsetMm > 0 ? "+" : "−"}${cm(Math.abs(offsetMm))} מהמרכז` : "במרכז" });
+                        },
+                        onEnd: () => {
+                          setReadout(null);
+                          if (moved) onEnd();
+                        },
+                      });
+                    }}
+                    onClick={(ev) => ev.stopPropagation()}
+                  />
+                ))}
               {shape.kind === "bench" && (
                 <EdgeGrip
                   at={past(foot, outDir, gap)}
