@@ -134,6 +134,8 @@ export type Action =
   | { type: "setPlacementBows"; id: string; bows: [number, number, number, number] | null }
   // A rug's corners rounded (Placement.corners). null, or every corner square, takes the field away.
   | { type: "setPlacementCorners"; id: string; corners: [number, number, number, number] | null }
+  /** A קאנט's sides (Placement.edgeSides) — `null` = every side again. */
+  | { type: "setPlacementEdgeSides"; id: string; sides: number[] | null }
   | { type: "removePlacement"; id: string }
   // A stage re-drawn, re-fronted, or stretched by its handles — its build, and where it now stands.
   // `mirrored: false` when the outline was re-drawn in the room: a new outline is already the way
@@ -713,6 +715,15 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
       });
       return changed ? { ...doc, placements } : doc;
     }
+    case "setPlacementEdgeSides":
+      return {
+        ...doc,
+        placements: doc.placements.map((p) => {
+          if (p.id !== action.id) return p;
+          const { edgeSides: _old, ...rest } = p;
+          return action.sides ? { ...rest, edgeSides: [...new Set(action.sides)].sort((a, b) => a - b) } : rest;
+        }),
+      };
     case "setPlacementCorners":
       return {
         ...doc,

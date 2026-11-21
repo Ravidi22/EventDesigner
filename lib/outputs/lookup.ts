@@ -1,6 +1,8 @@
 // Wiring: adapt the catalog resolver + category registry into the injected lookups that
 // the pure aggregations (aggregate.ts, quote.ts) consume. This is the only outputs file that
 // touches the catalog graph.
+import { KANT_CATEGORY, kantRunMm } from "@/lib/catalog/kant";
+import { bedRunMm, kantTableOfTable } from "@/components/footprint-shape";
 import { aisleBrings, benchOf, deckOf, resolve } from "@/lib/studio/catalog-resolver";
 import { loadProducts } from "@/lib/catalog/storage";
 import { CATEGORIES, CATEGORY_BY_ID } from "@/lib/catalog/categories";
@@ -91,6 +93,17 @@ export function measureContext(structure?: VenueStructure, doc?: DesignDocumentC
       return p ? (p.variants[0]?.id ?? p.id) : undefined;
     },
     isRod: (variantId) => resolve(variantId)?.product.category === "curtain-rods",
+    // A קאנט: the sides of its table it runs on.
+    // …and a table garden: its bed's length (lib/catalog/table-bed.ts).
+    edgeRunMm: doc
+      ? (p) => {
+          const product = resolve(p.variantId)?.product;
+          const t = p.tableId ? doc.tables.find((x) => x.id === p.tableId) : undefined;
+          if (!product || !t) return undefined;
+          if (product.category === KANT_CATEGORY) return kantRunMm(kantTableOfTable(t), p.edgeSides);
+          return bedRunMm(t, product.appearance);
+        }
+      : undefined,
     unitOf: (variantId) => resolve(variantId)?.product.priceUnit ?? "unit",
     // Along the wall — a drape round a bowed wall covers the arc, not the chord.
     wallLengthMm: structure ? (wallId) => wallTrack(structure, wallId)?.lengthMm : undefined,

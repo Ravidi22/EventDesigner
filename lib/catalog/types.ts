@@ -327,6 +327,9 @@ export interface ArrangementSpec {
   trailMm?: number;
   /** A tall covered shape wound as a spiral, this many turns, rather than covered all round. */
   spiral?: number;
+  /** A TABLE GARDEN (lib/catalog/table-bed.ts): set on a table, the arrangement takes the table's
+   *  shape, smaller — a band down a long table, a disc on a round one; `widthMm` a typed width. */
+  bed?: { widthMm?: number };
 }
 
 /** A shape added to an item beside its base shape — a bar that is a counter with a round end, a
@@ -468,6 +471,8 @@ export interface MapAppearance {
   /** A fire trough's stones, body and guard (lib/catalog/fire.ts FireSpec) — the candlestick style
    *  "fire". Absent = its defaults (white stones round the burner, a 12 cm body). */
   fire?: Record<string, unknown>;
+  /** A קאנט's drop (lib/catalog/kant.ts KantSpec) — absent = 15 cm. */
+  kant?: Record<string, unknown>;
   /** A RUG's or a CLOTH's contour (lib/catalog/border.ts): a coloured band inside its edge, a second
    *  one inside a gap, the fringe in a colour of its own. The row's; a placement may override it
    *  (Placement.border). Absent = the drawing it always had. Ignored on every other category. */

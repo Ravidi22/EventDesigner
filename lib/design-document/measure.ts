@@ -27,6 +27,8 @@ export interface MeasureContext {
   /** The full length of a venue wall, in mm. Absent (or undefined for an unknown wall) = no plan
    *  available, so a drape falls back to being counted rather than measured. */
   wallLengthMm?: (wallId: string) => number | undefined;
+  /** A קאנט's run along its table's sides (lib/catalog/kant.ts kantRunMm); undefined for anything else. */
+  edgeRunMm?: (p: Placement) => number | undefined;
   /** The product's catalog footprint, in mm — the fallback size for a stretch item that has not
    *  been resized on the plan yet. */
   footprintMm?: (variantId: string) => { widthMm: number; depthMm: number } | undefined;
@@ -127,7 +129,8 @@ export function measure(p: Placement, ctx: MeasureContext): number {
   const size = p.sizeMm ?? ctx.footprintMm?.(p.variantId);
   if (unit === "m") {
     const along = ctx.climbOf?.(p.variantId) === "ramp" ? size?.depthMm : size?.widthMm;
-    const mm = railRunMm(p, ctx) ?? along;
+    // A קאנט runs the sides of its table it is on (lib/catalog/kant.ts), read against the document.
+    const mm = railRunMm(p, ctx) ?? ctx.edgeRunMm?.(p) ?? along;
     // No span and no size to fall back on: count it, rather than quietly bill zero metres.
     return mm ? round2((mm / 1000) * p.quantity) : p.quantity;
   }

@@ -8,6 +8,8 @@
 //
 // ⚠ COST SIDE. The item index carries `costPrice`, so this module is under lib/suppliers/ and
 // `npm run check:costs` keeps it out of every client-facing surface.
+import { KANT_CATEGORY, kantRunMm } from "@/lib/catalog/kant";
+import { bedFootprint, bedLengthMm, bedOf } from "@/lib/catalog/table-bed";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import type { Actor } from "@/lib/db/org";
@@ -171,6 +173,22 @@ function serverMeasureContext(byVariant: Map<string, Product>, structure?: Venue
       return undefined;
     },
     isRod: (variantId) => byVariant.get(variantId)?.category === "curtain-rods",
+    // A קאנט: the sides of its table it runs on — the table read off its own stored size here (the
+    // catalog's drawn outlines are the browser's).
+    edgeRunMm: doc
+      ? (p) => {
+          const product = byVariant.get(p.variantId);
+          const t = p.tableId ? doc.tables.find((x) => x.id === p.tableId) : undefined;
+          if (!product || !t) return undefined;
+          if (product.category === KANT_CATEGORY) return kantRunMm(t.diameterMm ? { diameterMm: t.diameterMm } : { widthMm: t.widthMm, depthMm: t.depthMm }, p.edgeSides);
+          // …and a table garden's bed, off the table's stored size (lib/catalog/table-bed.ts).
+          const spec = bedOf(product.appearance);
+          if (!spec) return undefined;
+          const round = !!t.diameterMm;
+          const w = t.diameterMm ?? t.widthMm ?? 0;
+          return bedLengthMm(bedFootprint({ widthMm: w, depthMm: t.diameterMm ?? t.depthMm ?? w, round }, spec));
+        }
+      : undefined,
     unitOf: (variantId) => (byVariant.get(variantId)?.priceUnit ?? "unit") as MeasureUnit,
     // Along the wall — a drape round a bowed wall covers the arc, not the chord.
     wallLengthMm: structure ? (wallId) => wallTrack(structure, wallId)?.lengthMm : undefined,

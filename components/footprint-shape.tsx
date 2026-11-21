@@ -3,7 +3,7 @@ import type { Product } from "@/lib/catalog/types";
 import type { ElementStyle } from "@/lib/element-style";
 import { chairBlockOf, resolve } from "@/lib/studio/catalog-resolver";
 import { chairRowsLayout } from "@/lib/design-document/chair-rows";
-import { customShapeBounds, footprintBounds, sizedFootprint, type Footprint } from "@/lib/studio/footprint";
+import { customShapeBounds, footprintBounds, footprintOutlines, sizedFootprint, type Footprint } from "@/lib/studio/footprint";
 import { blockFrame, blockLabelPoint, blockOutline, blockSpine, type BlockFrame } from "@/lib/design-document/block";
 import { autoLayout, dressingLayout, fromTableFrame, toTableFrame, type ChipBox, type TableBox } from "@/lib/design-document/dressing";
 import { footprintPolygons } from "@/lib/studio/proximity";
@@ -13,6 +13,8 @@ import { labelAnchor } from "@/lib/studio/label-anchor";
 import { footprintSpine } from "@/lib/studio/spine";
 import { isRunner } from "@/lib/catalog/categories";
 import { CLOTH_DROP_MM } from "@/lib/catalog/symbols";
+import { KANT_CATEGORY, KANT_PLAN_BAND_MM, kantStrips, kantTableOf, type KantTable } from "@/lib/catalog/kant";
+import { bedFootprint, bedLengthMm, bedOf } from "@/lib/catalog/table-bed";
 import { climbKindOf } from "@/lib/studio/climb-item";
 import { catalogVersion } from "@/lib/catalog/storage";
 import type { RugShape } from "@/lib/studio/rug-shape";
@@ -301,6 +303,22 @@ function blockLayout(block: DressBlock): Map<string, Point> | null {
   blockLayoutCache.set(key, out);
   return out;
 }
+/** A table garden's length on its table (lib/catalog/table-bed.ts) — what a bed priced by the metre
+ *  bills; undefined for anything that is not a bed. */
+export function bedRunMm(table: DesignTable, appearance: Parameters<typeof bedOf>[0]): number | undefined {
+  const spec = bedOf(appearance);
+  if (!spec) return undefined;
+  const box = tableBox(table);
+  const f = tableFootprint(table);
+  return bedLengthMm(bedFootprint({ widthMm: box.widthMm, depthMm: box.depthMm, round: f.kind === "circle" || f.kind === "ellipse" }, spec));
+}
+
+/** A table's sides as a קאנט reads them (lib/catalog/kant.ts) — its own drawn outline. */
+export function kantTableOfTable(table: DesignTable): KantTable {
+  const f = tableFootprint(table);
+  return kantTableOf(f as { kind: string }, footprintOutlines(f)[0]?.outline);
+}
+
 const isRunnerChip = (p: Placement) => {
   const product = resolve(p.variantId)?.product;
   return !!product && !p.stage && isRunner(product);
@@ -322,8 +340,15 @@ export function dressingSpots(
     const product = resolve(p.variantId)?.product;
     return product && !p.stage && isRunner(product) ? product : undefined;
   };
-  const runners = chips.filter((p) => runnerOf(p));
-  const items = chips.filter((p) => !runnerOf(p));
+  // A קאנט (lib/catalog/kant.ts) is not set out on the table either: it runs round its edge, a band
+  // over the cloth's hem along the sides it is on — laid by its own rule, like a runner.
+  const kantOf = (p: Placement) => resolve(p.variantId)?.product.category === KANT_CATEGORY && !p.stage;
+  const kants = chips.filter(kantOf);
+  // A TABLE GARDEN (lib/catalog/table-bed.ts) takes the table's own shape, smaller, every draw.
+  const bedSpecOf = (p: Placement) => (p.stage ? null : bedOf(resolve(p.variantId)?.product.appearance));
+  const beds = chips.filter((p) => !kantOf(p) && !!bedSpecOf(p));
+  const runners = chips.filter((p) => runnerOf(p) && !kantOf(p) && !bedSpecOf(p));
+  const items = chips.filter((p) => !runnerOf(p) && !kantOf(p) && !bedSpecOf(p));
   const asOne = block && block.members.length > 1 && !block.members.some((m) => m.arranged) ? blockLayout(block) : null;
   const layout = dressingLayout(table.arranged, box, items.map((p) => ({ ...chipBox(p), position: p.position })));
   const laid = runners.map((p) => {
@@ -347,7 +372,25 @@ export function dressingSpots(
       footprint: (ownAlongX ? { kind: "rect", widthMm: length, depthMm: width } : { kind: "rect", widthMm: width, depthMm: length }) as Footprint,
     };
   });
+  const kt = kants.length ? kantTableOfTable(table) : null;
+  const edged = kants.map((p) => ({
+    p,
+    local: { x: 0, y: 0 },
+    at: table.position,
+    rotation: table.rotation ?? 0,
+    box: { id: p.id, widthMm: box.widthMm, depthMm: box.depthMm },
+    runner: true,
+    footprint: { kind: "multi", parts: kantStrips(kt!, p.edgeSides, CLOTH_DROP_MM - KANT_PLAN_BAND_MM, CLOTH_DROP_MM).map((outline) => ({ outline })) } as Footprint,
+  }));
+  const tf = beds.length ? tableFootprint(table) : null;
+  const bedded = beds.map((p) => {
+    const f = bedFootprint({ widthMm: box.widthMm, depthMm: box.depthMm, round: tf?.kind === "circle" || tf?.kind === "ellipse" }, bedSpecOf(p)!);
+    const b = footprintBounds(f);
+    return { p, local: { x: 0, y: 0 }, at: table.position, rotation: table.rotation ?? 0, box: { id: p.id, widthMm: b.w, depthMm: b.h }, runner: true, footprint: f as Footprint };
+  });
   return [
+    ...edged,
+    ...bedded,
     ...laid,
     ...items.map((p) => {
       const room = asOne?.get(p.id);

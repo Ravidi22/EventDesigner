@@ -5842,6 +5842,7 @@ export function StudioScreen({
     renderPattern,
     renderDesigns,
     onScale: (id, scale) => act({ type: "setPlacementScale", id, scale }),
+    onEdgeSides: (id, sides) => act({ type: "setPlacementEdgeSides", id, sides }),
     onHang: (id, heightMm) => act({ type: "setPlacementHang", id, heightMm }),
     roofOf: (pt) => sketchRoofOf()(pt),
     onCentreOver: centreHung,

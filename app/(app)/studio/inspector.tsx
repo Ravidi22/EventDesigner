@@ -1,5 +1,6 @@
 "use client";
 
+import { KANT_CATEGORY, kantRunMm, sideCount } from "@/lib/catalog/kant";
 import { Fragment, useCallback, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   Minus,
@@ -82,7 +83,7 @@ import type { BenchSideKind, BenchSpec, ChairRows, DesignDocumentContent, Design
 import { ChairRowsPopover } from "@/components/chair-rows-popover";
 import { MAX_PER_ROW, MAX_ROWS } from "@/lib/design-document/chair-rows";
 import { BENCH_SIDE_KINDS, BENCH_SIDE_LABEL, BENCH_TOP_RANGE_MM, SOFA_SEAT_RANGE_MM, type BenchLayout, type BenchSideLayout } from "@/lib/design-document/bench";
-import { placementFootprint, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
+import { kantTableOfTable, placementFootprint, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
 import { footprintBounds } from "@/lib/studio/footprint";
 import {
   climbAccessibleEdit,
@@ -435,6 +436,8 @@ export type InspectorProps = {
   renderDesigns: (tableId: string) => ReactNode;
   /** How big one placed item is DRAWN (Placement.scale) — not what it costs or how many there are. */
   onScale: (placementId: string, scale: number) => void;
+  /** A קאנט's sides on its table (Placement.edgeSides) — `null` = every side. */
+  onEdgeSides?: (placementId: string, sides: number[] | null) => void;
   /** How high one CEILING item hangs above the floor (Placement.hangHeightMm); null = its catalog
    *  row's default again. A rigging fact — nothing priced or packed reads it. */
   onHang?: (placementId: string, heightMm: number | null) => void;
@@ -687,6 +690,7 @@ export function Inspector({
   renderPattern,
   renderDesigns,
   onScale,
+  onEdgeSides,
   onHang,
   roofOf,
   onCentreOver,
@@ -2526,6 +2530,38 @@ export function Inspector({
             ltr(sizePanel.axes.uniform ? `⌀${cm(sizePanel.size.widthMm)}` : `${cm(sizePanel.size.widthMm)}×${cm(sizePanel.size.depthMm)}`),
             <SizeFields panel={sizePanel} onSize={onSize} labels={aisle ? { width: "אורך", depth: "רוחב" } : undefined} />,
           ),
+        // A קאנט on a table: which of the table's sides it runs on (lib/catalog/kant.ts) — every side
+        // until one is unticked (DECIDE 14).
+        !!table &&
+          r?.product.category === KANT_CATEGORY &&
+          !!onEdgeSides &&
+          (() => {
+            const kt = kantTableOfTable(table);
+            const n = sideCount(kt);
+            const names = n === 4 ? ["עליון", "ימני", "תחתון", "שמאלי"] : n === 1 ? ["מסביב"] : Array.from({ length: n }, (_, i) => `צד ${i + 1}`);
+            const on = p.edgeSides ?? Array.from({ length: n }, (_, i) => i);
+            const metres = (kantRunMm(kt, p.edgeSides) / 1000).toFixed(2);
+            return G(
+              "kant",
+              Ruler,
+              "צדדים",
+              ltr(`${metres} מ׳`),
+              <div className="space-y-1.5">
+                {names.map((label, i) => (
+                  <SwitchRow
+                    key={i}
+                    checked={on.includes(i)}
+                    onChange={(v) => {
+                      const next = v ? [...on, i] : on.filter((s) => s !== i);
+                      onEdgeSides(p.id, next.length === n ? null : next);
+                    }}
+                    label={label}
+                  />
+                ))}
+                <Note>הקאנט מחושב לפי המטרים של הצדדים שנבחרו — {metres} מ׳.</Note>
+              </div>,
+            );
+          })(),
         // On a table: the same item onto other tables, in a pattern.
         !!table && G("pattern", LayoutGrid, "דפוס", "החלה על שולחנות", renderPattern(table.id, p.id)),
         // Hung over a table: over other tables in a pattern, strung along its row, one over each item

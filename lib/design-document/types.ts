@@ -156,6 +156,9 @@ export interface Placement {
    *  measurement, kept when the rug is stretched; held to the rug's size when drawn). Absent = square
    *  corners. A drawing fact like `bows`. */
   corners?: [number, number, number, number];
+  /** A קאנט (lib/catalog/kant.ts): the table's sides it runs on, by index round the table's outline
+   *  (a round table has one). Absent = every side (DECIDE 14). Read only on a `table-edges` item. */
+  edgeSides?: number[];
   /** A RUG's or a CLOTH's contour on THIS plan (lib/catalog/border.ts) — overriding its row's
    *  (MapAppearance.border); null = none on this plan, whatever the row says; absent = the row's own.
    *  The vessel's rule. A drawing fact like `bows`: nothing priced or packed reads it. */

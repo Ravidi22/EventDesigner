@@ -64,6 +64,7 @@ export function arrangementPatch(prev: ArrangementSpec | undefined, patch: { [K 
   if (!next.fall) delete next.fall;
   if (!(next.trailMm && next.trailMm > 0)) delete next.trailMm;
   if (!(next.spiral && next.spiral > 0)) delete next.spiral;
+  if (!next.bed) delete next.bed;
   return Object.keys(next).length ? next : undefined;
 }
 

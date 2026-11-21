@@ -1367,6 +1367,23 @@ function PictureFields({
           const form = followsShape(fp) ? "shape" : isFlowerForm(chosen) ? chosen : defaultFlowerForm(preview.dimensions.heightMm, b.w, b.h);
           return (
             <div className="space-y-2">
+              {/* A TABLE GARDEN (lib/catalog/table-bed.ts, §7.2): on a table it takes the table's own
+                  shape, smaller — a band down a long table, a disc on a round one. */}
+              {product.layer === "table" && (
+                <>
+                  <SwitchRow
+                    checked={!!a?.bed}
+                    onChange={(on) => set({ bed: on ? {} : undefined })}
+                    label="גינת ירק על השולחן"
+                    hint="על השולחן הסידור מקבל את צורת השולחן, קטנה יותר: פס לאורך שולחן ארוך (40 ס״מ מכל צד לכלים, 30 מהקצוות), עיגול 40 ס״מ פנימה בשולחן עגול. נמדד לפי אורך הערוגה."
+                  />
+                  {a?.bed && (
+                    <PanelRow label="רוחב הערוגה (ס״מ)" htmlFor="arr-bed-w">
+                      <NumberField id="arr-bed-w" decimals={0} min={0} max={300} commitOnBlur value={Math.round((a.bed.widthMm ?? 0) / 10)} onChange={(v) => set({ bed: v > 0 ? { widthMm: Math.round(v * 10) } : {} })} className="w-20" />
+                    </PanelRow>
+                  )}
+                </>
+              )}
               {form === "shape" && (
                 <>
                   <PanelRow label="ליפוף ספירלי (סיבובים)" htmlFor="arr-spiral">

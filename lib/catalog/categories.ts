@@ -236,6 +236,10 @@ export const CATEGORIES: CategoryDef[] = [
   // the hall pass, beside the sofas; never a dining table (no seats, no number, nothing dressed).
   { id: "game-tables", label: "שולחנות משחק", group: "grp-seating", defaultLayer: "floor", icon: Dices, dims: "box", defaultHeightMm: 790, fields: [] },
   { id: "tablecloths", label: "מפות", group: "grp-table-design", defaultLayer: "table", icon: Square, dims: "both", fields: [], anchor: "table", needsHeight: false },
+  // A קאנט (bug round 2026-11-21 §7.1, lib/catalog/kant.ts): a band hung round a table's edge over
+  // its cloth — worn WITH the cloth, never in its place (anchor "free": an item on the table), along
+  // the sides it runs on, billed by their metres.
+  { id: "table-edges", label: "קאנטים", group: "grp-table-design", defaultLayer: "table", icon: Square, dims: "both", fields: [], needsHeight: false, defaultPriceUnit: "m" },
   // The one category that defaults to consumable: a centrepiece is flowers far more often than it
   // is the vase they stand in, and a designer who stocks reusable pieces changes one field.
   { id: "centerpieces", label: "מרכזי שולחן", group: "grp-table-design", defaultLayer: "table", icon: Flower2, dims: "round", fields: [], defaultStock: "consumable" },

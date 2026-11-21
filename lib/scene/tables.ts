@@ -35,7 +35,8 @@ import { chandelierDrawOf } from "@/lib/catalog/chandelier";
 import { chuppahDrawOf } from "@/lib/catalog/chuppah";
 import { ownBodyParts } from "./element-body";
 import { baseProfileOf } from "@/lib/element/adapter";
-import { type DressingSpot, dressBlockOf, dressingSpots, placementFootprint, tableBlock, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
+import { type DressingSpot, dressBlockOf, dressingSpots, kantTableOfTable, placementFootprint, tableBlock, tableBlockedSides, tableFootprint } from "@/components/footprint-shape";
+import { KANT_CATEGORY, KANT_OUT_MM, KANT_THICK_MM, kantDropOf, kantStrips } from "@/lib/catalog/kant";
 import { DEFAULT_TONE } from "@/components/item-symbol";
 import { primeCatalog } from "@/lib/catalog/storage";
 import { isMain } from "../self-check";
@@ -520,6 +521,15 @@ export function dressingOf(
     const p = spot.p;
     const resolved = resolve(p.variantId);
     const product = resolved?.product;
+    // A קאנט (lib/catalog/kant.ts) hangs DOWN from the top's edge over the cloth, `drop` deep, along
+    // its sides — never stood on the top like the things set out on it.
+    if (product?.category === KANT_CATEGORY) {
+      const drop = kantDropOf(product.appearance);
+      const tone = hexOf(resolved?.swatch) ?? hexOf(product.appearance?.style?.fill) ?? "#ffffff";
+      const parts = kantStrips(kantTableOfTable(table), p.edgeSides, KANT_OUT_MM, KANT_OUT_MM + KANT_THICK_MM).map((outline) => ({ shape: "extrude" as const, outline: { outline }, h: drop, at: vec3(0, 0, 0) }));
+      out.item(p.id, { type: "item", id: p.id, label: product.name }, { parts, material: clothMaterial(tone), instanced: [], emitters: [] }, transform(vec3(table.position.x, table.position.y, topZ - drop), table.rotation ?? 0, !!table.mirrored, 1));
+      continue;
+    }
     const footprint = spot.footprint ?? placementFootprint(p);
     const kind = symbolOf(product, footprint);
     const ctx = itemContextOf(p, product, resolved, footprint, author);
