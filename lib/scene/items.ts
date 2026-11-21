@@ -271,7 +271,7 @@ const FOLLOWS_OUTLINE: ReadonlySet<SymbolKind> = new Set<SymbolKind>(["bar", "be
  *  round). The shape editor labels their tiles "plan only" rather than promising the 3D (SH-3, QA
  *  2026-11-20); the self-check below holds this list to the recipes, so a style built later says
  *  the label is stale. */
-export const PLAN_ONLY_STYLES: ReadonlySet<SymbolKind> = new Set<SymbolKind>(["sofa", "vase", "tree", "column", "fountain", "arch"]);
+export const PLAN_ONLY_STYLES: ReadonlySet<SymbolKind> = new Set<SymbolKind>(["sofa", "tree", "column", "fountain", "arch"]);
 
 /** A build moved by (dx, dy) in the item's frame — a picture standing in its first shape's box. */
 function shifted(b: ItemBuild, dx: number, dy: number): ItemBuild {
@@ -889,7 +889,11 @@ function lampBody(ctx: ItemContext): ItemBuild {
  *  way lib/catalog/flower-kinds.ts reads a flower and isRunner a runner): "מרטיני" is a martini on a
  *  stem, "צילינדר" a straight cylinder, "קערה" a bowl — on a foot when it says "רגל". Otherwise
  *  the proportions: very slender is a cylinder, squat is a bowl, anything else the plan's urn. */
-export type VesselForm = "trumpet" | "cylinder" | "bowl" | "pedestal" | "urn" | "plinth";
+export type VesselForm = "trumpet" | "cylinder" | "bowl" | "pedestal" | "vase" | "urn" | "plinth";
+
+/** The vase styles the plan draws (SYMBOL_STYLES.vase) — each its own body in the room too (bug
+ *  round 2026-11-21 §5.2, QA VS-2: every style built the same cone). */
+const VASE_STYLE_FORMS: readonly VesselForm[] = ["vase", "cylinder", "trumpet", "urn", "pedestal", "bowl"];
 const VESSEL_WORDS: [VesselForm, RegExp][] = [
   // A PLINTH — a stand the flowers are set ON, not a vessel they stand in (2026-11-13, the user's
   // aisle photograph: a mound of roses on every white box): a solid block of its own footprint.
@@ -904,7 +908,14 @@ export function vesselForm(name: string | undefined, w: number, d: number, h: nu
   const wide = Math.max(w, d);
   if (h >= 5 * wide) return "cylinder";
   if (h <= 0.6 * wide) return "bowl";
-  return "urn";
+  // The plain tapered vase every nameless one was (called "urn" before the styles were built).
+  return "vase";
+}
+
+/** A vessel's form: the STYLE picked in the editor (the plan's tiles), else the guess by its name and
+ *  proportions — so a row with no style builds exactly what it always did. */
+export function vesselFormOf(style: string | undefined, name: string | undefined, w: number, d: number, h: number): VesselForm {
+  return style && (VASE_STYLE_FORMS as readonly string[]).includes(style) ? (style as VesselForm) : vesselForm(name, w, d, h);
 }
 
 /** A metal shade by its name — gold, silver, nickel, copper, brass (the catalog's variants say so). */
@@ -932,9 +943,15 @@ const VESSEL_PROFILES: Record<VesselForm, { outer: [number, number][]; inner: [n
     inner: [[0.92, 1], [0.7, 0.4], [0, 0.15]],
   },
   // The plan's urn (item-symbol.tsx:670 vase): rim 1.0, opening 0.8, foot 0.32.
-  urn: {
+  vase: {
     outer: [[0.32, 0], [0.32, 0.04], [0.6, 0.3], [0.86, 0.7], [1, 1]],
     inner: [[0.8, 1], [0.68, 0.6], [0.28, 0.2], [0, 0.2]],
+  },
+  // A bellied jar on a foot, a narrow neck and a turned-out lip — the plan's "כד עם ידיות"; its two
+  // handles are added by vaseBody (urnHandles).
+  urn: {
+    outer: [[0, 0], [0.42, 0], [0.42, 0.04], [0.36, 0.08], [0.72, 0.26], [0.98, 0.46], [0.9, 0.64], [0.58, 0.8], [0.5, 0.87], [0.62, 0.96], [0.68, 1]],
+    inner: [[0.6, 1], [0.44, 0.88], [0.5, 0.8], [0.84, 0.64], [0.9, 0.46], [0.66, 0.28], [0, 0.18]],
   },
   // A round plinth: a closed drum (a square one is a box — vaseBody).
   plinth: {
@@ -959,7 +976,7 @@ export function vesselRimShare(vessel: Pick<Product, "name" | "dimensions"> | un
 function vaseBody(ctx: ItemContext): ItemBuild {
   const { widthMm: w, depthMm: d, heightMm: h, tone } = ctx;
   const R = w / 2;
-  const form = vesselForm(ctx.product?.name, w, d, h);
+  const form = vesselFormOf(ctx.drawStyle, ctx.product?.name, w, d, h);
   const shade = ctx.resolved?.variant?.name ?? "";
   // A material the row (or its shade) says it is made of wins over the guess (bug round 2026-11-21 §4;
   // QA MT-1: a white vase was always CLEAR glass).
@@ -987,7 +1004,28 @@ function vaseBody(ctx: ItemContext): ItemBuild {
   }
   const { outer, inner } = VESSEL_PROFILES[form];
   b.parts.push(shaped(outer), shaped(inner));
+  if (form === "urn") b.parts.push(...urnHandles(R, scaleY ?? 1, h));
   return b;
+}
+
+/** A jar's two handles, one each side: a loop out from the shoulder and back in under the lip, a
+ *  string of overlapping beads thick enough to read as one bar — in the jar's own material. */
+function urnHandles(R: number, scaleY: number, h: number): Part[] {
+  const t = Math.max(5, R * 0.07);
+  const from = { r: R * 0.94, z: h * 0.5 };
+  const to = { r: R * 0.56, z: h * 0.84 };
+  const reach = R * 0.3;
+  const out: Part[] = [];
+  const N = 32;
+  for (const side of [1, -1])
+    for (let i = 0; i <= N; i++) {
+      const s = i / N;
+      // Out along a half loop: the radius swells by `reach` at the middle of the run up.
+      const r = from.r + (to.r - from.r) * s + reach * Math.sin(Math.PI * s);
+      const z = from.z + (to.z - from.z) * s;
+      out.push(sphere(t, vec3(side * r, 0, z)));
+    }
+  return scaleY !== 1 ? out.map((p) => (p.shape === "sphere" ? { ...p, at: vec3(p.at.x, p.at.y * scaleY, p.at.z) } : p)) : out;
 }
 
 /** The inside of a vessel turned to `outer` (shares of R and h, bottom to top): from its opening down,
@@ -1208,7 +1246,16 @@ if (isMain(import.meta.url)) {
   assert(vesselRimShare({ name: "פודיום לבן 90", dimensions: { widthMm: 450, depthMm: 450, heightMm: 900 } }) === 1 && vesselRimShare({ name: "אגרטל", dimensions: { diameterMm: 200, heightMm: 300 } }) === 0.9, "…at its very top; flowers in a vase start just under its rim");
   assert(vesselForm("צילינדר זכוכית מפוספס 50", 60, 60, 500) === "cylinder", "a cylinder is straight");
   assert(vesselForm("קערה אובלית על רגל 60", 600, 300, 200) === "pedestal" && vesselForm("קערה שטוחה", 400, 400, 120) === "bowl", "a bowl on a foot has a pedestal; a bowl does not");
-  assert(vesselForm(undefined, 200, 200, 300) === "urn" && vesselForm(undefined, 60, 60, 500) === "cylinder" && vesselForm(undefined, 400, 400, 150) === "bowl", "…and nameless ones go by their proportions");
+  assert(vesselForm(undefined, 200, 200, 300) === "vase" && vesselForm(undefined, 60, 60, 500) === "cylinder" && vesselForm(undefined, 400, 400, 150) === "bowl", "…and nameless ones go by their proportions");
+  // §5.2 / QA VS-2: the style picked is the body built; no style = the guess, as before.
+  assert(vesselFormOf("bowl", "אגרטל מרטיני", 200, 200, 300) === "bowl" && vesselFormOf(undefined, "אגרטל מרטיני", 200, 200, 300) === "trumpet", "a style picked wins over the name; none = the name's guess");
+  const plainV = itemBody("vase", ctxOf({ kind: "circle", diameterMm: 300 }, 400, { tone: "#c9a24a" }));
+  const jar = itemBody("vase", ctxOf({ kind: "circle", diameterMm: 300 }, 400, { tone: "#c9a24a", drawStyle: "urn" }));
+  assert(plainV.parts.length === 2 && jar.parts.filter((p) => p.shape === "lathe").length === 2 && jar.parts.filter((p) => p.shape === "sphere").length > 20, "כד עם ידיות is a jar with two handles; a plain vase has none");
+  const handleXs = jar.parts.filter((p) => p.shape === "sphere").map((p) => (p as { at: { x: number } }).at.x);
+  assert(Math.max(...handleXs) > 150 && Math.min(...handleXs) < -150, "…one handle each side, standing out past the belly");
+  const latheSig = (bb: typeof jar) => JSON.stringify(bb.parts.filter((p) => p.shape === "lathe").map((p) => (p as { profile: unknown }).profile));
+  assert(new Set(["vase", "cylinder", "trumpet", "urn", "pedestal", "bowl"].map((st) => latheSig(itemBody("vase", ctxOf({ kind: "circle", diameterMm: 300 }, 400, { tone: "#c9a24a", drawStyle: st as ItemContext["drawStyle"] }))))).size === 6, "every vase style builds a body of its own");
   // A row whose shapes carry their own body is built from them, whatever its category: a vase whose
   // designer drew a bowl's profile is a lathe of that profile, not the vase recipe's guess from its
   // name; the same row without a profile is the recipe's.

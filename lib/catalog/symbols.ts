@@ -372,7 +372,8 @@ export const SYMBOL_STYLES: Partial<Record<SymbolKind, SymbolStyleSet>> = {
     sample: (s) => (s === "corner" ? rect(2400, 1700) : s === "curved" ? rect(2600, 1100) : s === "ottoman" ? rect(1400, 600) : rect(2100, 900)),
   },
   vase: {
-    title: "צורת הכלי",
+    // "סוג", not "צורת" — the first shape's body group is "צורת הכלי" (QA VS-9: two controls, one name).
+    title: "סוג הכלי",
     styles: ["vase", "cylinder", "trumpet", "urn", "pedestal", "bowl"],
     label: {
       vase: "אגרטל",

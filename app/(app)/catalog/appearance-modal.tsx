@@ -2015,7 +2015,9 @@ function withSizeFor(p: Product): Product {
   const shape = shapeOf(p);
   if (shape === "custom" || CATEGORY_BY_ID[p.category]?.sizing === "stretch") return p;
   const d = p.dimensions;
-  const def = defaultDims(shape);
+  // Something that stands ON a table (a vase, a candlestick) starts at a table piece's size, 30 cm —
+  // not at the 1.6 m a table or a stage starts at (QA VS-10).
+  const def = p.layer === "table" ? { diameterMm: 300, widthMm: 300, depthMm: 300 } : defaultDims(shape);
   if (usesDiameter(shape)) return roundSizeMm(shape, d) ? p : { ...p, dimensions: { ...d, diameterMm: def.diameterMm } };
   if (d.widthMm && d.depthMm) return p;
   return { ...p, dimensions: { ...d, widthMm: d.widthMm || def.widthMm, depthMm: d.depthMm || def.depthMm } };
