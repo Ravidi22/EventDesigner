@@ -556,6 +556,9 @@ export type InspectorProps = {
   onFillEdges: (kind: EdgeKindId) => void;
   onSelectEdge: (itemId: string | null) => void;
   onRemoveStair: (stairId: string) => void;
+  /** The picked edge item's clipboard (lib/design-document/edge-copy.ts, QA EI-3/EI-5): a copy
+   *  flush beside it on its side, and copy / cut of THAT item — never of the stage under it. */
+  edgeVerbs?: { duplicate: () => void; copy: () => void; cut: () => void };
   /** An edge item's kind, width, steps (`risers: null` = back to automatic), depth or heights, one of
    *  a banquette's two sides — or whether it stands outside the stage or set into it (`inner`). */
   onStairChange: (
@@ -734,6 +737,7 @@ export function Inspector({
   onFillEdges,
   onSelectEdge,
   onRemoveStair,
+  edgeVerbs,
   onStairChange,
   benchPanel,
   onBench,
@@ -1503,8 +1507,15 @@ export function Inspector({
                   />
                 </>
               )}
-              {/* No copy: a second flight is clicked onto a side from the stage's ״קצוות״. */}
-              <QuickTail onDelete={() => onRemoveStair(it.id)} deleteLabel={`מחיקת ה${label}`} />
+              {/* Copy = a second one flush beside it on the same side; the "…" copies or cuts it, to be
+                  pasted (Ctrl+V) onto any side clicked — of this stage or another. */}
+              <QuickTail
+                onCopy={edgeVerbs?.duplicate}
+                copyLabel="שכפול לצדו · Ctrl+D"
+                onDelete={() => onRemoveStair(it.id)}
+                deleteLabel={`מחיקת ה${label}`}
+                more={edgeVerbs ? clipboardItems(edgeVerbs.copy, edgeVerbs.cut) : undefined}
+              />
             </Bar>
           );
         return groupsOf(

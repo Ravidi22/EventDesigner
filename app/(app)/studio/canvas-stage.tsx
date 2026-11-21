@@ -308,6 +308,7 @@ export function CanvasStage({
   stageWallDistance,
   activeEdgeItem,
   onEdgeItemSelect,
+  onEdgeItemMenu,
   onEdgeItemChange,
   stairPick,
   onPickStair,
@@ -468,6 +469,9 @@ export function CanvasStage({
   /** The stairs / banquette / barrier being edited on the selected stage. */
   activeEdgeItem?: string | null;
   onEdgeItemSelect?: (stageId: string, itemId: string | null) => void;
+  /** The right-click menu of ONE stair / banquette / barrier on the selected stage (QA EI-4): its
+   *  own copy, duplicate and delete — the stage's menu would act on the whole stage. */
+  onEdgeItemMenu?: (stageId: string, itemId: string) => ContextMenuItem[];
   /** An edge item slid along its side or resized by its grips. */
   /** `from`: the stage's items when the gesture began — a resize trims its neighbours against them
    *  (shareSide); a slide passes nothing and trims nothing. */
@@ -1813,9 +1817,17 @@ export function CanvasStage({
     // is axis-aligned and has no facing to ride, and a handle that jumped as the box re-fitted
     // itself each frame would be chasing the pointer rather than answering it.
     const only = rotatableRefs.length === 1 ? facingOf(rotatableRefs[0]) : 0;
+    // A lone stage's knob stands past whatever stands out from its −y side — its front flight, a
+    // banquette — never on it: at the box's edge it sat on the front stairs, and the click meant to
+    // pick them turned the stage instead (QA EI-8). The edge items are in the stage's frame, which
+    // is the knob's own (it rides round with the stage).
+    const lone = rotatableRefs.length === 1 && rotatableRefs[0].kind === "placement" ? doc.placements.find((x) => x.id === rotatableRefs[0].id) : undefined;
+    const out = lone?.stage
+      ? Math.max(0, ...(lone.stage.stairs ?? []).flatMap((st) => edgeItemShape(lone.stage!, st, deckOf)?.polygon.map((q) => -q.y) ?? []))
+      : 0;
     return {
       pivot: { x: b.x, y: b.y },
-      reachMm: b.depthMm / 2,
+      reachMm: Math.max(b.depthMm / 2, out),
       rotationDeg: only,
       count: rotatableRefs.length,
     };
@@ -1914,6 +1926,8 @@ export function CanvasStage({
    *  Held in a ref for the canvas's own contextmenu handler, which fires on the same event, before
    *  the selection it just changed has rendered. */
   const contextRefs = useRef<SelectionRef[] | null>(null);
+  /** …and when the right-click landed on an edge item of the selected stage, which one. */
+  const edgeContext = useRef<{ stageId: string; itemId: string } | null>(null);
   const contextFor = (ref: SelectionRef) => () => {
     if (isSel(ref.kind, ref.id)) contextRefs.current = selection;
     else {
@@ -2058,13 +2072,16 @@ export function CanvasStage({
       selected={[]}
       onSelect={() => onSelect(null, false)}
       contextMenuItems={
-        onContextMenu || onContextMenuAt || onFloorMenu
+        onContextMenu || onContextMenuAt || onFloorMenu || onEdgeItemMenu
           ? (point: Point) => {
               // A node's own contextmenu (contextFor) runs first on the same event and names what it
               // is about; nothing named = the press landed on no thing of the sketch's.
               const hit = contextRefs.current;
               const refs = hit ?? selection;
               contextRefs.current = null;
+              const edge = edgeContext.current;
+              edgeContext.current = null;
+              if (edge && onEdgeItemMenu) return onEdgeItemMenu(edge.stageId, edge.itemId);
               return [
                 ...(hit ? [] : (onFloorMenu?.(point) ?? [])),
                 ...(onContextMenuAt?.(point, refs) ?? []),
@@ -2591,6 +2608,10 @@ export function CanvasStage({
               onSelect={(itemId) => onEdgeItemSelect(edgingStage.id, itemId)}
               onChange={(item, from) => onEdgeItemChange(edgingStage.id, item, from)}
               onEnd={onEndDrag}
+              onContext={(itemId) => {
+                edgeContext.current = { stageId: edgingStage.id, itemId };
+                onEdgeItemSelect(edgingStage.id, itemId);
+              }}
             />
           )}
 
@@ -2637,7 +2658,8 @@ export function CanvasStage({
                   ? onResizeTable(resizing.ref.id, size, centre)
                   : onResizePlacement(resizing.ref.id, size, centre)
               }
-              onEnd={onEndDrag}
+              // Named, so the host settles what the resize did (a stage's edge items, QA EI-7).
+              onEnd={() => onEndDrag([resizing.ref])}
             />
           )}
 

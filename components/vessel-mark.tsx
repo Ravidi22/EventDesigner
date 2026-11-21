@@ -1,7 +1,7 @@
 import { memo } from "react";
 import { resolve } from "@/lib/studio/catalog-resolver";
 import { footprintBounds, resolveFootprint, type Footprint } from "@/lib/studio/footprint";
-import { symbolOf } from "@/lib/catalog/symbols";
+import { drawStyleOf, symbolOf } from "@/lib/catalog/symbols";
 import { ItemSymbol } from "./item-symbol";
 import { FootprintShape } from "./footprint-shape";
 
@@ -55,8 +55,10 @@ export const VesselMark = memo(function VesselMark({
   const symbol = symbolOf(r.product, f);
   return (
     <g className="pointer-events-none">
+      {/* Its own style — a כד with handles is one under flowers too (QA VS-3: none was passed, so every
+          vessel under an arrangement was drawn as the plain vase). */}
       {symbol ? (
-        <ItemSymbol kind={symbol} footprint={f} count={1} tone={own} ink={ink} print={print} />
+        <ItemSymbol kind={symbol} footprint={f} count={1} tone={own} ink={ink} print={print} drawStyle={drawStyleOf(r.product)} />
       ) : (
         <FootprintShape footprint={f} fill={own ?? "#ffffff"} stroke={ink} strokeWidth={1} vectorEffect="non-scaling-stroke" />
       )}

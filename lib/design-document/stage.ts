@@ -29,7 +29,7 @@
 // side's first edge and how far along the whole side — which on straight sides is exactly the edge.
 //
 // Pure, no DOM, self-checked: `npm run check:stage`.
-import type { Placement, Point, StageBuild, StageEdgeKind, StageLevel, StagePiece, StageStair } from "./types";
+import type { BenchSide, Placement, Point, StageBuild, StageEdgeKind, StageLevel, StagePiece, StageStair } from "./types";
 import type { Product } from "../catalog/types";
 import { asRect, defaultFront, fillWithDecks, polygonsOverlap, signedArea, type DeckType, type FillResult, type LaidDeck, type MissingPiece } from "../studio/stage-fill";
 import { pieceName, type PieceInfo } from "../studio/stage-rim";
@@ -1936,14 +1936,31 @@ export function shareSide(stage: StageBuild, keepId: string): StageStair[] {
       out.push(it); // nothing of it under the kept item
       continue;
     }
-    let first = true;
-    for (const [f, t] of left) {
+    // ONE piece keeps the item — its id (what is perched on it, the bar's pick) and everything typed
+    // on it: the piece under its middle, else the longest. Any other piece is a banquette of its
+    // own with the automatic seat counts and no sofa — a split used to copy the whole spec onto both
+    // pieces, two centred sofas and 8 typed chairs become 5 + 5 (QA EI-10).
+    const mid = (sp.from + sp.to) / 2;
+    const keeper = left.findIndex(([f, t]) => mid >= f && mid <= t) >= 0 ? left.findIndex(([f, t]) => mid >= f && mid <= t) : left.reduce((best, [f, t], i) => (t - f > left[best][1] - left[best][0] ? i : best), 0);
+    left.forEach(([f, t], i) => {
       const { full: _full, ...rest } = it;
-      out.push({ ...rest, id: first ? it.id : freshId(it.id), t: wrapT((f + t) / 2, side.L), widthMm: Math.round(t - f) });
-      first = false;
-    }
+      const place = { t: wrapT((f + t) / 2, side.L), widthMm: Math.round(t - f) };
+      if (i === keeper) out.push({ ...rest, id: it.id, ...place });
+      else out.push({ ...plainPiece(rest), id: freshId(it.id), ...place });
+    });
   }
   return out;
+}
+
+/** A piece split off an item: the same kind and heights, but no typed seat counts and no sofa — those
+ *  stay with the piece that kept the item (shareSide). Stairs and the rest carry nothing typed per
+ *  piece but their risers, which are the stage's step and stay. */
+function plainPiece<T extends StageStair>(it: T): T {
+  const { seats: _seats, ...rest } = it;
+  if (!rest.bench) return rest as T;
+  const side = (sd?: BenchSide): BenchSide | undefined => (!sd ? sd : sd.kind === "sofa" ? { kind: "none" } : { kind: sd.kind });
+  const { back, front, ...bench } = rest.bench;
+  return { ...rest, bench: { ...bench, ...(back ? { back: side(back) } : {}), ...(front ? { front: side(front) } : {}) } } as T;
 }
 
 /** The stretch of its side `item` may stand on without touching another item on it: from the end of
@@ -1977,15 +1994,35 @@ export function freeStretch(stage: StageBuild, item: StageStair): { from: number
  *  one, and the flight is what parts round it. What a merge or a reshape hands back goes through
  *  this so no two items it carried over stand through each other. Each pass leaves everything clear
  *  of its keeper, so a later pass never cuts an earlier keeper. */
+/** The stage's edge items with no two standing through each other — resolveOverlaps alone, WITHOUT
+ *  joining touching items into one (tidyEdgeItems does both). What a resize leaves: a side made
+ *  shorter clamps every item on it on its own (itemSpan), so a 6 m front of banquette | flight |
+ *  banquette typed down to 2.4 m stood all three through each other (QA EI-7). Items already apart
+ *  come back as they were (the same objects). */
+export function separateEdgeItems(stage: StageBuild): StageStair[] {
+  return resolveOverlaps(stage);
+}
+
 function resolveOverlaps(stage: StageBuild): StageStair[] {
   const width = (it: StageStair) => {
     const sp = itemSpan(stage, it);
     return sp ? sp.to - sp.from : Infinity;
   };
   let items = [...(stage.stairs ?? [])];
-  for (const it of [...items].sort((a, b) => width(a) - width(b))) {
-    if (!items.some((x) => x.id === it.id)) continue;
-    items = shareSide({ ...stage, stairs: items }, it.id);
+  // Pass after pass until nothing moves: a split's second piece is a NEW item no earlier pass
+  // looked at, so two banquettes split round one flight could still stand through each other
+  // (found with QA EI-7: banquette | flight | banquette on a front made 2.4 m).
+  for (let pass = 0; pass < 8; pass++) {
+    let changed = false;
+    for (const it of [...items].sort((a, b) => width(a) - width(b))) {
+      if (!items.some((x) => x.id === it.id)) continue;
+      const next = shareSide({ ...stage, stairs: items }, it.id);
+      if (next.length !== items.length || next.some((x, i) => x !== items[i])) {
+        items = next;
+        changed = true;
+      }
+    }
+    if (!changed) break;
   }
   return items;
 }
@@ -4029,6 +4066,37 @@ if (isMain(import.meta.url)) {
         assert(openEdges(maAt, deckOf).some((r) => r.dropMm === 200), `${label}: a 20cm face where it rises from the apron`);
       }
     }
+  }
+  // QA EI-7: a 6 m front of banquette | flight | banquette, the stage typed down to 2.4 m wide — every
+  // item clamped on its own stood through the others; separated, none overlaps and the flight (the
+  // narrowest) keeps its stretch. Items already apart come back as the same objects.
+  {
+    const front: StageStair[] = [
+      { id: "bl", kind: "bench", edge: 0, t: 0.2, widthMm: 2400 },
+      { id: "fl", kind: "stairs", edge: 0, t: 0.5, widthMm: 1200 },
+      { id: "br", kind: "bench", edge: 0, t: 0.8, widthMm: 2400 },
+    ];
+    const narrow: StageBuild = { outline: rectOutline(2400, 3000), front: 0, decks: [], stairs: front };
+    const apart = separateEdgeItems(narrow);
+    const spans = apart.map((it) => itemSpan(narrow, it)!).sort((a, b) => a.from - b.from);
+    assert(spans.every((sp, i) => i === 0 || sp.from >= spans[i - 1].to - 1), "a stage made narrower leaves no two edge items through each other (EI-7)");
+    const fl = apart.find((it) => it.id === "fl");
+    assert(!!fl && fl.widthMm === 1200, "…the narrowest (the flight) keeps its stretch");
+    const wide: StageBuild = { outline: rectOutline(6000, 3000), front: 0, decks: [], stairs: front };
+    assert(separateEdgeItems(wide).every((it, i) => it === front[i]), "…and items already apart come back untouched");
+  }
+  // QA EI-10: a banquette with a sofa and typed chairs, split round a flight clicked into its middle,
+  // keeps them on ONE piece; the other piece seats automatically and has no sofa.
+  {
+    const typed: StageStair = { id: "b", kind: "bench", edge: 0, t: 0.35, widthMm: 4200, bench: { back: { kind: "chairs", seats: 8 }, front: { kind: "sofa", widthMm: 1800 } } };
+    const fl: StageStair = { id: "f", kind: "stairs", edge: 0, t: 0.3, widthMm: 1200 };
+    const split = shareSide({ outline: rectOutline(6000, 3000), front: 0, decks: [], stairs: [typed, fl] }, "f");
+    const pieces = split.filter((it) => it.kind === "bench");
+    assert(pieces.length === 2, "a flight clicked into a banquette splits it in two");
+    const kept = pieces.find((it) => it.id === "b")!;
+    const other = pieces.find((it) => it.id !== "b")!;
+    assert(kept.bench?.front?.kind === "sofa" && kept.bench?.back?.seats === 8, "…one piece keeps the sofa and the typed chairs");
+    assert(other.bench?.front?.kind === "none" && other.bench?.back?.kind === "chairs" && other.bench?.back?.seats === undefined, "…the other has no sofa and seats automatically");
   }
   console.log("stage self-check passed");
 }

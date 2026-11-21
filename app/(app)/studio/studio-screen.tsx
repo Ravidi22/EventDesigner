@@ -105,7 +105,7 @@ import {
 import { deleteStageTemplate, fetchStageRules, fetchStageTemplates, saveStageTemplate } from "@/lib/settings/actions";
 import { TableDesignsPanel, type WearMode } from "./table-designs-panel";
 import { cleanOutline, type AreaShape } from "@/lib/studio/stage-draw";
-import { MIN_EDGE_ITEM_MM, isRoundPiece, isShapedPiece, pieceOutline, placeEdgeItem, plainRect, pushTogether, settleEdgeItems, shapedRect, shareSide, stageBox, stageShapeOf, stageSide, type Frame } from "@/lib/design-document/stage";
+import { MIN_EDGE_ITEM_MM, separateEdgeItems, isRoundPiece, isShapedPiece, pieceOutline, placeEdgeItem, plainRect, pushTogether, settleEdgeItems, shapedRect, shareSide, stageBox, stageShapeOf, stageSide, type Frame } from "@/lib/design-document/stage";
 
 /** The room as a frame: what a stage's pieces are carried into to stand in room coordinates
  *  (the fill tool keeps its hand-placed decks there, see StageFillState.pieces). */
@@ -143,7 +143,8 @@ import { Menu } from "@/components/menu";
 import { ProductDrawer, blankProduct } from "../catalog/product-drawer";
 import { clipOf, compositeShell, fromSelection, isTableSet } from "@/lib/catalog/composition";
 import { Inspector, type BenchPanel, type BenchPatch, type BenchSidePatch, type EdgeKindId, type InspectorProps, type LockPanel, type StageEdgeRow, type StageGroupPanel, type StagePanel, type SwapPanel } from "./inspector";
-import { AlignCenterVertical, Box, BringToFront, ClipboardPaste, Copy, FlipHorizontal2, Group, Lock, LockOpen, PackagePlus, Pin, PinOff, RotateCw, ScanEye, SendToBack, Square, Trash2, Ungroup, X } from "lucide-react";
+import { AlignCenterVertical, Box, BringToFront, ClipboardPaste, Copy, FlipHorizontal2, Group, Lock, LockOpen, PackagePlus, Pin, PinOff, RotateCw, ScanEye, Scissors, SendToBack, Square, Trash2, Ungroup, X } from "lucide-react";
+import { duplicateBeside, edgeClipLabel, edgeClipOf, pasteEdgeAt, type EdgeClip } from "@/lib/design-document/edge-copy";
 import { alignItems, type AlignPanel } from "./align-menu";
 import { ProposalReview } from "./proposal-review";
 import { fetchSubmittedProposal, resolveProposal, type SubmittedProposal } from "@/lib/proposals/actions";
@@ -1515,6 +1516,7 @@ export function StudioScreen({
       return null;
     }
     holdClip(clip);
+    lastCopied.current = "plan";
     showHint(n === 1 ? "הועתק פריט" : `הועתקו ${n} פריטים`);
     return clip;
     // spotsOn reads only `doc` and the catalog.
@@ -2056,7 +2058,8 @@ export function StudioScreen({
           // deck count, the area and the skirt on the quote, and settleEdgeItems leaves an inner
           // flight inner, so dragging the stage back out would not undo it. The bar warns
           // (outerFits) and a click through placeEdgeItem is the one place a flight is set in.
-          const settled = settleEdgeItems(sp as StagePlacement, sp.stage.stairs, deckOf, uid, wd, { inner: false, otherwise: "keep" });
+          // …and a stage RESIZED leaves no two of its items standing through each other (QA EI-7).
+          const settled = separateEdgeItems({ ...sp.stage, stairs: settleEdgeItems(sp as StagePlacement, sp.stage.stairs, deckOf, uid, wd, { inner: false, otherwise: "keep" }) });
           if (settled.some((it, i) => it !== sp.stage!.stairs![i]) || settled.length !== sp.stage.stairs.length) {
             next = amend(next, { type: "setPlacementStage", id: sp.id, stage: { ...sp.stage, stairs: settled } });
           }
@@ -3284,7 +3287,7 @@ export function StudioScreen({
         for (const dx of order) {
           const next = make(dx);
           if (stageWalls.length && crossesWalls(next.stage.outline.map((q) => toRoom({ ...soleStage, position: next.position }, q)), stageWalls, was)) continue;
-          act({ type: "setPlacementStage", id: soleStage.id, stage: next.stage, position: next.position });
+          act({ type: "setPlacementStage", id: soleStage.id, stage: { ...next.stage, stairs: separateEdgeItems(next.stage) }, position: next.position });
           return;
         }
         showHint("המידה לא נכנסת כאן — הבמה תעבור דרך קיר");
@@ -3432,7 +3435,9 @@ export function StudioScreen({
   // ── A stage's own parts: its height, its levels, its flights ─────────────────────────────────
   /** Level drawing, or stair placing, on one stage. The area tool draws the level; the canvas offers
    *  the stage's sides for a flight. */
-  const [stageTool, setStageTool] = useState<{ kind: "level" | "stair"; stageId: string; edgeKind?: EdgeKindId } | null>(null);
+  /** `clip`: the stair / banquette copied off a stage (Ctrl+C on it), placed by this click instead of
+   *  a fresh one of `edgeKind` (lib/design-document/edge-copy.ts pasteEdgeAt). */
+  const [stageTool, setStageTool] = useState<{ kind: "level" | "stair"; stageId: string; edgeKind?: EdgeKindId; clip?: EdgeClip } | null>(null);
   // Placing a flight ends the moment the stage it was for stops being the selection — adjusted
   // during render, like the area tool's reset, rather than in an effect a frame later.
   if (stageTool?.kind === "stair" && soleStage?.id !== stageTool.stageId) setStageTool(null);
@@ -3495,11 +3500,15 @@ export function StudioScreen({
   const removeStair = useCallback(
     (stairId: string) => {
       if (!soleStage) return;
+      // ONE undo entry: the item and what was perched on it go together, and Ctrl+Z brings both back
+      // (QA EI-12 — it took two, the first restoring the banquette bare).
       const carried = doc.placements.filter((x) => x.perch?.stageId === soleStage.id && x.perch.itemId === stairId);
-      if (carried.length) batch(carried.map((x) => ({ type: "removePlacement" as const, id: x.id })));
-      patchStage(soleStage.id, (s) => ({ ...s, stairs: (s.stairs ?? []).filter((st) => st.id !== stairId) }));
+      batch([
+        ...carried.map((x) => ({ type: "removePlacement" as const, id: x.id })),
+        { type: "setPlacementStage", id: soleStage.id, stage: { ...soleStage.stage, stairs: (soleStage.stage.stairs ?? []).filter((st) => st.id !== stairId) } },
+      ]);
     },
-    [soleStage, patchStage, doc.placements, batch],
+    [soleStage, doc.placements, batch],
   );
   const changeStair = useCallback(
     (
@@ -3536,12 +3545,11 @@ export function StudioScreen({
           return;
         }
       }
-      // A banquette turned into stairs or a barrier puts down what stood on it.
-      if (patch.kind && patch.kind !== "bench") {
-        const carried = doc.placements.filter((x) => x.perch?.stageId === soleStage.id && x.perch.itemId === stairId);
-        if (carried.length) batch(carried.map((x) => ({ type: "removePlacement" as const, id: x.id })));
-      }
-      patchStage(soleStage.id, (s) => {
+      // A banquette turned into stairs or a barrier puts down what stood on it — in the SAME undo
+      // entry as the change (QA EI-12).
+      const carried =
+        patch.kind && patch.kind !== "bench" ? doc.placements.filter((x) => x.perch?.stageId === soleStage.id && x.perch.itemId === stairId) : [];
+      const nextStage = ((s: StageBuild): StageBuild => {
         const stage = {
         ...s,
         stairs: (s.stairs ?? []).map((st) => {
@@ -3577,10 +3585,11 @@ export function StudioScreen({
         // A width typed, or "the whole side": the item takes that stretch and its neighbours on the
         // side give way (shareSide) — two items never stand through each other.
         return patch.widthMm !== undefined || patch.full ? { ...stage, stairs: shareSide(stage, stairId) } : stage;
-      });
+      })(soleStage.stage);
+      batch([...carried.map((x) => ({ type: "removePlacement" as const, id: x.id })), { type: "setPlacementStage", id: soleStage.id, stage: nextStage }]);
       if (patch.kind) ensureStageParts();
     },
-    [soleStage, patchStage, doc.placements, batch, ensureStageParts, wallDistanceFor],
+    [soleStage, doc.placements, batch, ensureStageParts, wallDistanceFor],
   );
 
   const setSurface = useCallback(
@@ -4233,7 +4242,10 @@ export function StudioScreen({
       const wd = wallDistanceFor(p.id);
       // Too close to a wall for its run outside, a flight (or banquette) goes INTO the stage — the
       // one way it fits there.
-      const placed = placeEdgeItem(p, itemAt(p, deckOf, stageTool?.edgeKind ?? "stairs", level, edge, t, uid(), wd), deckOf, wd, doors);
+      const clip = stageTool?.clip;
+      const fresh = clip ? pasteEdgeAt(p.stage, clip, level, edge, t, uid()) : itemAt(p, deckOf, stageTool?.edgeKind ?? "stairs", level, edge, t, uid(), wd);
+      if (!fresh) return;
+      const placed = placeEdgeItem(p, fresh, deckOf, wd, doors);
       if (!placed.ok) {
         showHint(
           placed.reason === "wall"
@@ -4247,6 +4259,7 @@ export function StudioScreen({
         return;
       }
       const stair = placed.item;
+      if (clip) showHint(`הודבק: ${edgeClipLabel({ ...clip, widthMm: stair.widthMm })}`);
       if (stair.inner) showHint(edgeKind(stair) === "bench" ? "אין מקום לבנקט מחוץ לבמה בצד הזה — הוא עומד על הבמה" : "אין מספיק מקום מחוץ לבמה בצד הזה — המדרגות שוקעות לתוך הבמה");
       setStageTool(null);
       // Clicked onto a side another item already covers, it takes its stretch and the other gives
@@ -4261,6 +4274,91 @@ export function StudioScreen({
     },
     [toolStage, wallDistanceFor, doors, patchStage, stageTool, ensureStageParts],
   );
+
+  // --- one stair / banquette on its own clipboard (lib/design-document/edge-copy.ts) -------------------
+  // QA EI-3/EI-4/EI-5: with an item picked out on a stage, Ctrl+C copied the WHOLE stage, Ctrl+X cut
+  // it, the right-click menu's שכפול/מחיקה acted on the stage, and the item's bar had no copy. An
+  // edge item is a stretch of a side, so its copy is a clip of everything but where: Ctrl+D (and the
+  // bar's copy) puts one flush beside it, Ctrl+V arms the stage's sides and a click places it.
+  /** The last stair/banquette copied — and whether it, not the plan clip, is the newest copy. */
+  const edgeClip = useRef<EdgeClip | null>(null);
+  const lastCopied = useRef<"plan" | "edge">("plan");
+  const pickedEdge = () => (soleStage && activeEdge ? (soleStage.stage.stairs ?? []).find((st) => st.id === activeEdge) ?? null : null);
+  const copyEdge = useCallback(() => {
+    const it = pickedEdge();
+    if (!it || !soleStage) return null;
+    const clip = edgeClipOf(soleStage.stage, it);
+    edgeClip.current = clip;
+    lastCopied.current = "edge";
+    showHint(`הועתק: ${edgeClipLabel(clip)} · Ctrl+V ואז לחיצה על צד של במה`);
+    return clip;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soleStage, activeEdge]);
+  const cutEdge = useCallback(() => {
+    const clip = copyEdge();
+    if (!clip || !activeEdge) return;
+    removeStair(activeEdge);
+    setActiveEdge(null);
+    showHint(`נגזר: ${edgeClipLabel(clip)} · Ctrl+V ואז לחיצה על צד של במה`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [copyEdge, activeEdge, removeStair]);
+  const duplicateEdge = useCallback(() => {
+    const it = pickedEdge();
+    if (!it || !soleStage) return;
+    const next = duplicateBeside(soleStage.stage, it.id, uid());
+    if (!next) {
+      showHint("אין מקום פנוי בצד הזה — העתיקו (Ctrl+C) והדביקו על צד אחר");
+      return;
+    }
+    const wd = wallDistanceFor(soleStage.id);
+    const placed = placeEdgeItem(soleStage, next, deckOf, wd, doors);
+    if (!placed.ok) {
+      showHint("אין מקום לעותק בצד הזה — העתיקו (Ctrl+C) והדביקו על צד אחר");
+      return;
+    }
+    patchStage(soleStage.id, (s) => {
+      const st = { ...s, stairs: [...(s.stairs ?? []), placed.item] };
+      return { ...st, stairs: shareSide(st, placed.item.id) };
+    });
+    setActiveEdge(placed.item.id);
+    showHint(`שוכפל: ${edgeClipLabel(edgeClipOf(soleStage.stage, placed.item))}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soleStage, activeEdge, wallDistanceFor, doors, patchStage]);
+  /** Ctrl+V with a stair/banquette as the newest copy: the selected stage's sides light up and the
+   *  next click places it there. False when the plan clip is the newer one (the ordinary paste). */
+  const pasteEdge = useCallback(() => {
+    const clip = edgeClip.current;
+    if (lastCopied.current !== "edge" || !clip) return false;
+    if (!soleStage) {
+      showHint(`בחרו במה ואז הדביקו — ${edgeClipLabel(clip)} יונח על הצד שתלחצו עליו`);
+      return true;
+    }
+    setActiveEdge(null);
+    setStageTool({ kind: "stair", stageId: soleStage.id, edgeKind: edgeKind(clip), clip });
+    return true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soleStage]);
+  /** The right-click menu of a stair/banquette on the selected stage — its verbs, never the stage's. */
+  const edgeItemMenu = useCallback(
+    (_stageId: string, itemId: string): ContextMenuItem[] => [
+      { label: "העתקה · Ctrl+C", icon: Copy, onSelect: () => latestEdge.current.copy() },
+      { label: "גזירה · Ctrl+X", icon: Scissors, onSelect: () => latestEdge.current.cut() },
+      { label: "שכפול לצדו · Ctrl+D", icon: Copy, onSelect: () => latestEdge.current.duplicate() },
+      { label: "מחיקה", icon: Trash2, onSelect: () => latestEdge.current.remove(itemId) },
+    ],
+    [],
+  );
+  const latestEdge = useRef({ copy: copyEdge, cut: cutEdge, duplicate: duplicateEdge, remove: (id: string) => removeStair(id) });
+  latestEdge.current = {
+    copy: copyEdge,
+    cut: cutEdge,
+    duplicate: duplicateEdge,
+    remove: (id: string) => {
+      removeStair(id);
+      setActiveEdge(null);
+    },
+  };
+  const edgeVerbs = useMemo(() => ({ copy: () => latestEdge.current.copy(), cut: () => latestEdge.current.cut(), duplicate: () => latestEdge.current.duplicate() }), []);
 
   // Escape leaves stair placing (the level drawing has the area tool's own Escape).
   useEffect(() => {
@@ -5269,11 +5367,15 @@ export function StudioScreen({
         // browser is already about to do the right thing with it. The plan waits its turn.
         if (hasTextSelection()) return;
         e.preventDefault();
-        if (isShortcut(e, "c")) copy();
+        // A stair or banquette picked out on a stage: THAT item, never the stage under it (QA EI-3).
+        if (activeEdge) {
+          if (isShortcut(e, "c")) copyEdge();
+          else cutEdge();
+        } else if (isShortcut(e, "c")) copy();
         else cut();
       } else if (mod && !typing && isShortcut(e, "v")) {
         e.preventDefault();
-        paste();
+        if (!pasteEdge()) paste();
       } else if (mod && !typing && !e.shiftKey && !e.altKey && isShortcut(e, "d")) {
         // The quick bar's copy button, on the keyboard (after deckKey, so a picked deck in the
         // fill tool still takes its own Ctrl+D). The browser would bookmark the page. Not with stairs,
@@ -5281,7 +5383,8 @@ export function StudioScreen({
         // under it is the whole stage — Ctrl+D there doubled the stage (Delete takes the item first
         // for the same reason).
         e.preventDefault();
-        if (!activeEdge && docRefs(selected).length > 0) duplicate();
+        if (activeEdge) duplicateEdge();
+        else if (docRefs(selected).length > 0) duplicate();
       } else if (mod && !typing && isShortcut(e, "g")) {
         e.preventDefault();
         if (e.shiftKey) ungroupSelection();
@@ -5333,7 +5436,7 @@ export function StudioScreen({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [deleteSelection, copy, cut, paste, duplicate, groupAny, ungroupSelection, selectAll, restack, selected, docRefs, toggleLock, activeEdge, removeStair, stageFill, deckKey, pickDeck, dressing, nudgeDressing, backToGroup]);
+  }, [deleteSelection, copy, cut, paste, duplicate, groupAny, ungroupSelection, selectAll, restack, selected, docRefs, toggleLock, activeEdge, removeStair, stageFill, deckKey, pickDeck, dressing, nudgeDressing, backToGroup, copyEdge, cutEdge, duplicateEdge, pasteEdge]);
 
   // --- the right-click menu ------------------------------------------------------------------------
   // The same verbs the bar offers, where the pointer already is. The menu is built the instant the
@@ -5659,6 +5762,7 @@ export function StudioScreen({
     onFillEdges: fillEdges,
     onSelectEdge: setActiveEdge,
     onRemoveStair: removeStair,
+    edgeVerbs,
     onStairChange: changeStair,
     benchPanel,
     onBench: changeBench,
@@ -5966,6 +6070,7 @@ export function StudioScreen({
             armedSize={armedBlock ? { widthMm: armedBlock.widthMm, depthMm: armedBlock.depthMm } : null}
             onPlaceArmed={placeArmed}
             onDisarm={() => arm(null)}
+            onEdgeItemMenu={edgeItemMenu}
             onEdgeItemSelect={(stageId, itemId) => {
               setSelected([{ kind: "placement", id: stageId }]);
               setActiveEdge(itemId);
@@ -6186,7 +6291,9 @@ export function StudioScreen({
               <HintPill>
                 {stageTool.kind === "level"
                   ? "סמנו את פינות המפלס על הבמה · הקלדת מספר ו־Enter קובעת אורך בס״מ · לחיצה כפולה או Enter לסגירה · Esc ליציאה"
-                  : `לחצו על צד של הבמה או של מפלס — שם ${stageTool.edgeKind === "bench" ? "יעמוד הבנקט" : stageTool.edgeKind === "barrier" ? "יעמוד המחסום" : "יעמדו המדרגות"} · לחיצה על קטע פתוח ממלאת את כולו · Esc ליציאה`}
+                  : stageTool.clip
+                    ? `הדבקת ${edgeClipLabel(stageTool.clip)}: לחצו על צד של הבמה או של מפלס · Esc ליציאה`
+                    : `לחצו על צד של הבמה או של מפלס — שם ${stageTool.edgeKind === "bench" ? "יעמוד הבנקט" : stageTool.edgeKind === "barrier" ? "יעמוד המחסום" : "יעמדו המדרגות"} · לחיצה על קטע פתוח ממלאת את כולו · Esc ליציאה`}
               </HintPill>
             )}
             {placing && <HintPill>{`לחיצה על התוכנית מציבה את ״${placing.name}״ · Esc לביטול`}</HintPill>}

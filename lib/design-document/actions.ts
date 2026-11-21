@@ -217,6 +217,13 @@ export type MovableKind = "table" | "placement" | "feature";
 export type RetypedTable = Pick<DesignTable, "type" | "variantId"> &
   Pick<Partial<DesignTable>, "diameterMm" | "widthMm" | "depthMm" | "seats">;
 
+/** The middle of a rod's posts' box — where a placement on it says it is. */
+function railMiddle(points: readonly { x: number; y: number }[]): { x: number; y: number } {
+  const xs = points.map((q) => q.x);
+  const ys = points.map((q) => q.y);
+  return { x: Math.round((Math.min(...xs) + Math.max(...xs)) / 2), y: Math.round((Math.min(...ys) + Math.max(...ys)) / 2) };
+}
+
 export function apply(doc: DesignDocumentContent, action: Action): DesignDocumentContent {
   // …and a carpet laid over a stage or a venue surface goes where that goes, in the same entry
   // (lib/studio/cover.ts settleCovers — the venue it reads is the one the studio primed).
@@ -635,7 +642,11 @@ function reduce(doc: DesignDocumentContent, action: Action): DesignDocumentConte
         ...doc,
         placements: doc.placements.map((p) => {
           if (p.id !== action.id) return p;
-          const next = withRail(p, action.rail);
+          const railed = withRail(p, action.rail);
+          // A rod carries its place in its posts; `position` is kept at their middle, as a fresh drop
+          // puts it (rodAt) — a body drag or a redraw used to leave it where the rod was first dropped
+          // (QA CR-4), wrong for anything that reads a placement's position.
+          const next = action.rail.type === "rod" && action.rail.points.length > 0 ? { ...railed, position: railMiddle(action.rail.points) } : railed;
           if (action.dropMm === undefined) return next;
           const { dropMm: _old, ...rest } = next;
           void _old;

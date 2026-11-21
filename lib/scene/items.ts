@@ -199,11 +199,28 @@ const frameOf = (tone: string): MaterialRef => (pale(tone) ? CRYSTAL : metalMate
  *  candleAt: wax r, flame 0.5r, sleeve 1.75r). */
 function candle(b: ItemBuild, x: number, y: number, r: number, from: number, top: number, metal: MaterialRef, sleeve = false, flame = FLAME) {
   const height = Math.max(10, top - from);
-  const cup = Math.min(25, height * 0.15);
+  // In a hurricane the GLASS reaches the top and the candle stands inside it, its flame under the rim.
+  const wax = sleeve ? Math.max(10, height * 0.78) : height;
+  const cup = Math.min(25, wax * 0.15);
   b.parts.push(cyl(r * 1.15, cup, vec3(x, y, from), metal));
-  b.parts.push(cyl(r, height - cup, vec3(x, y, from + cup), WAX_M));
-  if (sleeve) b.parts.push(cyl(r * 1.75, height, vec3(x, y, from), GLASS));
-  b.emitters.push({ at: vec3(x, y, from + height), radiusMm: FLAME_R_MM, colour: ENVELOPE.flame, strength: flame });
+  b.parts.push(cyl(r, wax - cup, vec3(x, y, from + cup), WAX_M));
+  if (sleeve) b.parts.push(hurricane(r * 1.75, height, vec3(x, y, from)));
+  b.emitters.push({ at: vec3(x, y, from + wax), radiusMm: FLAME_R_MM, colour: ENVELOPE.flame, strength: flame });
+}
+
+/** A hurricane glass round a candle: a tube OPEN at the top with a 3 mm wall and a floor, reaching a
+ *  to the top of the piece, the flame inside it — a lathe, because a closed cylinder put a lid over the flame and the
+ *  flame stood on it (QA CN-1). */
+function hurricane(R: number, h: number, at: Vec3): Part {
+  const t = Math.min(3, R * 0.15);
+  return lathe([
+    { r: 0, z: 0 },
+    { r: R, z: 0 },
+    { r: R, z: h },
+    { r: R - t, z: h },
+    { r: R - t, z: t },
+    { r: 0, z: t },
+  ], at, GLASS);
 }
 
 /** A candle at the size it really is. The plan draws a candelabrum's candles fat enough to see from
@@ -1112,6 +1129,10 @@ if (isMain(import.meta.url)) {
   assert(lantern.emitters.length === 1 && lantern.parts.every((p) => top(p) <= 350 + 1e-9), "a square lantern is one lantern whatever its count, under its height");
   const sleeves = itemBody("candlestick", ctxOf({ kind: "circle", diameterMm: 300 }, 400, { count: 5, drawStyle: "sleeves" }));
   assert(sleeves.parts.filter((p) => p.material?.kind === "glass").length === 5, "sleeves: a glass round every candle");
+  const glasses = sleeves.parts.filter((p) => p.material?.kind === "glass");
+  assert(glasses.every((p) => p.shape === "lathe" && p.profile[p.profile.length - 1].r === 0 && p.profile[2].z > p.profile[1].z), "…open at the top (a lathe with a floor and a rim, never a lidded cylinder — QA CN-1)");
+  const flameTop = Math.max(...sleeves.emitters.map((e) => e.at.z));
+  assert(glasses.some((p) => p.shape === "lathe" && p.at.z + p.profile[2].z > flameTop), "…and taller than the flame it shelters");
   const lanternRow = itemBody("candlestick", ctxOf({ kind: "rect", widthMm: 900, depthMm: 200 }, 350, { count: 3, drawStyle: "lantern" }));
   assert(lanternRow.emitters.length === 3, "three lanterns in a row");
   const trough = itemBody("candlestick", ctxOf({ kind: "rect", widthMm: 1200, depthMm: 300 }, 250, { count: 1, drawStyle: "fire" }));

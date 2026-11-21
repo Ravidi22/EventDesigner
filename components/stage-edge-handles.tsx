@@ -233,6 +233,7 @@ export function EdgeItemHandles({
   onSelect,
   onChange,
   onEnd,
+  onContext,
 }: {
   p: StagePlacement;
   deckOf: DeckLookup;
@@ -246,6 +247,9 @@ export function EdgeItemHandles({
    *  shareSide). Absent on a slide, which never trims. */
   onChange: (item: StageStair, from?: StageStair[]) => void;
   onEnd: () => void;
+  /** A right-click on an item: it is picked, and the menu that opens is ITS (copy, duplicate,
+   *  delete) — never the stage's, whose שכפול and מחיקה would act on the whole stage (QA EI-4). */
+  onContext?: (itemId: string) => void;
 }) {
   const start = useRef<{ item: StageStair; grab: number; from: number; to: number; at: Point; moved: boolean; free: { from: number; to: number } | null; items: StageStair[]; last?: number } | null>(null);
   /** The width or depth under the pointer, on a pill beside the grip, while one is being dragged. */
@@ -372,6 +376,7 @@ export function EdgeItemHandles({
                 className="cursor-move touch-none"
                 onPointerDown={press}
                 onClick={(ev) => ev.stopPropagation()}
+                onContextMenu={() => onContext?.(item.id)}
               />
             ) : (
               <polygon
@@ -380,6 +385,7 @@ export function EdgeItemHandles({
                 className="cursor-move touch-none"
                 onPointerDown={press}
                 onClick={(ev) => ev.stopPropagation()}
+                onContextMenu={() => onContext?.(item.id)}
               />
             )}
           </g>
@@ -465,7 +471,10 @@ export function EdgeItemHandles({
                     const { st, a } = got;
                     // Out from the edge — or, an inner banquette, in from it.
                     const depth = Math.max(250, Math.min(1500, Math.round((shape.inner ? -a.o : a.o) / 50) * 50));
-                    onChange({ ...st.item, depthMm: depth });
+                    // The NEW form (bench.depthMm) — the panel writes it and benchSpecOf reads it first, so
+                    // writing the legacy field here moved only the readout once a depth was typed (QA EI-9).
+                    const { depthMm: _legacy, ...item } = st.item;
+                    onChange({ ...item, bench: { ...(st.item.bench ?? {}), depthMm: depth } });
                     setReadout({ at: past(base, outDir, depth + mm(20)), text: cm(depth) });
                   }}
                 />
