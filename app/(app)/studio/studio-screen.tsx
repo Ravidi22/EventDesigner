@@ -33,7 +33,7 @@ import { builtInRug } from "@/lib/catalog/built-in";
 import { doorOpenings, nearestWall } from "@/lib/studio/anchor";
 import { curtainRail } from "@/lib/venues/curtain";
 import { isLedStrip, ledDropRail, ledRunRail, ledSideCandidates } from "@/lib/venues/led";
-import { curtainDrop, defaultRailHeight, isRailed, isRodRow, nearestBareRod, nearestSideRail, railOf, rodAt, rodDropLength, sideCandidates, type Rail } from "@/lib/studio/rail";
+import { curtainDrop, defaultRailHeight, isRailed, isRodRow, nearestBareRod, nearestSideRail, railOf, rodAt, rodDropLength, rodWithThick, sideCandidates, type Rail } from "@/lib/studio/rail";
 import { defaultClothHeight, endHeightAt, isCeilingClothCategory, newCanopy, newRun, newSail, newSwag, redrawnCloth, SAIL_MAX_TIES, snapTie, tieCandidates } from "@/lib/studio/ceiling-cloth";
 import { roofHeightAt, sketchPergolas } from "@/lib/venues/roofs";
 import { STAGE_SETTLE_MS, useSettled } from "./use-settled";
@@ -507,6 +507,11 @@ export function StudioScreen({
   // "וילון על מוט": the drape whose free-standing rod is being drawn on the canvas, post by post
   // (components/rod-draw-pane.tsx) — null when no rod is being drawn.
   const [rodDraw, setRodDraw] = useState<string | null>(null);
+  // THE ROD TOOL (bug round 2026-11-21 §3): the rod row clicked on the rail is DRAWN — a click per
+  // post, or a press-drag for one straight line; Enter or a double-click ends; one rod per arming
+  // (Shift keeps the tool for the next). `id` re-mounts the pane for each rod. Dragging the row off
+  // the rail still lays a fixed rod of the row's length.
+  const [rodTool, setRodTool] = useState<{ id: number; productId: string } | null>(null);
   // A sail's ties, a ceiling drape's run or a canopy's area being drawn (lib/studio/ceiling-cloth.ts):
   // for a NEW placement of `productId`, dropped at `start`, or redrawing `placementId`. `id` re-mounts
   // the pane for each drawing. `tool`: the SWAG tool — a ceiling drape armed from the rail (or dropped
@@ -782,6 +787,24 @@ export function StudioScreen({
   };
   /** The drawing ended: the new sail or drape placed on its rail, or the redrawn one's rail replaced
    *  — keeping what was typed for it (heights, width, sag, scallops). */
+  /** A rod drawn with the rod tool: a BARE ROD of the row along what was drawn — straight, a ר or
+   *  more — at the height of what is overhead, as thick as the row is deep. Shift on the last point
+   *  keeps the tool for the next rod. */
+  const finishRodTool = (points: Point[], keep?: boolean) => {
+    const tool = rodTool;
+    setRodTool(tool && keep ? { ...tool, id: Date.now() } : null);
+    const product = tool ? productById(tool.productId) : undefined;
+    if (!product || points.length < 2) return;
+    const id = uid();
+    const rail = rodWithThick({ type: "rod", points, heightMm: defaultRailHeight(points[0], sketchRoofOf()) }, product.dimensions.depthMm || 0);
+    const xs = points.map((q) => q.x);
+    const ys = points.map((q) => q.y);
+    const position = { x: Math.round((Math.min(...xs) + Math.max(...xs)) / 2), y: Math.round((Math.min(...ys) + Math.max(...ys)) / 2) };
+    act({ type: "addPlacement", placement: { id, variantId: defaultVariantId(product), layer: product.layer, quantity: 1, rotation: 0, scale: 1, position, rail } });
+    landNew([{ kind: "placement", id }]);
+    setSelected([{ kind: "placement", id }]);
+    showHint("המוט הונח — גוררים עליו וילון, או ״תליית וילון על המוט״ בסרגל");
+  };
   const finishClothDraw = (points: Point[], keep?: boolean) => {
     const draw = clothDraw;
     // The swag tool goes on to the next swag while Shift is held (the armed row's "Shift — עוד").
@@ -3889,6 +3912,15 @@ export function StudioScreen({
       return;
     }
     if (clothDraw?.tool) setClothDraw(null);
+    const rodRow = productId ? catalog.find((p) => p.id === productId && !p.archived && isRodRow(p)) : undefined;
+    if (rodRow) {
+      setPlacing(null);
+      setArmedCount(0);
+      setArmedId(null);
+      setRodTool({ id: Date.now(), productId: rodRow.id });
+      return;
+    }
+    setRodTool(null);
     setArmedId(productId);
     setArmedCount(0);
     // One armed thing at a time: a template half-placed and a catalog item armed would both claim
@@ -5369,6 +5401,16 @@ export function StudioScreen({
     const items = refs.map((r) => doc.placements.find((p) => p.id === r.id));
     const products = items.map((p) => (p && !p.stage ? resolve(p.variantId)?.product : undefined));
     if (products.some((p) => !p || unswappable(p))) return null;
+    // A BARE ROD's list is the curtains it can carry: picking one hangs it on the rod, the rod kept
+    // (setPlacementVariant keeps the rail — QA CR-3, §3(b)). Its own class (a fixed wall row) matches
+    // no curtain (a stretch one).
+    if (products.every((p) => isRodRow(p!))) {
+      const curtains = live.filter((p) => {
+        const cat = CATEGORY_BY_ID[p.category];
+        return !unswappable(p) && cat?.anchor === "wall" && !isRodRow(p) && !isLedStrip(p) && !isCeilingClothCategory(p.category) && (!cat.rails || cat.rails.includes("rod"));
+      });
+      return curtains.length ? { kind: "items", count: items.length, current: products[0]!.id, similar: 0, options: curtains, label: "תליית וילון על המוט" } : null;
+    }
     const cls = one(products.map((p) => swapClass(p!)));
     if (!cls) return null;
     const options = live.filter((p) => !unswappable(p) && swapClass(p) === cls);
@@ -5979,7 +6021,7 @@ export function StudioScreen({
           onEditProduct={editProduct}
           onDuplicateProduct={duplicateProduct}
           addedIds={addedIds}
-          armedId={armed ? armedId : clothDraw?.tool ? (clothDraw.productId ?? null) : null}
+          armedId={armed ? armedId : clothDraw?.tool ? (clothDraw.productId ?? null) : (rodTool?.productId ?? null)}
           onArm={arm}
           onStageFill={startStageFill}
           stageFillActive={stageFill !== null}
@@ -6123,7 +6165,9 @@ export function StudioScreen({
                     // An LED strip's free run is its two ends — the second click ends it.
                     maxPoints: isLedStrip(resolve(doc.placements.find((x) => x.id === rodDraw)?.variantId ?? "")?.product) ? 2 : undefined,
                   }
-                : undefined
+                : rodTool
+                  ? { id: rodTool.id, drag: true, onFinish: finishRodTool, onCancel: () => setRodTool(null) }
+                  : undefined
             }
             clothDraw={clothDraw ? { id: clothDraw.id, kind: clothDraw.kind, start: clothDraw.start, onFinish: finishClothDraw, onCancel: () => setClothDraw(null) } : undefined}
             areaShape={stageFill?.phase === "draw" && stageTool?.kind !== "level" ? (stageFill.shape ?? "corners") : "corners"}
@@ -6428,6 +6472,22 @@ export function StudioScreen({
             )}
             {placing && <HintPill>{`לחיצה על התוכנית מציבה את ״${placing.name}״ · Esc לביטול`}</HintPill>}
             {/* Cloth being drawn in the air — what the next press does, standing while the tool is up. */}
+            {rodTool && !rodDraw && (
+              <HintPill interactive>
+                <span role="status" className="flex items-center gap-2">
+                  <span className="min-w-0">ציור מוט: לחיצה לכל עמוד, או גרירה לקו ישר · Enter או לחיצה כפולה לסיום · Shift — ממשיכים למוט הבא · Esc לביטול</span>
+                  <button
+                    type="button"
+                    onClick={() => setRodTool(null)}
+                    aria-label="ביטול הציור"
+                    title="ביטול הציור"
+                    className="-my-1 -me-2 shrink-0 rounded-pill p-1 text-canvas/70 transition-colors hover:bg-canvas/15 hover:text-canvas"
+                  >
+                    <X className="h-3.5 w-3.5" strokeWidth={2} />
+                  </button>
+                </span>
+              </HintPill>
+            )}
             {clothDraw && (
               <HintPill interactive>
                 <span role="status" className="flex items-center gap-2">

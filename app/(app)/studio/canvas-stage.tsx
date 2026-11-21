@@ -402,7 +402,8 @@ export function CanvasStage({
   /** Drawing a drape's free-standing ROD ("וילון על מוט", components/rod-draw-pane.tsx): every click
    *  a post, Enter or a double-click ends it. Absent = not drawing one. */
   /** `maxPoints` ends the drawing at that many clicks — an LED strip's free run is two. */
-  rodDraw?: { onFinish: (points: Point[]) => void; onCancel: () => void; maxPoints?: number };
+  /** `drag`: a press-drag lays a straight line (the rod tool); `id` re-mounts the pane for the next rod. */
+  rodDraw?: { onFinish: (points: Point[], keep?: boolean) => void; onCancel: () => void; maxPoints?: number; drag?: boolean; id?: number };
   /** Drawing a SAIL's ties (snapped to walls and corners), a ceiling drape's RUN (two clicks) or a
    *  CANOPY's area (closed) — the rod tool's pane with its options (lib/studio/ceiling-cloth.ts).
    *  `id` re-mounts the pane for a new drawing; `start` is the drop that began it. */
@@ -2856,7 +2857,7 @@ export function CanvasStage({
             </g>
           )}
 
-          {rodDraw && <RodDrawPane ctx={ctx} maxPoints={rodDraw.maxPoints} onFinish={rodDraw.onFinish} onCancel={rodDraw.onCancel} />}
+          {rodDraw && <RodDrawPane key={rodDraw.id ?? 0} ctx={ctx} maxPoints={rodDraw.maxPoints} drag={rodDraw.drag} onFinish={rodDraw.onFinish} onCancel={rodDraw.onCancel} />}
           {clothDraw && (
             <RodDrawPane
               key={clothDraw.id}

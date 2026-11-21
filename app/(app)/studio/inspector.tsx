@@ -3244,6 +3244,8 @@ export interface SwapPanel {
   similar: number;
   /** The rows to swap to, current included. */
   options: Product[];
+  /** What the picker is titled, when it is not a swap — a bare rod's list hangs a curtain on it. */
+  label?: string;
 }
 
 /** What a swap list remembers while its trigger stays up: what was typed into its search, and whether
@@ -3290,9 +3292,10 @@ function SwapPickRow({
   return (
     <PickRow
       glyph={current ? <span className="block h-full w-full overflow-hidden rounded-sm"><ProductImage product={current} /></span> : <Replace className="h-4 w-4 text-muted" strokeWidth={1.75} />}
-      name={current?.name ?? named?.name ?? `${swap.count} ${many}`}
-      meta={current ? swapFacts(swap, current) : named?.meta}
-      pickerLabel={label}
+      // A list that is not a swap (a bare rod's curtains) names what it does.
+      name={current?.name ?? (swap.label && !named ? swap.label : (named?.name ?? `${swap.count} ${many}`))}
+      meta={current ? swapFacts(swap, current) : swap.label && !named ? `${swap.options.length} וילונות בקטלוג` : named?.meta}
+      pickerLabel={swap.label ?? label}
       pickerIcon={Replace}
     >
       {(close) => (
