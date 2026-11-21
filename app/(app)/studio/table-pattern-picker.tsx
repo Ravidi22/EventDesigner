@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { DesignTable } from "@/lib/design-document/types";
-import { PATTERN_HALVES, PATTERN_HINT, PATTERN_LABEL, patternTables, type PatternTable, type TablePattern } from "@/lib/studio/table-patterns";
+import { PATTERN_HALVES, PATTERN_HINT, PATTERN_LABEL, patternTables, toggleHandPick, withHandPicks, type PatternTable, type TablePattern } from "@/lib/studio/table-patterns";
 import { FootprintShape, tableBox, tableFootprint } from "@/components/footprint-shape";
 import { MIRROR_TRANSFORM } from "@/lib/design-document/mirror";
 import { Segmented, segmentClass } from "@/components/segmented";
@@ -75,6 +75,18 @@ export function TablePatternPicker({
   const [alternating, setAlternating] = useState(false);
   const [second, setSecond] = useState(() => item?.shades.find((sh) => sh.id !== item.variantId)?.id ?? "");
   const [split, setSplit] = useState<Split>("checker");
+  // Tables added or taken out BY HAND over the pattern (§6, QA PT-1) — by unit key. A new pattern or
+  // the other half clears them: they were picked against the old one (DECIDE 5).
+  const [handAdded, setHandAdded] = useState<Set<string>>(() => new Set());
+  const [handRemoved, setHandRemoved] = useState<Set<string>>(() => new Set());
+  const clearHand = () => {
+    setHandAdded(new Set());
+    setHandRemoved(new Set());
+  };
+  const choose = (p: TablePattern) => {
+    setPattern(p);
+    clearHand();
+  };
 
   const rows: PatternTable[] = useMemo(() => patternUnits(units), [units]);
   const source = unitOf(units, sourceId);
@@ -85,7 +97,15 @@ export function TablePatternPicker({
   // Plain derivations — a few dozen tables, read once per render of a popover.
   const selectedKeys = [...new Set(selectedTableIds.map((id) => unitOf(units, id)?.key).filter((k): k is string => !!k))];
   const halves = PATTERN_HALVES[pattern];
-  const picked = inBlock ? new Set(mates) : new Set(patternTables(rows, pattern, { sourceId: sourceKey, selectedIds: selectedKeys, invert: halves && invert }));
+  const byPattern = inBlock ? new Set(mates) : new Set(patternTables(rows, pattern, { sourceId: sourceKey, selectedIds: selectedKeys, invert: halves && invert }));
+  const hand = !inBlock && (handAdded.size > 0 || handRemoved.size > 0);
+  const picked = hand ? withHandPicks(byPattern, handAdded, handRemoved, sourceKey) : byPattern;
+  const togglePick = (key: string) => {
+    if (inBlock || key === sourceKey) return;
+    const next = toggleHandPick(key, byPattern.has(key), handAdded, handRemoved);
+    setHandAdded(next.added);
+    setHandRemoved(next.removed);
+  };
   // The source is never counted as a target: it already wears what is being applied.
   const targets = inBlock ? [...picked] : [...picked].filter((k) => k !== sourceKey);
 
@@ -135,7 +155,7 @@ export function TablePatternPicker({
                 type="button"
                 aria-pressed={pattern === p}
                 disabled={disabled}
-                onClick={() => setPattern(p)}
+                onClick={() => choose(p)}
                 className={segmentClass(pattern === p, false) + " disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-ink-soft"}
               >
                 {PATTERN_LABEL[p]}
@@ -154,34 +174,68 @@ export function TablePatternPicker({
             ["same", "כמו השולחן הזה"],
             ["other", "החצי השני"],
           ]}
-          onChange={(v) => setInvert(v === "other")}
+          onChange={(v) => {
+            setInvert(v === "other");
+            clearHand();
+          }}
         />
       )}
 
       {/* The room, with the tables it will land on lit. The source wears the accent fill — a whole
           block when the block is the source. */}
+      {/* Every table is a toggle (§6): a click adds one the pattern left out, or takes out one it
+          took. Each wears its number. */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-caption text-muted">{hand ? `דפוס + בחירה ידנית · ${noun}` : inBlock ? noun : `${noun} · לחיצה על שולחן מוסיפה או מוציאה אותו`}</span>
+        {hand && (
+          <button type="button" onClick={clearHand} className="shrink-0 text-caption font-medium text-accent hover:text-accent-hover">
+            איפוס
+          </button>
+        )}
+      </div>
       <svg
         viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`}
-        className="h-36 w-full rounded-md border border-border-soft bg-canvas"
-        role="img"
+        className="h-[220px] w-full rounded-md border border-border-soft bg-canvas"
+        role="group"
         aria-label={`מפת השולחנות — ${noun} יקבלו את העיצוב`}
       >
         {tables.map((t) => {
           const key = keyOf(t.id);
           const isSource = inBlock ? t.id === sourceId : key === sourceKey;
           const on = picked.has(key);
+          const label = t.unnumbered ? "" : String(t.number);
           return (
             <g
               key={t.id}
-              transform={`translate(${t.position.x} ${t.position.y})${t.rotation ? ` rotate(${t.rotation})` : ""}${t.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}`}
+              role={inBlock || isSource ? undefined : "button"}
+              aria-pressed={inBlock || isSource ? undefined : on}
+              aria-label={inBlock || isSource ? undefined : `שולחן ${label}`.trim()}
+              onClick={() => togglePick(key)}
+              className={inBlock || isSource ? undefined : "cursor-pointer"}
             >
-              <FootprintShape
-                footprint={tableFootprint(t)}
-                fill={isSource && !shadeA ? "var(--color-accent)" : on || isSource ? fillFor(key) : "var(--color-canvas)"}
-                stroke={isSource || on ? "var(--color-accent)" : "var(--color-faint)"}
-                strokeWidth={isSource ? 2 : 1}
-                vectorEffect="non-scaling-stroke"
-              />
+              <g transform={`translate(${t.position.x} ${t.position.y})${t.rotation ? ` rotate(${t.rotation})` : ""}${t.mirrored ? ` ${MIRROR_TRANSFORM}` : ""}`}>
+                <FootprintShape
+                  footprint={tableFootprint(t)}
+                  fill={isSource && !shadeA ? "var(--color-accent)" : on || isSource ? fillFor(key) : "var(--color-canvas)"}
+                  stroke={isSource || on ? "var(--color-accent)" : "var(--color-faint)"}
+                  strokeWidth={isSource ? 2 : 1}
+                  vectorEffect="non-scaling-stroke"
+                />
+              </g>
+              {label && (
+                <text
+                  x={t.position.x}
+                  y={t.position.y}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  className="pointer-events-none nums"
+                  fontSize={box.w / 24}
+                  fontWeight={600}
+                  fill={isSource && !shadeA ? "var(--color-canvas)" : "var(--color-ink-soft)"}
+                >
+                  {label}
+                </text>
+              )}
             </g>
           );
         })}

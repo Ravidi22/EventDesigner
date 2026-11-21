@@ -127,6 +127,29 @@ export function patternTables(
   return tables.filter((t) => parity.get(t.id) === want).map((t) => t.id);
 }
 
+/** A pattern's tables with the designer's own picks over it (bug round 2026-11-21 §6, QA PT-1): what
+ *  was ADDED by hand joins, what was REMOVED by hand leaves; the source is never a target either way. */
+export function withHandPicks(picked: ReadonlySet<string>, added: ReadonlySet<string>, removed: ReadonlySet<string>, sourceId: string): Set<string> {
+  const out = new Set(picked);
+  for (const k of added) out.add(k);
+  for (const k of removed) out.delete(k);
+  out.delete(sourceId);
+  return out;
+}
+
+/** One click on a table in the picker's map: a table the pattern took is taken out (or put back), any
+ *  other is added (or taken off again). Returns the two sets after it. */
+export function toggleHandPick(key: string, inPattern: boolean, added: ReadonlySet<string>, removed: ReadonlySet<string>): { added: Set<string>; removed: Set<string> } {
+  const a = new Set(added);
+  const r = new Set(removed);
+  if (inPattern) {
+    if (r.has(key)) r.delete(key);
+    else r.add(key);
+  } else if (a.has(key)) a.delete(key);
+  else a.add(key);
+  return { added: a, removed: r };
+}
+
 if (isMain(import.meta.url)) {
   const assert = (c: boolean, m: string) => {
     if (!c) throw new Error("FAIL: " + m);
@@ -156,5 +179,14 @@ if (isMain(import.meta.url)) {
   assert(tableLine(grid, "01", "column").map((t) => t.id).join(",") === "01,11,21", "…and its column, top to bottom");
   assert(tableLine(grid, "nope", "row").length === 0, "no such table, no line");
 
+  // §6: hand picks over a pattern — a click adds a table the pattern left out, takes out one it took,
+  // and a second click undoes it; the source is never a target.
+  const base = new Set(["a", "b", "src"]);
+  let hp = toggleHandPick("c", false, new Set(), new Set());
+  hp = toggleHandPick("a", true, hp.added, hp.removed);
+  assert([...withHandPicks(base, hp.added, hp.removed, "src")].sort().join() === "b,c", "added c, took out a, never the source");
+  hp = toggleHandPick("a", true, hp.added, hp.removed);
+  hp = toggleHandPick("c", false, hp.added, hp.removed);
+  assert([...withHandPicks(base, hp.added, hp.removed, "src")].sort().join() === "a,b", "a second click undoes each");
   console.log("table-patterns: all checks passed");
 }
