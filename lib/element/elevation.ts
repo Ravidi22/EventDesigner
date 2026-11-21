@@ -330,6 +330,19 @@ export function boxGripSpots(b: ElevationBox): { x: number; y: number }[] {
   ];
 };
 
+/** Where each silhouette handle is DRAWN: a handle within `radius` of one of the box's own grips (a
+ *  cone's floor point at r = 1 sits on the bottom corner, a basin's rim on the top one) is drawn
+ *  `radius × 1.6` in toward the axis at `axisX`, beside the grip instead of on it — so the corner
+ *  still resizes the box (QA VS-6). The drag reads the press as an offset from where the handle is
+ *  shown, so moving it is exact. Every other handle stands on its point. */
+export function handleSpots(handles: readonly { x: number; y: number }[], grips: readonly { x: number; y: number }[], radius: number, axisX: number): { x: number; y: number }[] {
+  return handles.map((h) => {
+    if (!grips.some((g) => Math.hypot(h.x - g.x, h.y - g.y) < radius)) return h;
+    const towardAxis = Math.sign(axisX - h.x) || -1;
+    return { x: h.x + towardAxis * radius * 1.6, y: h.y };
+  });
+}
+
 /** A polyline (canvas world) cut into the runs that stand farther than `radius` from every spot —
  *  what a click-to-add band may cover without taking a press from a grip. Sampled finely (every
  *  half radius, so a straight side crossing a grip is cut, not skipped whole). */
@@ -482,6 +495,13 @@ if (isMain(import.meta.url)) {
   const nearGrip = cutRuns.flat().some((m) => Math.hypot(m.x - mid.x, m.y - mid.y) < gripRadius || Math.hypot(m.x - corner.x, m.y - corner.y) < gripRadius);
   assert(cutRuns.length >= 2 && !nearGrip && !covered(mid) && !covered(corner), "a basin's right side is cut at the edge-midpoint grip and the top-right corner");
   assert(runsClearOf(rim, [], gripRadius).length === 1, "with no grips near, the side is one run");
+  // …and a handle on a grip is drawn beside it, toward the axis; one off every grip stays put.
+  const axis = (basin.a0 + basin.a1) / 2;
+  const shown = handleSpots(rim, boxGripSpots(basin), gripRadius, axis);
+  const onGrip = rim.findIndex((h) => boxGripSpots(basin).some((g) => Math.hypot(h.x - g.x, h.y - g.y) < gripRadius));
+  assert(onGrip >= 0 && shown[onGrip].x < rim[onGrip].x && shown[onGrip].y === rim[onGrip].y && boxGripSpots(basin).every((g) => Math.hypot(shown[onGrip].x - g.x, shown[onGrip].y - g.y) >= gripRadius), "a handle on a corner grip is drawn beside it, toward the axis, clear of every grip");
+  const free = rim.findIndex((h) => boxGripSpots(basin).every((g) => Math.hypot(h.x - g.x, h.y - g.y) >= gripRadius));
+  assert(free < 0 || shown[free] === rim[free], "a handle off every grip stands on its point");
 
   const n = elevationNudge(bar[2], 2, "front", 10, 50);
   assert(n.x === 10 && n.zMm === 1050 && n.y === undefined, "nudged across and up");

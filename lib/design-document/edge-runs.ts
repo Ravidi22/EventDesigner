@@ -140,9 +140,18 @@ export function joinEdgeRuns(items: readonly EdgeRunMember[]): JoinedRun[] {
   return out;
 }
 
-/** The items a set of runs draws — what each stage must then leave out of its own drawing. */
-export function joinedItemIds(runs: readonly JoinedRun[]): Set<string> {
-  return new Set(runs.flatMap((r) => r.members.map((m) => m.itemId)));
+/** The items a set of runs draws, by stage — what each stage must then leave out of its own drawing.
+ *  Keyed by STAGE as well as item: a copied stage keeps its items' ids, so a skip by item id alone
+ *  drew the copy's banquette invisibly whenever the original's was in a run (QA EI-14). */
+export function joinedItemsByStage(runs: readonly JoinedRun[]): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const r of runs)
+    for (const m of r.members) {
+      const set = out.get(m.stageId) ?? new Set<string>();
+      set.add(m.itemId);
+      out.set(m.stageId, set);
+    }
+  return out;
 }
 
 if (isMain(import.meta.url)) {
@@ -199,7 +208,10 @@ if (isMain(import.meta.url)) {
   assert(one.length === 1 && one[0].members.length === 2, "two flights end to end on two flush stages are one run");
   assert(near(one[0].polygon[0], { x: 0, y: 0 }) && near(one[0].polygon[1], { x: 4880, y: 0 }) && near(one[0].polygon[2], { x: 4880, y: 840 }), "…a rectangle from the first's start to the second's end, as deep as they are");
   assert(one[0].treads.length === 2 && one[0].treads.every(([a, b]) => near(a, { x: 0, y: a.y }) && near(b, { x: 4880, y: b.y })) && one[0].treads.map(([a]) => Math.round(a.y)).join() === "280,560", "…each tread one line across both, at the same depths");
-  assert(joinedItemIds(one).has("a1") && joinedItemIds(one).has("b1"), "…and both items are the run's");
+  assert(joinedItemsByStage(one).get("A")?.has("a1") === true && joinedItemsByStage(one).get("B")?.has("b1") === true, "…and both items are the run's, each under its own stage");
+  // A copied stage keeps its items' ids: C holds an "a1" too, standing nowhere near the run.
+  const copied = joinEdgeRuns([left, right, flight("C", "a1", { x: 0, y: 9000 }, 2440, 0)]);
+  assert(!joinedItemsByStage(copied).get("C")?.has("a1"), "a copy's item with the same id, not in the run, is still drawn by its own stage");
   assert(one[0].midline.length === 2 && near(one[0].midline[0], { x: 0, y: 420 }), "…its middle line end to end");
   assert(one[0].arrow !== undefined && near(one[0].arrow.from, { x: 2440, y: 840 - 100.8 }) && near(one[0].arrow.head[0], { x: 2440, y: 100.8 }), "…and ONE walking line up the middle of the run, from the floor to the edge");
   const sunkRun = joinEdgeRuns([flight("A", "s1", { x: 0, y: 0 }, 2440, 0, 840, "stairs", true), flight("B", "s2", { x: 2440, y: 0 }, 2440, 0, 840, "stairs", true)]);

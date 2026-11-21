@@ -97,6 +97,7 @@
     "check:stage-draw": "tsx lib/studio/stage-draw.ts",
     "check:edge-runs": "tsx lib/design-document/edge-runs.ts",
     "check:edge-copy": "tsx lib/design-document/edge-copy.ts",
+    "check:perch": "tsx lib/design-document/perch.ts",
     "db:seed": "tsx lib/db/seed.ts",
     "db:reset": "tsx lib/db/reset.ts && tsx lib/db/seed.ts",
     "db:verify": "tsx lib/db/verify-roundtrip.ts",

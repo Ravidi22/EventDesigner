@@ -16,7 +16,7 @@ import { CompositionPieces } from "@/components/composition-drawing";
 import { benchIsNumbered, standaloneBench } from "@/lib/design-document/bench";
 import { catalogVersion } from "@/lib/catalog/storage";
 import { doorOpenings, wallSegment, wallTrack, nearestWall } from "@/lib/studio/anchor";
-import { curtainDrop, isRailed, isRodRow, nearestBareRod, nearestSideRail, rodAt, rodDropLength, railClothLine, railLines, railMoved, railOf, rodPath, rodPointMoved, rodPostMm, rodThickMm, sideCandidates, sketchRailContext, type Rail, type RailLine } from "@/lib/studio/rail";
+import { curtainDrop, type CurtainDrop, isRailed, isRodRow, nearestBareRod, nearestSideRail, rodAt, rodDropLength, railClothLine, railLines, railMoved, railOf, rodPath, rodPointMoved, rodPostMm, rodThickMm, sideCandidates, sketchRailContext, type Rail, type RailLine } from "@/lib/studio/rail";
 import { RodMarks } from "@/components/curtain-cloth";
 import { RodDrawPane } from "@/components/rod-draw-pane";
 import { LedStripNode } from "./led-strip-node";
@@ -89,7 +89,7 @@ import {
   type EdgeRun,
   type StagePlacement,
 } from "@/lib/design-document/stage";
-import { joinEdgeRuns, joinedItemIds, type JoinedRun } from "@/lib/design-document/edge-runs";
+import { joinEdgeRuns, joinedItemsByStage, type JoinedRun } from "@/lib/design-document/edge-runs";
 import type { StageBuild, StageStair } from "@/lib/design-document/types";
 import { signedArea } from "@/lib/studio/stage-fill";
 import { MIRROR_TRANSFORM, uprightTransform } from "@/lib/design-document/mirror";
@@ -1255,7 +1255,7 @@ export function CanvasStage({
           const v = tenth(Math.abs(s.widthMm - box.widthMm) >= Math.abs(s.depthMm - box.depthMm) ? s.widthMm : s.depthMm, magnetMm);
           return { widthMm: v, depthMm: v };
         };
-        return { ref, axes: { width: true, depth: true, uniform: disc }, clamp, centre: p.position, rotation: p.rotation || 0, size: box };
+        return { ref, axes: { width: true, depth: true, uniform: disc }, clamp, centre: p.position, rotation: p.rotation || 0, size: box, outset: stageGripOutset(p.stage, box) };
       }
       // A rounded or bowed rectangle stretches by its BOX (the host shapes the plain rectangle again
       // at the new size); any other shape is re-drawn in the area tool.
@@ -1264,7 +1264,7 @@ export function CanvasStage({
       const pullTo = lengthSnapper(stageDeckTypes(p.stage, deckOf));
       const snap = (mm: number, magnetMm: number) => Math.max(100, pullTo(mm, { magnetMm }));
       const clamp = (s: { widthMm: number; depthMm: number }, magnetMm = 0) => ({ widthMm: snap(s.widthMm, magnetMm), depthMm: snap(s.depthMm, magnetMm) });
-      return { ref, axes: { width: true, depth: true, uniform: false }, clamp, centre: p.position, rotation: p.rotation || 0, size };
+      return { ref, axes: { width: true, depth: true, uniform: false }, clamp, centre: p.position, rotation: p.rotation || 0, size, outset: stageGripOutset(p.stage, size) };
     }
     const r = p ? resolve(p.variantId) : undefined;
     // Not a stretch item (a carpet has corners of its own), nothing on a table, nothing on a wall —
@@ -1308,7 +1308,7 @@ export function CanvasStage({
       ),
     );
   }, [doc.placements]);
-  const joinedIds = useMemo(() => joinedItemIds(joinedRuns), [joinedRuns]);
+  const joinedIds = useMemo(() => joinedItemsByStage(joinedRuns), [joinedRuns]);
 
   const shapingStage = useMemo(() => {
     if (selection.length !== 1 || selection[0].kind !== "placement") return null;
@@ -1571,6 +1571,16 @@ export function CanvasStage({
    *  would have been inside. The size and kind come from the rail's drag payload — `dataTransfer`
    *  cannot be read until the drop, which is the whole reason that payload exists. A fresh item has
    *  no history, so nothing is exempt: it may not land overlapping at all. */
+  // The bare rod a curtain dragged off the rail would hang on, lit under the drag (QA CR-2) — the
+  // armed click's ArmedPane already lit it. Set only when it CHANGES: a dragover fires every few
+  // frames, and an equal value is no render.
+  const [dragRodId, setDragRodId] = useState<string | null>(null);
+  const dragOverAt = (p: Point | null) => {
+    const carried = p ? carriedItem() : null;
+    const product = carried?.landing === "wall" ? resolve(carried.productId)?.product : undefined;
+    const drop = p && product && isCurtainRow(product) ? curtainDropAt(product, p, doc, plan.structure, structure) : null;
+    setDragRodId(drop?.kind === "adopt" ? drop.placementId : null);
+  };
   const clearedDrop = (p: Point, carried: CarriedItem | null = carriedItem(), free = freeDrag.current): Point => {
     if (!carried?.solid || free) return p;
     const solid = carried.solid;
@@ -1822,9 +1832,7 @@ export function CanvasStage({
     // pick them turned the stage instead (QA EI-8). The edge items are in the stage's frame, which
     // is the knob's own (it rides round with the stage).
     const lone = rotatableRefs.length === 1 && rotatableRefs[0].kind === "placement" ? doc.placements.find((x) => x.id === rotatableRefs[0].id) : undefined;
-    const out = lone?.stage
-      ? Math.max(0, ...(lone.stage.stairs ?? []).flatMap((st) => edgeItemShape(lone.stage!, st, deckOf)?.polygon.map((q) => -q.y) ?? []))
-      : 0;
+    const out = lone?.stage ? -edgeItemReach(lone.stage).minY : 0;
     return {
       pivot: { x: b.x, y: b.y },
       reachMm: Math.max(b.depthMm / 2, out),
@@ -2154,6 +2162,7 @@ export function CanvasStage({
       // and at the same gap that row already keeps, which is where the designer was about to drag it
       // to anyway. The size of the thing in flight comes from the rail (lib/studio/drag-payload):
       // a drop cannot ask dataTransfer what it is carrying until it has landed.
+      onDragOverAt={dragOverAt}
       onDropAt={(e, p) => {
         const productId = e.dataTransfer.getData("text/product");
         if (!productId) return;
@@ -2462,7 +2471,7 @@ export function CanvasStage({
                   activeItem={edgingStage?.id === p.id ? activeEdgeItem : undefined}
                   // A standalone banquette's number and count, in the passes that write the tables'.
                   showLabel={showTableNumbers}
-                  skipItems={p.stage && joinedIds.size ? joinedIds : undefined}
+                  skipItems={p.stage ? joinedIds.get(p.id) : undefined}
                 />
               </g>
             );
@@ -2652,6 +2661,7 @@ export function CanvasStage({
               size={resizing.size}
               axes={resizing.axes}
               clamp={resizing.clamp}
+              outset={"outset" in resizing ? resizing.outset : undefined}
               ctx={ctx}
               onResize={(size, centre) =>
                 resizing.ref.kind === "table"
@@ -2827,6 +2837,25 @@ export function CanvasStage({
               }
             />
           )}
+
+          {dragRodId &&
+            (() => {
+              const rail = doc.placements.find((x) => x.id === dragRodId)?.rail;
+              return rail?.type === "rod" ? (
+                <polyline
+                  className="pointer-events-none"
+                  points={rodPath(rail)
+                    .map((q) => `${q.x},${q.y}`)
+                    .join(" ")}
+                  fill="none"
+                  stroke="var(--color-accent)"
+                  strokeOpacity={0.55}
+                  strokeWidth={10}
+                  strokeLinecap="round"
+                  vectorEffect="non-scaling-stroke"
+                />
+              ) : null;
+            })()}
 
           {armed && onPlaceArmed && !placeGhost && !drawArea && !stairPick && !rodDraw && (
             <ArmedPane
@@ -5900,12 +5929,36 @@ function OutlineHandles({
  *  way the decks are actually built, and the edge that does not move is re-derived from the snapped
  *  size rather than the raw one. Drawn in the item's own frame (its turn, never its flip: the box is
  *  the same either way round), at a fixed screen size like every other handle on this canvas. */
+/** How far a stage's edge items (flights, banquettes, barriers…) reach in its own frame, each way —
+ *  0 on a side where nothing stands out past the box's centre line. What the rotate knob and the
+ *  middle grips stand past, so neither sits on an item (QA EI-8). */
+function edgeItemReach(stage: NonNullable<Placement["stage"]>): { minX: number; maxX: number; minY: number; maxY: number } {
+  const r = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  for (const st of stage.stairs ?? [])
+    for (const q of edgeItemShape(stage, st, deckOf)?.polygon ?? []) {
+      r.minX = Math.min(r.minX, q.x);
+      r.maxX = Math.max(r.maxX, q.x);
+      r.minY = Math.min(r.minY, q.y);
+      r.maxY = Math.max(r.maxY, q.y);
+    }
+  return r;
+}
+
+/** The outward push of each SIDE grip of a stage's box: past whatever stands out on that side. */
+function stageGripOutset(stage: NonNullable<Placement["stage"]>, size: { widthMm: number; depthMm: number }): (sx: number, sy: number) => number {
+  const r = edgeItemReach(stage);
+  const halfW = size.widthMm / 2;
+  const halfD = size.depthMm / 2;
+  return (sx, sy) => Math.max(0, sx > 0 ? r.maxX - halfW : sx < 0 ? -r.minX - halfW : sy > 0 ? r.maxY - halfD : -r.minY - halfD);
+}
+
 function ResizeHandles({
   centre,
   rotation,
   size,
   axes,
   clamp,
+  outset,
   ctx,
   onResize,
   onEnd,
@@ -5916,12 +5969,22 @@ function ResizeHandles({
   axes: { width: boolean; depth: boolean; uniform: boolean };
   /** `magnetMm`: how far a length is pulled to one the item is built in (a stage's decks). */
   clamp: (size: { widthMm: number; depthMm: number }, magnetMm?: number) => { widthMm: number; depthMm: number };
+  /** How much further out a SIDE grip is drawn (mm) — a stage's grip stands past the flight or
+   *  banquette on that side rather than on it. The gesture takes it off again, so a press never
+   *  jumps the edge. Corners stay at the corners. */
+  outset?: (sx: number, sy: number) => number;
   ctx: CanvasLayerContext;
   onResize: (size: { widthMm: number; depthMm: number }, centre: Point) => void;
   onEnd: () => void;
 }) {
   const halfW = size.widthMm / 2;
   const halfD = size.depthMm / 2;
+  // Past an item, and a grip's own radius clear of it.
+  const pushOf = (sx: number, sy: number) => {
+    if (!outset || (sx !== 0 && sy !== 0)) return 0;
+    const o = outset(sx, sy);
+    return o > 0 ? o + ctx.mm(10) : 0;
+  };
   const grips: [number, number][] = [
     ...(axes.width ? ([[-1, 0], [1, 0]] as [number, number][]) : []),
     ...(axes.depth ? ([[0, -1], [0, 1]] as [number, number][]) : []),
@@ -5931,7 +5994,8 @@ function ResizeHandles({
   return (
     <g>
       {grips.map(([sx, sy]) => {
-        const at = fromLocalFrame({ x: sx * halfW, y: sy * halfD }, centre, rotation);
+        const push = pushOf(sx, sy);
+        const at = fromLocalFrame({ x: sx * (halfW + push), y: sy * (halfD + push) }, centre, rotation);
         const corner = sx !== 0 && sy !== 0;
         return (
           <rect
@@ -5961,8 +6025,8 @@ function ResizeHandles({
                   // The edge (or corner) opposite the grip, held still.
                   const fixed = { x: -sx * from.halfW, y: -sy * from.halfD };
                   const raw = {
-                    widthMm: sx !== 0 ? Math.abs(local.x - fixed.x) : from.size.widthMm,
-                    depthMm: sy !== 0 ? Math.abs(local.y - fixed.y) : from.size.depthMm,
+                    widthMm: sx !== 0 ? Math.abs(local.x - fixed.x) - push : from.size.widthMm,
+                    depthMm: sy !== 0 ? Math.abs(local.y - fixed.y) - push : from.size.depthMm,
                   };
                   const next = clamp(raw, ev.altKey ? 0 : ctx.mm(8));
                   // A round shape grows about the axis it was not pulled on — its depth follows its
@@ -5983,6 +6047,22 @@ function ResizeHandles({
       })}
     </g>
   );
+}
+
+/** A CURTAIN (a wall-landing row that is not the rod itself, an LED strip or a ceiling cloth). */
+function isCurtainRow(product: Product): boolean {
+  return !isRodRow(product) && !isLedStrip(product) && !isCeilingClothCategory(product.category);
+}
+
+/** Where a curtain let go at `at` hangs — what the armed ghost draws and what a drag off the rail
+ *  lights (QA CR-2): a bare rod it is over, the nearer of the wall and the side in reach, else a rod
+ *  of its own. lib/studio/rail.ts curtainDrop is the one rule; the studio's dropProduct reads it too.
+ *  `structure` is the venue as drawn, `arranged` as this event has arranged it. */
+function curtainDropAt(product: Product, at: Point, doc: DesignDocumentContent, structure: VenueStructure, arranged: VenueStructure): CurtainDrop | null {
+  const near = nearestWall(structure, at);
+  const side = nearestSideRail(sideCandidates(arranged.features, doc, (v) => resolve(v)?.product), at);
+  const rails = CATEGORY_BY_ID[product.category]?.rails;
+  return curtainDrop({ p: at, wall: near, side, rod: nearestBareRod(doc.placements, (v) => isRodRow(resolve(v)?.product), at), takes: (t) => !rails || rails.includes(t), rodHeightMm: 0 });
 }
 
 /** The plan while a catalog item is armed on the rail. A pane over everything, like the template
@@ -6046,7 +6126,7 @@ function ArmedPane({
   // the studio's dropProduct will put it (lib/studio/rail.ts curtainDrop — the one rule both read): a
   // bare rod it is over, the nearer of the wall and the side in reach, else a rod of its own.
   const rodRow = onWall && isRodRow(product);
-  const curtainLike = onWall && !rodRow && !isLedStrip(product) && !isCeilingClothCategory(product.category);
+  const curtainLike = onWall && isCurtainRow(product);
   const near = onWall && at && !rodRow ? nearestWall(structure, at) : null;
   // …or the side of a tall thing, when that is nearer — where the drop will hang it (lib/studio/rail.ts,
   // the studio's dropProduct reads the same two).
@@ -6054,8 +6134,7 @@ function ArmedPane({
   // A strip runs along any side with height (a 40cm deck's edge); a curtain needs a tall one.
   const sidesOf = isLedStrip(product) ? ledSideCandidates : sideCandidates;
   const side = arrangedNow && at ? nearestSideRail(sidesOf(arrangedNow.features, doc, (v) => resolve(v)?.product), at) : null;
-  const rails = CATEGORY_BY_ID[product.category]?.rails;
-  const drop = curtainLike && at ? curtainDrop({ p: at, wall: near, side, rod: nearestBareRod(doc.placements, (v) => isRodRow(resolve(v)?.product), at), takes: (t) => !rails || rails.includes(t), rodHeightMm: 0 }) : null;
+  const drop = curtainLike && at && arrangedNow ? curtainDropAt(product, at, doc, structure, arrangedNow) : null;
   const dropRail = drop?.kind === "rail" ? drop.rail : null;
   const sideRail = curtainLike ? (dropRail?.type === "side" ? dropRail : null) : side && (!near || side.distanceMm < near.distanceMm) ? side.rail : null;
   const sideLine = sideRail && arrangedNow ? railLines(sideRail, sketchRailContext(doc, structure, arrangedNow, (v) => resolve(v)?.product))[0] : undefined;

@@ -79,7 +79,7 @@ import {
   type WallDistance,
 } from "@/lib/design-document/stage";
 import { pieceName } from "@/lib/studio/stage-rim";
-import { joinEdgeRuns, joinedItemIds, type JoinedRun } from "@/lib/design-document/edge-runs";
+import { joinEdgeRuns, joinedItemsByStage, type JoinedRun } from "@/lib/design-document/edge-runs";
 import { uprightTransform } from "@/lib/design-document/mirror";
 import { darkFill, deckLabel, heightColour } from "@/lib/outputs/deck-colours";
 import { CATEGORY_BY_ID } from "@/lib/catalog/categories";
@@ -476,7 +476,7 @@ export function PlacementMap({
           ),
         )
       : [];
-  const joinedIds = joinedItemIds(joinedRuns);
+  const joinedIds = joinedItemsByStage(joinedRuns);
   // Design items on a banquette, spread along it as the studio draws them.
   const perchedSpots = (() => {
     const out: { p: Placement; at: { x: number; y: number } }[] = [];
@@ -786,7 +786,7 @@ export function PlacementMap({
                   label={stages.length > 1 ? `במה ${stages.indexOf(p as StagePlacement) + 1}` : undefined}
                   carries={doc.tables.some((t) => pointInPolygon(t.position, toWorld(p.stage!.outline, p.position, p.rotation, p.mirrored)))}
                   den={den}
-                  skip={joinedIds.size ? joinedIds : undefined}
+                  skip={joinedIds.get(p.id)}
                   mono={mono}
                   fill={flat && !buildSheet ? flat.stage : undefined}
                 />

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { amend, apply as applyAction, dispatch, undo, redo, initHistory, type Action, type History, type RetypedTable } from "@/lib/design-document/actions";
+import { dropOrphanPerches } from "@/lib/design-document/perch";
 import { deleteSketchTemplate, fetchSketchTemplateContent, fetchSketchTemplates, saveSketchTemplate, setSketchPhoto } from "@/lib/studio/sketch-actions";
 import { uploadFile } from "@/lib/files/upload";
 import type { SketchTemplateSummary } from "@/lib/studio/sketches";
@@ -290,6 +291,15 @@ function isStagePiece(p: Placement | undefined): p is Placement {
   if (!product || !STAGE_PIECE_CATEGORIES.includes(product.category)) return false;
   if (isRoundPiece(product) || !isShapedPiece(product)) return true;
   return pieceOutline(product, p.sizeMm) !== null;
+}
+
+
+/** The history with its PRESENT rid of the dressing perched on a banquette that went (QA EI-11) —
+ *  in place, in whatever entry the edit made; the same object when nothing went. Never on a drag
+ *  frame (see lib/design-document/perch.ts). */
+function prunePerches(h: History): History {
+  const present = dropOrphanPerches(h.present);
+  return present === h.present ? h : { ...h, present };
 }
 
 export function StudioScreen({
@@ -660,7 +670,7 @@ export function StudioScreen({
   const gestureOpen = useRef(false);
   const act = useCallback((a: Action) => {
     gestureOpen.current = false;
-    setHistory((h) => dispatch(h, a));
+    setHistory((h) => prunePerches(dispatch(h, a)));
   }, []);
   const drag = useCallback((a: Action) => {
     const open = gestureOpen.current;
@@ -669,6 +679,9 @@ export function StudioScreen({
   }, []);
   const endDrag = useCallback(() => {
     gestureOpen.current = false;
+    // What a drag cut away for good is settled once it ends — a frame may drop a neighbour banquette
+    // and the next give it back, so its dressing is judged only now (lib/design-document/perch.ts).
+    setHistory(prunePerches);
   }, []);
   /** Several actions that are ONE thing the designer did — a paste, a multi-delete. The first opens
    *  a history entry and the rest fold into it, so one Ctrl+Z takes the whole thing back. */
@@ -680,7 +693,7 @@ export function StudioScreen({
     // whenever that first action happened to change nothing (a copy onto a table already wearing it,
     // a ceiling-only design): one Ctrl+Z then took back both, or — on an empty history — nothing did.
     setHistory((h) => {
-      const next = actions.reduce((doc, a) => applyAction(doc, a), h.present);
+      const next = dropOrphanPerches(actions.reduce((doc, a) => applyAction(doc, a), h.present));
       return next === h.present ? h : { present: next, past: [...h.past, h.present], future: [] };
     });
   }, []);
@@ -2113,7 +2126,7 @@ export function StudioScreen({
             if ((p.over ?? null) !== over) next = amend(next, { type: "setPlacementOver", id: p.id, over });
           }
         }
-        return next;
+        return prunePerches(next);
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps

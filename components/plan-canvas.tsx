@@ -407,6 +407,7 @@ export function PlanCanvas({
   onDropAt,
   framePoints,
   dropSnap,
+  onDragOverAt,
   cursor = "default",
   ariaLabel = "תרשים האולם — עריכה",
   drawFrom,
@@ -553,6 +554,10 @@ export function PlanCanvas({
   // canvas has not re-rendered since. It is called on each dragover. Omitted = a raw drop point,
   // which is what a host placing a door on a wall it has already hit-tested wants.
   dropSnap?: () => HostSnapOptions | null;
+  /** The raw plan point under an incoming drag, on every dragover — `null` when it leaves or lands.
+   *  For a host that lights what the drop will take (a curtain's rod); it must set state only when
+   *  what it shows changes. */
+  onDragOverAt?: (p: Point | null) => void;
   // Edit-mode cursor. A host holding an armed tool says so here rather than reaching over the
   // canvas with a wrapper class, which the svg's own cursor would win against anyway.
   cursor?: "default" | "crosshair";
@@ -1839,10 +1844,18 @@ export function PlanCanvas({
               // both drawn before it is let go.
               const opts = dropSnap?.();
               if (opts) snapHost(clientToMm(e.clientX, e.clientY), opts);
+              onDragOverAt?.(clientToMm(e.clientX, e.clientY));
             }
           : undefined
       }
-      onDragLeave={onDropAt && dropSnap ? () => setGuides({ x: null, y: null }) : undefined}
+      onDragLeave={
+        onDropAt && (dropSnap || onDragOverAt)
+          ? () => {
+              setGuides({ x: null, y: null });
+              onDragOverAt?.(null);
+            }
+          : undefined
+      }
       onDrop={
         onDropAt
           ? (e) => {
@@ -1850,6 +1863,7 @@ export function PlanCanvas({
               const p = clientToMm(e.clientX, e.clientY);
               const opts = dropSnap?.();
               setGuides({ x: null, y: null });
+              onDragOverAt?.(null);
               onDropAt(e, opts ? snapPoint(p, snapCtx(opts)).point : p);
             }
           : undefined

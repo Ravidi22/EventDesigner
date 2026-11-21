@@ -30,12 +30,14 @@ const UNSET_SWATCH = {
 // the hex code beside it, and — once a colour is set — its opacity and the ✕ that takes it away. A
 // paint that isn't set reads as `emptyLabel` over a checkerboard swatch; typing a full 6-digit hex
 // or picking a colour turns it on, emptying the hex field or the ✕ turns it off.
-function ColorField({
+export function ColorField({
   label,
   value,
   opacity,
   emptyLabel,
   onChange,
+  onLive,
+  onCommit,
   onOpacityChange,
   onClear,
 }: {
@@ -45,7 +47,13 @@ function ColorField({
   opacity: number | undefined;
   emptyLabel: string;
   onChange: (value: string | undefined) => void;
-  onOpacityChange: (opacity: number | undefined) => void;
+  /** Given, the OS picker's every move goes here instead of `onChange`, and `onCommit` comes when
+   *  the colour is settled (the picker's `change`, or the swatch losing focus) — so a host with an
+   *  undo history makes one drag ONE step (QA VS-8). */
+  onLive?: (value: string) => void;
+  onCommit?: () => void;
+  /** Absent = no opacity field (a shade's swatch is a colour, no more). */
+  onOpacityChange?: (opacity: number | undefined) => void;
   /** The colour AND its opacity gone, in ONE change. Two changes in a row both read the style as it
    *  was before either: the second put back the colour the first had just taken away, which is how
    *  the ✕ used to do nothing. */
@@ -53,6 +61,18 @@ function ColorField({
 }) {
   const hasColor = value != null;
   const focused = useRef(false);
+  // React's onChange on a colour input is the native `input` (every move of the picker); the native
+  // `change` — the colour settled — has no React prop of its own.
+  const swatchRef = useRef<HTMLInputElement>(null);
+  const commitRef = useRef(onCommit);
+  commitRef.current = onCommit;
+  useEffect(() => {
+    const el = swatchRef.current;
+    if (!el) return;
+    const settled = () => commitRef.current?.();
+    el.addEventListener("change", settled);
+    return () => el.removeEventListener("change", settled);
+  }, []);
   const [hexText, setHexText] = useState(() => toHex(value));
   useEffect(() => {
     if (!focused.current) setHexText(toHex(value));
@@ -70,9 +90,11 @@ function ColorField({
         {/* The swatch IS the native colour input, cropped to a square — a click opens the OS picker. */}
         <label className="relative h-6 w-6 shrink-0 cursor-pointer overflow-hidden rounded-sm border border-border" style={hasColor ? { backgroundColor: value } : UNSET_SWATCH}>
           <input
+            ref={swatchRef}
             type="color"
             value={value ?? DEFAULT_SWATCH}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => (onLive ?? onChange)(e.target.value)}
+            onBlur={() => onCommit?.()}
             aria-label={label}
             className="absolute inset-0 h-full w-full cursor-pointer border-none p-0 opacity-0"
           />
@@ -102,7 +124,7 @@ function ColorField({
           className="w-0 min-w-0 flex-1 bg-transparent text-right text-xs nums text-ink placeholder:text-faint"
         />
 
-        {hasColor && (
+        {hasColor && onOpacityChange && (
           <>
             <div className="h-4 w-px shrink-0 bg-border" />
             <input
@@ -158,9 +180,15 @@ export function StyleFields({
   fillOnly = false,
   lineOnly = false,
   emptyLabel = "ללא",
+  onLiveChange,
+  onCommit,
 }: {
   style: ElementStyle | undefined;
   onChange: (style: ElementStyle | undefined) => void;
+  /** A colour picker being dragged — every move, before the colour is settled; then `onCommit`.
+   *  Absent, every move is an `onChange` (ColorField's onLive). */
+  onLiveChange?: (style: ElementStyle | undefined) => void;
+  onCommit?: () => void;
   /** The caller's own default stroke width — shown at rest so the field never displays a number the element isn't actually drawn with. */
   strokeWidthDefault: number;
   fillLabel?: string;
@@ -175,15 +203,16 @@ export function StyleFields({
   emptyLabel?: string;
 }) {
   const id = useId();
-  const patch = (p: Partial<ElementStyle>) => {
+  const patch = (p: Partial<ElementStyle>, to: (style: ElementStyle | undefined) => void = onChange) => {
     const next: ElementStyle = { ...style, ...p };
     // Drop unset keys so an all-cleared style collapses back to `undefined` instead of leaving
     // an empty `{}` in the saved document.
     for (const k of Object.keys(next) as (keyof ElementStyle)[]) {
       if (next[k] === undefined) delete next[k];
     }
-    onChange(Object.keys(next).length ? next : undefined);
+    to(Object.keys(next).length ? next : undefined);
   };
+  const live = (key: "fill" | "stroke") => (onLiveChange ? (v: string) => patch({ [key]: v }, onLiveChange) : undefined);
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-2.5">
@@ -194,6 +223,8 @@ export function StyleFields({
           opacity={style?.fillOpacity}
           emptyLabel={emptyLabel}
           onChange={(v) => patch({ fill: v })}
+          onLive={live("fill")}
+          onCommit={onCommit}
           onOpacityChange={(v) => patch({ fillOpacity: v })}
           onClear={() => patch({ fill: undefined, fillOpacity: undefined })}
         />
@@ -206,6 +237,8 @@ export function StyleFields({
             opacity={style?.strokeOpacity}
             emptyLabel={emptyLabel}
             onChange={(v) => patch({ stroke: v })}
+            onLive={live("stroke")}
+            onCommit={onCommit}
             onOpacityChange={(v) => patch({ strokeOpacity: v })}
             onClear={() => patch({ stroke: undefined, strokeOpacity: undefined })}
           />

@@ -110,8 +110,8 @@ import { closeRefusal, useOutlineEditor, type SelectedRef } from "@/lib/studio/u
 import { isShortcut, isTypingTarget } from "@/lib/keyboard";
 import { Button } from "@/components/button";
 import { NumberField } from "@/components/number-field";
-import { Segmented } from "@/components/segmented";
-import { StyleFields } from "@/components/style-fields";
+import { Segmented, segmentClass } from "@/components/segmented";
+import { ColorField, StyleFields } from "@/components/style-fields";
 import { fieldLabelClassName } from "@/components/control";
 import { CurtainStyleTiles } from "@/components/curtain-style-tiles";
 import { curtainStyleOf } from "@/lib/catalog/symbols";
@@ -120,6 +120,7 @@ import { AppearancePreview, PlanContent } from "./appearance-preview";
 import { flatRing, inradiusOf, labelAnchor } from "@/lib/studio/label-anchor";
 import { IconPicker } from "./icon-picker";
 import { CloseButton } from "@/components/close-button";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { SwitchRow } from "@/components/toggle";
 import { ItemSurface } from "@/components/surface-fill";
 import { hasSurface } from "@/lib/catalog/textures";
@@ -1523,6 +1524,8 @@ function ShapePanel({
   itemHeightMm,
   onItemHeight,
   onChange,
+  onLive,
+  onCommit,
   groups,
   bodyTiles,
   bodyOff,
@@ -1557,6 +1560,9 @@ function ShapePanel({
   /** The item's fill, for the texture tiles. */
   color?: string;
   onChange: (p: Partial<ShapePart>) => void;
+  /** A colour picker on this shape being dragged — folded into one undo step, closed by onCommit. */
+  onLive?: (p: Partial<ShapePart>) => void;
+  onCommit?: () => void;
   groups: Groups;
 }) {
   const id = `shape-${part.id}`;
@@ -1852,7 +1858,15 @@ function ShapePanel({
           shade, a black counter on a white bar. Empty = the item's, as every shape was. */}
       {textured && (
         <FoldRow {...group(groups, "look")} icon={Paintbrush} title="מראה" summary={<PaintSummary style={part.style} />}>
-          <StyleFields style={part.style} onChange={(style) => onChange({ style })} strokeWidthDefault={1.5} lineOnly={!!part.open} emptyLabel="כמו הפריט" />
+          <StyleFields
+            style={part.style}
+            onChange={(style) => onChange({ style })}
+            onLiveChange={onLive ? (style) => onLive({ style }) : undefined}
+            onCommit={onCommit}
+            strokeWidthDefault={1.5}
+            lineOnly={!!part.open}
+            emptyLabel="כמו הפריט"
+          />
           <Note>{part.open ? "צבע משלה לקווים של הצורה הזו. ריק — כמו הפריט." : "צבעים משלה לצורה הזו בלבד — נשארים כך בכל גוון של הפריט. ריק — כמו הפריט."}</Note>
         </FoldRow>
       )}
@@ -2018,7 +2032,8 @@ export function AppearanceModal({
 }: {
   /** The drawer's draft, read once — this component is mounted by the act of opening it. */
   product: Product;
-  onSave: (patch: { dimensions: Product["dimensions"]; appearance: MapAppearance }) => void;
+  /** `variants` only when a shade's colour was edited here. */
+  onSave: (patch: { dimensions: Product["dimensions"]; appearance: MapAppearance; variants?: Product["variants"] }) => void;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -2117,10 +2132,31 @@ export function AppearanceModal({
     ref.current?.showModal();
   }, []);
 
+  // The "close without saving?" question (QA VS-7). While it is up, the editor's own keys stand down
+  // so its Escape answers it.
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const discardUp = useRef(false);
+  discardUp.current = confirmDiscard;
+
+  // ── Shades (QA VS-1, DECIDE 4) ────────────────────────────────────────────────────────────────
+  // A row with shades is drawn in the SHADE's colour everywhere — the plan, the card, the sketch, the
+  // room. So is this editor: its previews draw the shade being looked at, and the look's colour row
+  // edits THAT shade's swatch (saved back to the drawer with the look). The item's own fill is what a
+  // shade with no colour falls back to, and what a row without shades is drawn in.
+  const liveShades = draft.variants.filter((v) => !v.archived);
+  const [shadeId, setShadeId] = useState<string | null>(() => (liveShades.find((v) => v.swatch) ?? liveShades[0])?.id ?? null);
+  const shownShade = liveShades.find((v) => v.id === shadeId) ?? liveShades.find((v) => v.swatch) ?? liveShades[0];
+  const shadeTone = shownShade?.swatch ?? draft.appearance?.style?.fill;
+  const shadePatched = (id: string, swatch: string | undefined) => (d: Draft): Draft => ({
+    ...d,
+    look: { ...d.look, variants: d.look.variants.map((v) => (v.id === id ? { ...v, swatch } : v)) },
+  });
+
   const content = contentOf(draft);
   const seatCount = Number(draft.categoryFields?.seats) || 0;
-  // The colour the item's surfaces are tinted by: its own fill, else its first shade.
-  const itemColor = draft.appearance?.style?.fill ?? draft.variants.find((v) => !v.archived && v.swatch)?.swatch;
+  // The colour the item's surfaces are tinted by: the shade being looked at, else its own fill — the
+  // order every other surface draws it in (QA VS-1).
+  const itemColor = shadeTone;
   const blocked = draft.appearance?.blockedSides ?? [];
 
   // A selection never holds a shape the list no longer has (an undo can take one away).
@@ -2157,8 +2193,12 @@ export function AppearanceModal({
   const textured = !previewSymbol && category?.anchor !== "wall";
 
   // ── Edits ─────────────────────────────────────────────────────────────────────────────────────
-  const setAppearance = (p: Partial<MapAppearance>) =>
-    hist.set((d) => ({ ...d, look: { ...d.look, appearance: { shape: shapeOf(d.look), content: contentOf(d.look), ...d.look.appearance, ...p } } }));
+  const lookPatched = (p: Partial<MapAppearance>) => (d: Draft): Draft => ({ ...d, look: { ...d.look, appearance: { shape: shapeOf(d.look), content: contentOf(d.look), ...d.look.appearance, ...p } } });
+  const setAppearance = (p: Partial<MapAppearance>) => hist.set(lookPatched(p));
+  // A colour picker being dragged: every move folded into ONE undo step, closed by hist.commit when
+  // the colour settles (QA VS-8 — fifty steps per drag pushed every earlier edit out of the history).
+  const setAppearanceLive = (p: Partial<MapAppearance>) => hist.amend(lookPatched(p));
+
   const toggleSide = (i: number) => setAppearance({ blockedSides: blocked.includes(i) ? blocked.filter((x) => x !== i) : [...blocked, i].sort((a, b) => a - b) });
 
   /** A new list of shapes, its seat sides following THEIR shapes (remapBlockedSides, SH-13): side
@@ -2544,6 +2584,7 @@ export function AppearanceModal({
   // ── Keyboard: the sketch's ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (discardUp.current) return;
       const typing = isTypingTarget();
       if (e.key === "Escape") {
         // ESCAPE NEVER CLOSES THIS MODAL — it steps back one level. The editor closes through its ✕,
@@ -2604,8 +2645,11 @@ export function AppearanceModal({
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const stopThenClose = (e: { stopPropagation: () => void }) => {
+  const stopThenClose = (e: { stopPropagation: () => void; target: EventTarget; currentTarget: EventTarget }) => {
     e.stopPropagation();
+    // The discard question is a <dialog> of its own inside this one, and React carries its close up
+    // the fiber tree to here: only this dialog's own close closes the editor.
+    if (e.target !== e.currentTarget) return;
     onClose();
   };
   // A `cancel` reaches the <dialog> only when an Escape got past every keydown handler without
@@ -2623,9 +2667,14 @@ export function AppearanceModal({
   const missing = !stretch && shapes.length === 0;
   const save = () => {
     const list = drawingPart ? shapesWithDrawing() : shapes;
-    onSave(stretch || !list.length ? { dimensions: draft.dimensions, appearance: { shape: shapeOf(draft), content, ...draft.appearance } } : lookOf(draft, list));
+    const look = stretch || !list.length ? { dimensions: draft.dimensions, appearance: { shape: shapeOf(draft), content, ...draft.appearance } } : lookOf(draft, list);
+    // A shade's colour edited here goes back with the look (QA VS-1) — only when one changed.
+    const recoloured = draft.variants.some((v) => v.swatch !== product.variants.find((o) => o.id === v.id)?.swatch);
+    onSave(recoloured ? { ...look, variants: draft.variants } : look);
     onClose();
   };
+  // ✕ and ביטול ask before they throw edits away (QA VS-7); with nothing done they just close.
+  const requestClose = () => (hist.canUndo ? setConfirmDiscard(true) : onClose());
 
   // THE FIRST SHAPE'S NUMBERS — the item's box and height, the very ones the drawer's form types under
   // its preview (2026-11-09: "the form and the editor edit the same numbers"). The header names them,
@@ -2763,9 +2812,58 @@ export function AppearanceModal({
           </div>
         </FoldRow>
       )}
-      <FoldRow {...g("look")} icon={Paintbrush} title="מראה" summary={<PaintSummary style={draft.appearance?.style} empty="ברירת מחדל" />}>
-        <StyleFields style={draft.appearance?.style} onChange={(style) => setAppearance({ style })} strokeWidthDefault={2} />
-        <Note>הגוון הראשון בטופס צובע את הפריט על התוכנית; המילוי כאן משמש כשאין גוונים. צבע לצורה אחת בלבד — בחרו אותה ב״צורות בפריט״.</Note>
+      <FoldRow
+        {...g("look")}
+        icon={Paintbrush}
+        title="מראה"
+        summary={<PaintSummary style={shownShade ? { ...draft.appearance?.style, fill: shadeTone } : draft.appearance?.style} empty="ברירת מחדל" />}
+      >
+        {shownShade && (
+          // A row with shades is drawn in the shade's colour, so that is the colour edited here — the
+          // shade being looked at, picked from its chips (QA VS-1).
+          <div className="space-y-2">
+            {liveShades.length > 1 && (
+              <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="הגוון בתצוגה">
+                {liveShades.map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={v.id === shownShade.id}
+                    onClick={() => setShadeId(v.id)}
+                    className={`${segmentClass(v.id === shownShade.id, true)} border border-border`}
+                  >
+                    {v.swatch ? <Swatch color={v.swatch} size={12} /> : <span aria-hidden className="inline-block h-3 w-3 rounded-full border border-dashed border-faint" />}
+                    {v.name || "ללא שם"}
+                  </button>
+                ))}
+              </div>
+            )}
+            <ColorField
+              label={`צבע הגוון · ${shownShade.name || "ללא שם"}`}
+              value={shownShade.swatch}
+              opacity={undefined}
+              emptyLabel="ללא — לפי המילוי"
+              onChange={(v) => hist.set(shadePatched(shownShade.id, v))}
+              onLive={(v) => hist.amend(shadePatched(shownShade.id, v))}
+              onCommit={hist.commit}
+              onClear={() => hist.set(shadePatched(shownShade.id, undefined))}
+            />
+          </div>
+        )}
+        <StyleFields
+          style={draft.appearance?.style}
+          onChange={(style) => setAppearance({ style })}
+          onLiveChange={(style) => setAppearanceLive({ style })}
+          onCommit={hist.commit}
+          strokeWidthDefault={2}
+          fillLabel={shownShade ? "מילוי — לגוון בלי צבע" : "מילוי"}
+        />
+        <Note>
+          {shownShade
+            ? "הפריט מצויר בצבע הגוון — על התוכנית, בכרטיס ובתלת־ממד. הצבע נשמר בגוון עצמו. צבע לצורה אחת בלבד — בחרו אותה ב״צורות בפריט״."
+            : "המילוי צובע את הפריט על התוכנית. צבע לצורה אחת בלבד — בחרו אותה ב״צורות בפריט״."}
+        </Note>
       </FoldRow>
     </>
   );
@@ -2825,6 +2923,8 @@ export function AppearanceModal({
             itemHeightMm={draft.dimensions.heightMm ?? 0}
             onItemHeight={setItemHeight}
             onChange={(p) => patchShape(one.id, p)}
+            onLive={(p) => hist.amend((d) => withShapes(d, d.shapes.map((x) => (x.id === one.id ? patchedPart(x, p) : x))))}
+            onCommit={hist.commit}
             groups={groups}
             onOpenElevation={() => showView("front")}
             bodyTiles={(() => {
@@ -2883,7 +2983,7 @@ export function AppearanceModal({
               <Box className="h-[18px] w-[18px]" strokeWidth={1.4} />
             </IconButton>
           )}
-          <CloseButton onClick={onClose} />
+          <CloseButton onClick={requestClose} />
         </header>
 
         <div className="flex min-h-0 flex-1">
@@ -2905,7 +3005,7 @@ export function AppearanceModal({
                   <div className="w-full max-w-md">
                     <CurtainStyleTiles
                       value={curtainStyleOf(preview)}
-                      tone={preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill}
+                      tone={shadeTone}
                       onPick={(symbolStyle) => setAppearance({ symbolStyle })}
                       labelClassName={fieldLabelClassName}
                     />
@@ -3293,10 +3393,10 @@ export function AppearanceModal({
                             count={symbolCount(preview, previewSymbol)}
                             flowers={
                               previewSymbol === "flowers" || previewSymbol === "centerpiece"
-                                ? flowerDrawSpecOf(preview, footprint, preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill)
+                                ? flowerDrawSpecOf(preview, footprint, shadeTone)
                                 : undefined
                             }
-                            tone={preview.variants.find((v) => !v.archived && v.swatch)?.swatch ?? preview.appearance?.style?.fill}
+                            tone={shadeTone}
                             overhead={preview.layer === "ceiling"}
                             chairStyle={chairStyleOf(preview)}
                             drawStyle={drawStyleOf(preview)}
@@ -3524,13 +3624,24 @@ export function AppearanceModal({
             sizeText && <span className="nums text-xs text-muted">{`${sizeText} · יעודכן בטופס בשמירה`}</span>
           )}
           <div className="flex-1" />
-          <Button type="button" variant="ghost" onClick={onClose}>
+          <Button type="button" variant="ghost" onClick={requestClose}>
             ביטול
           </Button>
           <Button type="button" disabled={missing} onClick={save}>
             שמירת המראה
           </Button>
         </footer>
+        <ConfirmDialog
+          open={confirmDiscard}
+          title="לסגור בלי לשמור?"
+          body="השינויים במראה מאז שנפתח העורך לא יישמרו."
+          confirmLabel="סגירה בלי שמירה"
+          onConfirm={() => {
+            setConfirmDiscard(false);
+            onClose();
+          }}
+          onClose={() => setConfirmDiscard(false)}
+        />
       </div>
     </dialog>
   );

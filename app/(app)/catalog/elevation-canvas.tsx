@@ -19,7 +19,7 @@
 import { useCallback, useMemo, useRef, useState, type ComponentProps, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { RevolvePoint, ShapePart } from "@/lib/catalog/types";
 import type { ElementStyle } from "@/lib/element-style";
-import { ELEVATION_MIN_H_MM, boxGripSpots, boxRect, elevationBoxes, elevationFrame, orthoFrame, profileHandles, profilePoint, rectEdit, runsClearOf, type ElevationBox, type ElevationRect, type ElevationView } from "@/lib/element/elevation";
+import { ELEVATION_MIN_H_MM, boxGripSpots, boxRect, elevationBoxes, elevationFrame, handleSpots, orthoFrame, profileHandles, profilePoint, rectEdit, runsClearOf, type ElevationBox, type ElevationRect, type ElevationView } from "@/lib/element/elevation";
 import { addedPoint, movedPoint, normalisedRevolve, removedPoint, revolveSilhouette } from "@/lib/element/revolve";
 import { startPointerGesture } from "@/lib/studio/gesture";
 import { PlanCanvas, type CanvasFocus, type CanvasLayerContext, type HostSnapOptions, type MarqueeMode } from "@/components/plan-canvas";
@@ -313,6 +313,8 @@ function ProfileHandles({ box, ctx, onEdit, onCommit, envelope }: { box: Elevati
   // …and only where it stays off the box's own grips (its corners and edge midpoints, which a body
   // as wide as its box — a basin, a ball's widest ring — would otherwise sit under).
   const spots = boxGripSpots(box);
+  // A handle on a grip is drawn beside it (QA VS-6); `shown[i]` is where handle i is pressed.
+  const shown = handleSpots(handles, spots, ctx.mm(12), (box.a0 + box.a1) / 2);
   const outline = [sil.slice(0, points.length), sil.slice(points.length).reverse()].flatMap((pts) =>
     runsClearOf(
       pts.map((p) => ({ x: p.x, y: -p.y })),
@@ -326,9 +328,13 @@ function ProfileHandles({ box, ctx, onEdit, onCommit, envelope }: { box: Elevati
     e.preventDefault();
     e.stopPropagation();
     let latest = points;
+    // Drawn beside its point, the handle carries that offset: the point moves with the pointer, it
+    // does not jump to it.
+    const off = { x: shown[i].x - handles[i].x, y: shown[i].y - handles[i].y };
     startPointerGesture(e, {
       onMove: (m) => {
-        const q = profilePoint(box, ctx.clientToMm(m.clientX, m.clientY));
+        const at = ctx.clientToMm(m.clientX, m.clientY);
+        const q = profilePoint(box, { x: at.x - off.x, y: at.y - off.y });
         latest = movedPoint(points, i, q.r, q.z);
         set(latest);
       },
@@ -364,7 +370,7 @@ function ProfileHandles({ box, ctx, onEdit, onCommit, envelope }: { box: Elevati
           }}
         />
       ))}
-      {handles.map((h, i) => {
+      {shown.map((h, i) => {
         const end = i === 0 || i === handles.length - 1;
         return (
           <circle
