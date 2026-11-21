@@ -89,6 +89,9 @@ export interface ElementPart {
   /** The part's OWN colour (ShapePart.style.fill / MapAppearance.baseStyle.fill), pinned over the
    *  item's shade. Absent = the item's colour. */
   colour?: string;
+  /** What the part is MADE of (ShapePart.material / MapAppearance.baseMaterial — lib/catalog/material.ts):
+   *  the room builds it in that, over the item's. Absent = the item's. */
+  material?: string;
 }
 
 export type ParamUnit = "mm" | "count" | "deg" | "choice" | "colour" | "bool" | "percent";

@@ -407,6 +407,9 @@ export interface ShapePart {
    *  item is drawn as its outline (ItemSurface, lib/catalog/textures.ts surfaceLayers); the room
    *  takes the fill where the element model builds the shape. */
   style?: ElementStyle;
+  /** What this shape is MADE of (lib/catalog/material.ts) — over the shade's and the item's. Absent =
+   *  theirs. A `Material` word; typed as string here so this file needs no import. */
+  material?: string;
 }
 
 // Map appearance (studio 2D plan). Footprint is always drawn at true scale; `content`
@@ -451,6 +454,14 @@ export interface MapAppearance {
   /** The BASE shape's own colours — ShapePart.style for the first shape (lib/catalog/shape-list.ts).
    *  `style` above is the whole item's; this is laid over it on the base shape alone. */
   baseStyle?: ElementStyle;
+  /** What the item is MADE of (lib/catalog/material.ts, bug round 2026-11-21 §4): metal, glass,
+   *  stone… — the 3D surface its recipe builds in. Absent = the recipe's own guess, as before. */
+  material?: string;
+  /** …per SHADE (variant id → material), over `material`: one vase in clear glass and in gold.
+   *  In the appearance JSON, not a column (DECIDE 3). */
+  shadeMaterials?: Record<string, string>;
+  /** The BASE shape's own material — ShapePart.material for the first shape (lib/catalog/shape-list.ts). */
+  baseMaterial?: string;
   /** A RUG's or a CLOTH's contour (lib/catalog/border.ts): a coloured band inside its edge, a second
    *  one inside a gap, the fringe in a colour of its own. The row's; a placement may override it
    *  (Placement.border). Absent = the drawing it always had. Ignored on every other category. */

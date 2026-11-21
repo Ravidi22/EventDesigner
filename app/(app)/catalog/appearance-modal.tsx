@@ -43,6 +43,7 @@ import {
   Type,
   Waves,
   X,
+  Gem,
 } from "lucide-react";
 import type { ArcSpec, ChandelierCrystals, ChandelierSpec, ChuppahFinish, ChuppahFlowers, ChuppahRoof, ChuppahSpec, HollowSpec, MapAppearance, MapShape, PendantFitting, Pin, PinMode, Product, Repeat, RepeatAlong, RevolvePoint, RingSpec, ShapePart } from "@/lib/catalog/types";
 import { CHANDELIER_CRYSTALS, CHANDELIER_PROFILES, FITTING_LABEL, PENDANT_FITTINGS, PENDANT_GLASS, PENDANT_GLASS_FORMS, PENDANT_GLASS_LABEL, CHANDELIER_PROFILE_FORMS, CHANDELIER_PROFILE_LABEL, CHANDELIER_TIERS_MAX, CRYSTALS_LABEL, CRYSTAL_STYLES, PROFILED_STYLES, TIERED_STYLES, asksStrands, chandelierDrawOf, chandelierHint, chandelierOf, chandelierPatch, strandsLabel } from "@/lib/catalog/chandelier";
@@ -112,6 +113,7 @@ import { Button } from "@/components/button";
 import { NumberField } from "@/components/number-field";
 import { Segmented, segmentClass } from "@/components/segmented";
 import { ColorField, StyleFields } from "@/components/style-fields";
+import { isMaterial, MATERIAL_LABEL, MATERIALS, METAL_FINISHES } from "@/lib/catalog/material";
 import { fieldLabelClassName } from "@/components/control";
 import { CurtainStyleTiles } from "@/components/curtain-style-tiles";
 import { curtainStyleOf } from "@/lib/catalog/symbols";
@@ -1320,9 +1322,10 @@ function moreItems(onFlip: (axis: FlipAxis) => void, onRestack: (how: "front" | 
 /** The editor's side-panel groups (2026-11-09, the user's redesign): one folding section per subject,
  *  each reading back its value on its end. Which are open is kept across selections — a designer
  *  working down a row of posts keeps "חזרה" open from one to the next. */
-type GroupKey = "picture" | "content" | "seats" | "border" | "look" | "pos" | "height" | "body" | "pin" | "rep" | "arc" | "sweep" | "ring" | "fill" | "texture" | "front";
+type GroupKey = "picture" | "content" | "seats" | "border" | "look" | "pos" | "height" | "body" | "pin" | "rep" | "arc" | "sweep" | "ring" | "fill" | "texture" | "front" | "material";
 const GROUPS_OPEN: Record<GroupKey, boolean> = {
   front: true,
+  material: false,
   picture: true,
   content: false,
   seats: false,
@@ -1854,6 +1857,17 @@ function ShapePanel({
           />
         </FoldRow>
       )}
+      {/* What THIS shape is made of (ShapePart.material, lib/catalog/material.ts) — over the shade's and
+          the item's: a crystal stem under gold arms. Offered on a picture's shapes too (QA VS-4): the
+          first shape is the item's body, the room builds the picture in its material. */}
+      <FoldRow {...group(groups, "material")} icon={Gem} title="חומר" summary={<span>{isMaterial(part.material) ? MATERIAL_LABEL[part.material] : "כמו הפריט"}</span>}>
+        <Select
+          value={isMaterial(part.material) ? part.material : ""}
+          onChange={(v) => onChange({ material: isMaterial(v) ? v : undefined })}
+          options={[{ value: "", label: "כמו הפריט" }, ...MATERIALS.map((m) => ({ value: m, label: MATERIAL_LABEL[m] }))]}
+          aria-label="החומר של הצורה"
+        />
+      </FoldRow>
       {/* This shape's OWN colours (ShapePart.style): laid over the item's look and kept in every
           shade, a black counter on a white bar. Empty = the item's, as every shape was. */}
       {textured && (
@@ -2849,6 +2863,31 @@ export function AppearanceModal({
               onCommit={hist.commit}
               onClear={() => hist.set(shadePatched(shownShade.id, undefined))}
             />
+          </div>
+        )}
+        {/* What the item is MADE of (§4) — the room builds it in that; a shade may differ (its row in
+            the drawer). A metal's finish is a colour, laid on the shade being looked at. */}
+        <PanelRow label="חומר" htmlFor="look-material" stack>
+          <Select
+            id="look-material"
+            value={isMaterial(draft.appearance?.material) ? draft.appearance!.material! : ""}
+            onChange={(v) => setAppearance({ material: isMaterial(v) ? v : undefined })}
+            options={[{ value: "", label: "לא נבחר — לפי הציור" }, ...MATERIALS.map((m) => ({ value: m, label: MATERIAL_LABEL[m] }))]}
+          />
+        </PanelRow>
+        {draft.appearance?.material === "metal" && (
+          <div className="flex flex-wrap gap-1" role="group" aria-label="גימור המתכת">
+            {METAL_FINISHES.map((f) => (
+              <button
+                key={f.name}
+                type="button"
+                onClick={() => (shownShade ? hist.set(shadePatched(shownShade.id, f.hex)) : setAppearance({ style: { ...draft.appearance?.style, fill: f.hex } }))}
+                className={`${segmentClass(shadeTone?.toLowerCase() === f.hex.toLowerCase(), true)} border border-border`}
+              >
+                <Swatch color={f.hex} size={12} />
+                {f.name}
+              </button>
+            ))}
           </div>
         )}
         <StyleFields

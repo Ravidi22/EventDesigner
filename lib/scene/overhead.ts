@@ -35,7 +35,8 @@ import { type ItemContext, fallbackBody } from "./item-context";
 import { flowerBuild } from "./flowers";
 import { shapedFlowersBody } from "./flower-cover";
 import { applyTransform } from "./frame";
-import { ENVELOPE, clothMaterial, crystalMaterial, emissiveMaterial, foliageMaterial, glassMaterial, metalMaterial } from "./materials";
+import { ENVELOPE, clothMaterial, crystalMaterial, emissiveMaterial, foliageMaterial, glassMaterial, materialRefOf, metalMaterial } from "./materials";
+import type { Material } from "@/lib/catalog/material";
 import { type MaterialRef, type NodeTag, type Part, type Vec3, vec3 } from "./types";
 import { frondSpan } from "./organic";
 import { runDrop, runHalfWidth, runLights, runTop, type ClothRun } from "@/lib/studio/ceiling-cloth";
@@ -110,7 +111,7 @@ const pale = (tone: string): boolean => HEX.test(tone.trim()) && isPale(tone.tri
 
 /** A chandelier's frame: the metal where it has a colour; faint and clear where it is crystal or
  *  white, or the frame would be the only thing you see of it (items.ts armMaterial). */
-const frameMaterial = (tone: string): MaterialRef => (pale(tone) ? { colour: "#d6d2dd", kind: "glass", opacity: 0.5 } : metalMaterial(tone));
+const frameMaterial = (tone: string, material?: Material): MaterialRef => (material ? materialRefOf(material, tone) : pale(tone) ? { colour: "#d6d2dd", kind: "glass", opacity: 0.5 } : metalMaterial(tone));
 
 const GLASS = glassMaterial();
 
@@ -330,7 +331,7 @@ function chandelierBody(ctx: ItemContext): ItemBuild {
   const h = ctx.heightMm > 0 ? ctx.heightMm : CHANDELIER_H_MM;
   const built = chandelierOf(ctx.drawStyle, ctx.chandelier);
   const tiers = chandelierTiers(built, ctx.count);
-  const frame = frameMaterial(ctx.tone);
+  const frame = frameMaterial(ctx.tone, ctx.material);
   const b = make(frame);
   const bulbM = emissiveMaterial(ENVELOPE.bulb);
   const light = (p: Point, z: number, r: number) => {

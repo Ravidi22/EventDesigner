@@ -44,6 +44,7 @@ import { SceneCollector } from "./collect";
 import { applyTransform, roomTransform, seatTransform } from "./frame";
 import { chairRequest, itemBody, vesselRimShare, type ItemContext } from "./items";
 import { clothMaterial, hexOf, swatchMaterial } from "./materials";
+import { MATERIAL_TONE, materialOf } from "@/lib/catalog/material";
 import { type BodyNode, type LabelNode, type NodeTag, type Part, type SceneInput, type Transform, transform, vec3 } from "./types";
 
 // --- the rules, as numbers ------------------------------------------------------------------------
@@ -417,6 +418,9 @@ function contextFor(product: Product | undefined, resolved: Resolved | undefined
   // when neither says — and the flowers get `own` alone, so an arrangement with no shade draws its
   // default mix rather than a row tinted the kind's pink.
   const own = hexOf(resolved?.swatch) ?? hexOf(product?.appearance?.style?.fill);
+  // What it is made of — its first shape's (the body the picture is built as), else the shade's,
+  // else the row's (§4); the material's tone when nothing gives a colour.
+  const material = materialOf(product?.appearance, resolved?.variant?.id ?? product?.id, 0);
   const ctx: ItemContext = {
     product,
     resolved,
@@ -424,7 +428,8 @@ function contextFor(product: Product | undefined, resolved: Resolved | undefined
     widthMm: b.w,
     depthMm: b.h,
     heightMm: product?.dimensions.heightMm ?? 0,
-    tone: own ?? (kind ? DEFAULT_TONE[kind].toLowerCase() : NO_PICTURE_TONE),
+    tone: own ?? (material ? MATERIAL_TONE[material] : kind ? DEFAULT_TONE[kind].toLowerCase() : NO_PICTURE_TONE),
+    ...(material ? { material } : {}),
     count: product && kind ? symbolCount(product, kind) : 1,
     author,
   };

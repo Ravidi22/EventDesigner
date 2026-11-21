@@ -1,6 +1,8 @@
 // What every kind's builder is handed, and the one body every kind falls back to. Its own module
 // so ./items.ts (the dispatch and the table kinds), ./floor-kinds.ts and ./overhead.ts can all
 // import it without importing each other.
+import { materialRefOf } from "./materials";
+import type { Material } from "@/lib/catalog/material";
 import type { Footprint } from "@/lib/studio/footprint";
 import { buildHollow, footprintOutlines } from "@/lib/studio/footprint";
 import type { Product, RevolvePoint } from "@/lib/catalog/types";
@@ -30,8 +32,11 @@ export interface ItemContext {
   widthMm: number;
   depthMm: number;
   heightMm: number;
-  /** The resolved colour: swatch → row fill → the kind's DEFAULT_TONE. */
+  /** The resolved colour: swatch → row fill → the material's tone → the kind's DEFAULT_TONE. */
   tone: string;
+  /** What the item is made of — the shade's, else the row's (lib/catalog/material.ts materialOf).
+   *  Absent = every recipe's own guess, as before. */
+  material?: Material;
   /** symbolCount: arms, bulbs, candles. */
   count: number;
   chairStyle?: ChairStyle;
@@ -82,7 +87,7 @@ export interface ItemContext {
  *  `symbol === false` row and "other" get. A footprint the row's element does not describe (a
  *  carpet laid to an outline) is extruded as it always was. */
 export function fallbackBody(ctx: ItemContext): ItemBuild {
-  const material: MaterialRef = { colour: ctx.tone, kind: "matte" };
+  const material: MaterialRef = ctx.material ? materialRefOf(ctx.material, ctx.tone) : { colour: ctx.tone, kind: "matte" };
   if (ctx.product?.imageUrl) material.image = { url: ctx.product.imageUrl, fit: "stretch" };
   const element = elementBody(ctx.product, ctx.footprint, material);
   if (element) return element;

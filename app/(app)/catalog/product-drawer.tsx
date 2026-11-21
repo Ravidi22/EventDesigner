@@ -72,6 +72,8 @@ import { SearchInput } from "@/components/search-input";
 import { TagToggle } from "@/components/tag-toggle";
 import { SwitchRow } from "@/components/toggle";
 import { Select } from "@/components/select";
+import { PanelRow } from "@/components/inspector-bar";
+import { isMaterial, MATERIAL_LABEL, MATERIALS, withShadeMaterial } from "@/lib/catalog/material";
 import { loadProducts } from "@/lib/catalog/storage";
 import { VESSEL_HOLDERS } from "@/lib/catalog/vessel";
 import { AISLE_CATEGORY, AISLE_PIECE_FIELD, aislePatch, aisleSpecOf, aisleWords } from "@/lib/catalog/aisle";
@@ -104,6 +106,16 @@ const defaultShape = (c: CategoryDef): MapShape => defaultShapeOf(c);
 // and the resolvers answer for it: a diameter makes it a circle, and it draws its name.
 const shapeOf = (p: Product): MapShape => p.appearance?.shape ?? (p.dimensions.diameterMm ? "circle" : "rect");
 const contentOf = (p: Product): MapAppearance["content"] => p.appearance?.content ?? resolveContent(p).mode;
+
+/** Every material, and "none" — the room's own guess (lib/catalog/material.ts). */
+const MATERIAL_OPTIONS = [{ value: "", label: "לא נבחר — לפי הציור" }, ...MATERIALS.map((m) => ({ value: m, label: MATERIAL_LABEL[m] }))];
+
+/** The row with its look patched. A row with no look yet gets its drawn shape and content first, so
+ *  nothing it draws changes because a material was picked. */
+const withLook = (d: Product, p: Partial<MapAppearance>): Product => ({
+  ...d,
+  appearance: { shape: d.appearance?.shape ?? (d.dimensions.diameterMm ? "circle" : "rect"), content: contentOf(d), ...d.appearance, ...p },
+});
 
 // What the tile says sits inside the footprint, so the drawer states the whole answer the modal
 // gave without reopening it. Same three words the modal's "תוכן" toggle uses.
@@ -1419,6 +1431,18 @@ export function ProductDrawer({
               onToggle={() => toggleRow("shades")}
             >
               <div className="space-y-2">
+                {/* What it is MADE of (lib/catalog/material.ts, bug round 2026-11-21 §4) — the item's,
+                    and each shade's beside it below: the room builds it in that. Empty = the room's
+                    own guess, as before. Never a texture (DECIDE 8). */}
+                <PanelRow label="חומר" htmlFor="p-material">
+                  <Select
+                    id="p-material"
+                    value={isMaterial(draft.appearance?.material) ? draft.appearance!.material! : ""}
+                    onChange={(v) => setDraft((d) => withLook(d, { material: isMaterial(v) ? v : undefined }))}
+                    options={MATERIAL_OPTIONS}
+                    className="w-44"
+                  />
+                </PanelRow>
                 {liveVariants.length === 0 ? (
                   <p className="rounded-md border border-dashed border-border px-3 py-2.5 text-xs leading-relaxed text-muted">
                     אין גוונים. הוסיפו את הצבעים שיש לכם — הם אלה שייבחרו על התוכנית ויופרדו ברשימת הציוד.
@@ -1431,6 +1455,17 @@ export function ProductDrawer({
                           paints the item on the plan and the colour the picker shows the client. */}
                       <SwatchField value={v.swatch} onChange={(swatch) => setVariant(v.id, { swatch })} label={`צבע הגוון ${v.name || ""}`.trim()} />
                       <TextField value={v.name} onChange={(name) => setVariant(v.id, { name })} placeholder="שם הגוון (זהב…)" aria-label="שם הגוון" className="flex-1" />
+                      {/* This shade's own material — one vase in clear glass and in gold (§4). */}
+                      <Select
+                        value={(() => {
+                          const m = draft.appearance?.shadeMaterials?.[v.id];
+                          return isMaterial(m) ? m : "";
+                        })()}
+                        onChange={(m) => setDraft((d) => withLook(d, { shadeMaterials: withShadeMaterial(d.appearance?.shadeMaterials, v.id, isMaterial(m) ? m : null) }))}
+                        options={[{ value: "", label: "כמו הפריט" }, ...MATERIAL_OPTIONS.slice(1)]}
+                        aria-label={`החומר של הגוון ${v.name || ""}`.trim()}
+                        className="w-32"
+                      />
                       {/* Empty = the item's price; the placeholder says which number that is. */}
                       {internal && (
                         <NumberField

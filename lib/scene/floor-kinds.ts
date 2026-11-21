@@ -54,7 +54,7 @@ import { flowerBuild } from "./flowers";
 import { treeEnvelopeParts, treeParts } from "./plants";
 import { applyTransform, compose, turn } from "./frame";
 import { BILLIARD_CLOTH, BILLIARD_POCKET, BILLIARD_WOOD, billiardLayout } from "@/lib/catalog/game-tables";
-import { ENVELOPE, clothMaterial, foliageMaterial, glossMaterial, metalMaterial, swatchMaterial, waterMaterial } from "./materials";
+import { ENVELOPE, clothMaterial, foliageMaterial, glossMaterial, materialRefOf, metalMaterial, swatchMaterial, waterMaterial } from "./materials";
 import { type MaterialRef, type NodeTag, type Part, type Transform, type Vec3, transform, vec3 } from "./types";
 
 // ── the constants ───────────────────────────────────────────────────────────────────────────────
@@ -669,8 +669,9 @@ function bottle(x: number, y: number, z: number, r: number, tag: NodeTag): Insta
 }
 
 function barMaterials(ctx: ItemContext): { body: MaterialRef; counter: MaterialRef } {
-  const body = swatchMaterial(ctx.resolved, ctx.product, ctx.tone, "matte", true);
-  if (!body.texture && !body.image) body.colour = ctx.tone;
+  // A bar the row says is made of something (marble, wood, metal…) is built in it (§4).
+  const body = ctx.material ? materialRefOf(ctx.material, ctx.tone) : swatchMaterial(ctx.resolved, ctx.product, ctx.tone, "matte", true);
+  if (!ctx.material && !body.texture && !body.image) body.colour = ctx.tone;
   const counter = glossMaterial(pale(ctx.tone) ? darkened(ctx.tone, 0.12) : darkened(ctx.tone, 0.2));
   return { body, counter };
 }

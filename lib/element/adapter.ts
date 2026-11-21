@@ -78,6 +78,7 @@ export function partOf(p: ShapePart, itemHeightMm: number): ElementPart {
     op,
     surface,
     colour: p.style?.fill,
+    material: p.material,
   });
 }
 
@@ -116,6 +117,7 @@ export function definitionOf(product: Product): ElementDefinition {
     op: front ? panelOf(dims) : frontReplacesPicture(product) ? NONE : opOf(shape, a?.revolve, a?.hollow, a?.body),
     surface: a ? surfaceOf(a) : undefined,
     colour: a?.baseStyle?.fill,
+    material: a?.baseMaterial,
   });
   const box = catalogBox(product);
   return {

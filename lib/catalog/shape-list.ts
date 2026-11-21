@@ -172,6 +172,7 @@ export function shapesOf(p: Product): ShapePart[] {
         ...(a?.texture ? { texture: a.texture } : {}),
         ...(a?.textureImage ? { textureImage: a.textureImage } : {}),
         ...(a?.baseStyle ? { style: a.baseStyle } : {}),
+        ...(a?.baseMaterial ? { material: a.baseMaterial } : {}),
         x: 0,
         y: 0,
         rotation: 0,
@@ -192,6 +193,7 @@ export function shapesOf(p: Product): ShapePart[] {
         ...(a?.texture ? { texture: a.texture } : {}),
         ...(a?.textureImage ? { textureImage: a.textureImage } : {}),
         ...(a?.baseStyle ? { style: a.baseStyle } : {}),
+        ...(a?.baseMaterial ? { material: a.baseMaterial } : {}),
         x: Math.round(at.x),
         y: Math.round(at.y),
         rotation: 0,
@@ -439,6 +441,7 @@ export function lookOf(look: Product, shapes: readonly ShapePart[]): { dimension
       texture: s0.texture,
       textureImage: s0.textureImage,
       baseStyle: s0.style,
+      baseMaterial: s0.material,
       parts: parts.length ? parts : undefined,
       // Kept whatever the first shape's turn (SH-9): the editor draws the seat sides on this very row
       // (its preview is lookOf's), so what it showed blocked is what is saved. They were dropped on
@@ -489,6 +492,7 @@ function frontLookOf(look: Product, first: ShapePart, rest: readonly ShapePart[]
       texture: s0.texture,
       textureImage: s0.textureImage,
       baseStyle: s0.style,
+      baseMaterial: s0.material,
       parts: parts.length ? parts : undefined,
       // A front base has no seats; a row turned from a plan base loses the sides it had.
       blockedSides: undefined,

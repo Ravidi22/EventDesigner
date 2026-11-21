@@ -51,7 +51,8 @@ export { type ItemContext, fallbackBody } from "./item-context";
 import { FALL_DROP_MM, flowerBuild } from "./flowers";
 import { shapedFlowersBody } from "./flower-cover";
 import { applyTransform, compose, turn } from "./frame";
-import { ENVELOPE, clothMaterial, glassMaterial, glossMaterial, metalMaterial } from "./materials";
+import { ENVELOPE, clothMaterial, glassMaterial, glossMaterial, materialRefOf, metalMaterial } from "./materials";
+import type { Material } from "@/lib/catalog/material";
 import { hexOf } from "./materials";
 import { borderBands } from "@/lib/catalog/border";
 import { type MaterialRef, type NodeTag, type Part, type Transform, type Vec3, transform, vec3 } from "./types";
@@ -100,7 +101,7 @@ const GLASS = glassMaterial();
 
 /** A candelabrum's arms: the metal where it has a colour; faint and clear where it is crystal or
  *  white, or they would be the only thing you see of it (item-symbol.tsx:346 armLine). */
-const armMaterial = (tone: string): MaterialRef => (pale(tone) ? { colour: "#d6d2dd", kind: "glass", opacity: 0.5 } : metalMaterial(tone));
+const armMaterial = (tone: string, material?: Material): MaterialRef => (material ? materialRefOf(material, tone) : pale(tone) ? { colour: "#d6d2dd", kind: "glass", opacity: 0.5 } : metalMaterial(tone));
 
 // ── part constructors ───────────────────────────────────────────────────────────────────────────
 
@@ -192,7 +193,7 @@ const CRYSTAL: MaterialRef = { colour: "#e6eef2", kind: "glass", opacity: 0.7 };
 /** What a candelabrum's foot, stem and bar are made of: crystal when its shade is clear (a
  *  near-white tone — "שקוף"), else metal in its tone. A clear piece in metal read as a grey lab
  *  rack (plan A's "פמוט צינורות קריסטל", 2026-10-24). */
-const frameOf = (tone: string): MaterialRef => (pale(tone) ? CRYSTAL : metalMaterial(tone));
+const frameOf = (tone: string, material?: Material): MaterialRef => (material ? materialRefOf(material, tone) : pale(tone) ? CRYSTAL : metalMaterial(tone));
 
 /** A candle standing at (x, y) from `from` up to `top`: its holder cup in the metal, the wax, the
  *  flame emitter at its tip — and in a sleeve the glass round it 1.75× its radius (item-symbol.tsx:362
@@ -560,11 +561,11 @@ function candlestickBody(ctx: ItemContext): ItemBuild {
   if (ctx.profile && round && (style === "ring" || style === "sleeves" || style === "tiered")) return turnedCandlestick(ctx, n, style === "sleeves");
   switch (style) {
     case "row":
-      return candleRow(w, d, h, n, long, false, tone);
+      return candleRow(w, d, h, n, long, false, tone, ctx.material);
     case "sleeves":
-      return long ? candleRow(w, d, h, n, long, true, tone) : candleRing(w, d, h, n, true, tone);
+      return long ? candleRow(w, d, h, n, long, true, tone, ctx.material) : candleRing(w, d, h, n, true, tone, ctx.material);
     case "tiered":
-      return candleTiers(w, d, h, n, tone);
+      return candleTiers(w, d, h, n, tone, ctx.material);
     case "cluster":
       return glassCluster(w, d, h, n, "pillar", tone);
     case "floating":
@@ -578,7 +579,7 @@ function candlestickBody(ctx: ItemContext): ItemBuild {
     case "fire":
       return fireBurner(w, d, h, round, tone);
     default:
-      return candleRing(w, d, h, n, false, tone);
+      return candleRing(w, d, h, n, false, tone, ctx.material);
   }
 }
 
@@ -589,7 +590,7 @@ function candlestickBody(ctx: ItemContext): ItemBuild {
 function turnedCandlestick(ctx: ItemContext, n: number, sleeves: boolean): ItemBuild {
   const { widthMm: w, depthMm: d, heightMm: h, tone } = ctx;
   const R = Math.min(w, d) / 2;
-  const metal = frameOf(tone);
+  const metal = frameOf(tone, ctx.material);
   const b = make(metal);
   const bodyH = h * 0.78;
   b.parts.push(turnedPart(ctx, ctx.profile!, metal, bodyH));
@@ -601,7 +602,7 @@ function turnedCandlestick(ctx: ItemContext, n: number, sleeves: boolean): ItemB
   const reach = R * (sleeves ? 0.62 : 0.68);
   const r = Math.min(R * 0.21, ((Math.PI * reach) / ring) * 0.55) / (sleeves ? 1.6 : 1);
   const armZ = bodyH * 0.92;
-  const arms = armMaterial(tone);
+  const arms = armMaterial(tone, ctx.material);
   for (let i = 0; i < ring; i++) {
     const p = polar(reach, -90 + (i * 360) / ring);
     arm(b, p, armZ, arms);
@@ -615,9 +616,9 @@ function turnedCandlestick(ctx: ItemContext, n: number, sleeves: boolean): ItemB
  *  (item-symbol.tsx:392 candleRing): reach 0.68 R (0.62 in sleeves), candle r = min(0.21 R,
  *  0.55 of the ring's pitch), the hub 0.2 R. The arms stand at 0.55 h; the ring's candles reach
  *  0.95 h and the centre one crowns it at h. */
-function candleRing(w: number, d: number, h: number, n: number, sleeves: boolean, tone: string): ItemBuild {
+function candleRing(w: number, d: number, h: number, n: number, sleeves: boolean, tone: string, material?: Material): ItemBuild {
   const R = Math.min(w, d) / 2;
-  const metal = frameOf(tone);
+  const metal = frameOf(tone, material);
   const b = make(metal);
   if (n <= 1) {
     // item-symbol.tsx:395: a foot 0.92 R wide and one candle 0.5 R (0.32 R in its sleeve).
@@ -632,7 +633,7 @@ function candleRing(w: number, d: number, h: number, n: number, sleeves: boolean
   foot(b, R * 0.4, metal);
   b.parts.push(cyl(Math.max(8, R * 0.07), armZ, vec3(0, 0, 0), metal));
   b.parts.push(cyl(R * 0.2, 30, vec3(0, 0, armZ - 15), metal));
-  const arms = armMaterial(tone);
+  const arms = armMaterial(tone, material);
   for (let i = 0; i < ring; i++) {
     const p = polar(reach, -90 + (i * 360) / ring);
     arm(b, p, armZ, arms);
@@ -646,11 +647,11 @@ function candleRing(w: number, d: number, h: number, n: number, sleeves: boolean
  *  candles at 0.76 R, an inner ring at 0.4 R turned half a step, one crowning the middle, crystal
  *  drops at 0.9 R between the outer arms. Under seven candles it is a ring. Outer arms at 0.42 h,
  *  inner at 0.58 h, the crown to h. */
-function candleTiers(w: number, d: number, h: number, n: number, tone: string): ItemBuild {
-  if (n < 7) return candleRing(w, d, h, n, false, tone);
+function candleTiers(w: number, d: number, h: number, n: number, tone: string, material?: Material): ItemBuild {
+  if (n < 7) return candleRing(w, d, h, n, false, tone, material);
   const R = Math.min(w, d) / 2;
-  const metal = frameOf(tone);
-  const arms = armMaterial(tone);
+  const metal = frameOf(tone, material);
+  const arms = armMaterial(tone, material);
   const b = make(metal);
   const rest = n - 1;
   const outer = Math.ceil(rest * 0.6);
@@ -682,9 +683,9 @@ function candleTiers(w: number, d: number, h: number, n: number, tone: string): 
 /** Candles in a line on a bar (item-symbol.tsx:375 candleRow): r = min(0.34 D, L/(2.3 n)) — 0.2 D
  *  and L/(3.8 n) in sleeves — over 0.84 L (0.78), the bar 0.24 D deep on a long piece, else
  *  min(0.12 D, 0.05 L) on a round foot min(0.36 D, 0.16 L). The bar stands at 0.5 h. */
-function candleRow(w: number, d: number, h: number, n: number, long: boolean, sleeves: boolean, tone: string): ItemBuild {
+function candleRow(w: number, d: number, h: number, n: number, long: boolean, sleeves: boolean, tone: string, material?: Material): ItemBuild {
   return along(w, d, (L, D) => {
-    const metal = frameOf(tone);
+    const metal = frameOf(tone, material);
     const b = make(metal);
     const r = Math.min(D * (sleeves ? 0.2 : 0.34), L / (n * (sleeves ? 3.8 : 2.3)));
     const span = L * (sleeves ? 0.78 : 0.84);
@@ -960,7 +961,9 @@ function vaseBody(ctx: ItemContext): ItemBuild {
   const R = w / 2;
   const form = vesselForm(ctx.product?.name, w, d, h);
   const shade = ctx.resolved?.variant?.name ?? "";
-  const material = pale(tone) && !METAL_SHADE.test(shade) ? glassMaterial(tone) : METAL_SHADE.test(shade) ? metalMaterial(tone) : glossMaterial(tone);
+  // A material the row (or its shade) says it is made of wins over the guess (bug round 2026-11-21 §4;
+  // QA MT-1: a white vase was always CLEAR glass).
+  const material = ctx.material ? materialRefOf(ctx.material, tone) : pale(tone) && !METAL_SHADE.test(shade) ? glassMaterial(tone) : METAL_SHADE.test(shade) ? metalMaterial(tone) : glossMaterial(tone);
   const b = make(material);
   const scaleY = w > 0 && Math.abs(d - w) > 1 ? d / w : undefined;
   const at = vec3(0, 0, 0);
@@ -977,7 +980,7 @@ function vaseBody(ctx: ItemContext): ItemBuild {
   // A plinth is a solid block in its own colour — a box on a square footprint, a drum on a round one
   // — never glass: a white stand is white, not clear.
   if (form === "plinth") {
-    const solid = make(METAL_SHADE.test(shade) ? metalMaterial(tone) : matte(tone));
+    const solid = make(ctx.material ? materialRefOf(ctx.material, tone) : METAL_SHADE.test(shade) ? metalMaterial(tone) : matte(tone));
     if (ctx.footprint.kind === "rect") solid.parts.push(box(w, d, h, at));
     else solid.parts.push(shaped(VESSEL_PROFILES.plinth.outer));
     return solid;
@@ -1167,6 +1170,13 @@ if (isMain(import.meta.url)) {
   const vase = itemBody("vase", ctxOf({ kind: "circle", diameterMm: 200 }, 300, { tone: DEFAULT_TONE.vase }));
   assert(vase.parts.length === 2 && vase.parts.every((p) => p.shape === "lathe") && vase.material.kind === "glass", "a pale vase is two lathes of glass");
   assert(itemBody("vase", ctxOf({ kind: "circle", diameterMm: 200 }, 300, { tone: "#c9a24a" })).material.kind === "gloss", "a gold one is glazed");
+  // §4 / QA MT-1: a material the row says wins over the guess — a white vase in CERAMIC is glazed, not
+  // clear glass; a gold one in METAL is metal; clear glass stays clear whatever the colour.
+  assert(itemBody("vase", ctxOf({ kind: "circle", diameterMm: 200 }, 300, { tone: "#ffffff", material: "ceramic" })).material.kind === "gloss", "a white vase made of ceramic is glazed, not glass");
+  assert(itemBody("vase", ctxOf({ kind: "circle", diameterMm: 200 }, 300, { tone: "#c9a24a", material: "metal" })).material.kind === "metal", "a gold vase made of metal is metal");
+  const clear = itemBody("vase", ctxOf({ kind: "circle", diameterMm: 200 }, 300, { tone: "#c9a24a", material: "glass-clear" })).material;
+  assert(clear.kind === "glass" && clear.colour !== "#c9a24a", "clear glass stays clear whatever the shade's colour");
+  assert(itemBody(null, ctxOf({ kind: "rect", widthMm: 600, depthMm: 600 }, 400, { tone: "#888888", material: "marble" })).material.texture === "marble", "the fallback body is built in its material");
   const runner = itemBody("runner", ctxOf({ kind: "rect", widthMm: 400, depthMm: 2400 }, 8, { tone: DEFAULT_TONE.runner }));
   assert(runner.parts.filter((p) => p.shape === "extrude").length === 2 && runner.parts.some((p) => p.shape === "box" && p.rotDeg === 90 && p.w === 2400 - 240), "a runner stored deep runs along y with a point at each end");
   // …with a contour (lib/catalog/border.ts): a ring on its top in the band's colour, no tassels when

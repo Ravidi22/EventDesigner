@@ -15,6 +15,8 @@ import type { ElementDefinition } from "@/lib/element/types";
 import { isMain } from "../self-check";
 import type { ItemBuild } from "./collect";
 import { type MaterialRef, type Part, vec3 } from "./types";
+import { materialRefOf } from "./materials";
+import { isMaterial } from "@/lib/catalog/material";
 
 /** How thick a shape drawn as lines only stands in the room — a rope, a rail, a hedge-line. */
 export const LINE_WALL_MM = 40;
@@ -26,8 +28,12 @@ const MIN_PART_MM = 10;
 function partMaterial(p: ResolvedPart, body: MaterialRef): MaterialRef | undefined {
   const s = p.part.surface;
   const colour = p.part.colour;
-  if (!s && !colour) return undefined;
-  const m: MaterialRef = { colour: colour ?? body.colour, kind: body.kind };
+  // A part made of something of its own (a crystal stem, gold arms — §4) is built in it, in its own
+  // colour, else the item's; a texture of its own is laid on that.
+  const own = isMaterial(p.part.material) ? p.part.material : undefined;
+  if (!s && !colour && !own) return undefined;
+  const m: MaterialRef = own ? materialRefOf(own, colour ?? body.colour) : { colour: colour ?? body.colour, kind: body.kind };
+  if (own && !s) return m;
   if (s?.textureImage?.url) m.image = s.textureImage;
   else if (s?.texture) m.texture = s.texture;
   return m.image || m.texture || colour ? m : undefined;

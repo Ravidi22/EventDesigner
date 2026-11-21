@@ -13,6 +13,7 @@ import type { Texture } from "@/lib/catalog/textures";
 import type { Product } from "@/lib/catalog/types";
 import type { Resolved } from "@/lib/studio/catalog-resolver";
 import type { MaterialKind, MaterialRef } from "./types";
+import { MATERIAL_TONE, type Material } from "@/lib/catalog/material";
 
 /** The real size of one repeat of each material, in mm — the plan's `LaidPattern` sizes
  *  (components/surface-fill.tsx): planks, slabs in a running bond, deck boards, large tiles. */
@@ -72,6 +73,44 @@ export const waterMaterial = (): MaterialRef => ({ colour: SURFACE_BASE.water, k
 export const emissiveMaterial = (colour: string): MaterialRef => ({ colour, kind: "emissive" });
 /** A face that lights by the mood — an LED strip, a screen (./led.ts). */
 export const glowMaterial = (colour: string): MaterialRef => ({ colour, kind: "glow" });
+
+/** What a chosen MATERIAL is built in (lib/catalog/material.ts, bug round 2026-11-21 §4), in
+ *  `colour` — the shade's or the row's — else the material's own tone. Clear glass and crystal keep
+ *  their own near-white whatever the colour says (a tint is "glass-tinted"); a mirror is always a
+ *  mirror. A texture is the material's grain, never the plan's texture (DECIDE 8). */
+export function materialRefOf(material: Material, colour?: string): MaterialRef {
+  const c = hexOf(colour) ?? MATERIAL_TONE[material];
+  switch (material) {
+    case "metal":
+      return metalMaterial(c);
+    case "mirror":
+      return metalMaterial(MATERIAL_TONE.mirror);
+    case "glass-clear":
+      return glassMaterial();
+    case "glass-frosted":
+      return { colour: hexOf(colour) ?? MATERIAL_TONE["glass-frosted"], kind: "glass", opacity: 0.72 };
+    case "glass-tinted":
+      return { colour: c, kind: "glass", opacity: 0.45 };
+    case "crystal":
+      return crystalMaterial();
+    case "acrylic":
+      return { colour: hexOf(colour) ?? MATERIAL_TONE.acrylic, kind: "glass", opacity: 0.35 };
+    case "stone":
+      return { colour: c, kind: "matte", texture: "paving" };
+    case "marble":
+      return { colour: c, kind: "gloss", texture: "marble" };
+    case "concrete":
+      return { colour: c, kind: "matte" };
+    case "wood":
+      return { colour: c, kind: "matte", texture: "wood" };
+    case "ceramic":
+      return glossMaterial(c);
+    case "velvet":
+      return clothMaterial(c);
+    case "rattan":
+      return { colour: c, kind: "fabric" };
+  }
+}
 
 /** The envelope's own tones: not the designer's to choose, so not tokens either. */
 export const ENVELOPE = {
