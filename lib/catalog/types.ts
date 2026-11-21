@@ -465,6 +465,9 @@ export interface MapAppearance {
   /** A candlestick's candles, wind guards, arm heights and crystal (lib/catalog/candles.ts
    *  CandleSpec). Absent = the drawing it always was. Typed loosely here; read through candleSpecOf. */
   candles?: Record<string, unknown>;
+  /** A fire trough's stones, body and guard (lib/catalog/fire.ts FireSpec) — the candlestick style
+   *  "fire". Absent = its defaults (white stones round the burner, a 12 cm body). */
+  fire?: Record<string, unknown>;
   /** A RUG's or a CLOTH's contour (lib/catalog/border.ts): a coloured band inside its edge, a second
    *  one inside a gap, the fringe in a colour of its own. The row's; a placement may override it
    *  (Placement.border). Absent = the drawing it always had. Ignored on every other category. */

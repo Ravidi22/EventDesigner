@@ -4,6 +4,7 @@
 import { materialRefOf } from "./materials";
 import type { Material } from "@/lib/catalog/material";
 import type { CandleSpec } from "@/lib/catalog/candles";
+import type { FireSpec } from "@/lib/catalog/fire";
 import type { Footprint } from "@/lib/studio/footprint";
 import { buildHollow, footprintOutlines } from "@/lib/studio/footprint";
 import type { Product, RevolvePoint } from "@/lib/catalog/types";
@@ -41,6 +42,8 @@ export interface ItemContext {
   /** A candlestick's candles, guards, arm heights and crystal (lib/catalog/candles.ts). Absent = the
    *  candles it always built. */
   candles?: CandleSpec;
+  /** A fire trough's stones, body and guard (lib/catalog/fire.ts). Absent = its defaults. */
+  fire?: FireSpec;
   /** symbolCount: arms, bulbs, candles. */
   count: number;
   chairStyle?: ChairStyle;

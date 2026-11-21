@@ -114,6 +114,7 @@ import { NumberField } from "@/components/number-field";
 import { Segmented, segmentClass } from "@/components/segmented";
 import { ColorField, StyleFields } from "@/components/style-fields";
 import { isMaterial, MATERIAL_LABEL, MATERIALS, METAL_FINISHES } from "@/lib/catalog/material";
+import { FIRE_DEFAULTS, FIRE_STONES, FIRE_STONES_LABEL, firePatch, fireSpecOf } from "@/lib/catalog/fire";
 import { ARM_SHAPE_LABEL, CANDLE_DROPS_LABEL, CANDLE_GUARD_LABEL, CANDLE_GUARDS, CANDLE_HEIGHTS, CANDLE_HEIGHTS_LABEL, CANDLE_KIND_LABEL, CANDLE_KINDS, CANDLE_SIZE, candlePatch, candleSpecOf, GUARD_SIZE, type CandleHeights } from "@/lib/catalog/candles";
 import { fieldLabelClassName } from "@/components/control";
 import { CurtainStyleTiles } from "@/components/curtain-style-tiles";
@@ -850,7 +851,7 @@ function StyleTiles({ kind, product, onPick, off, lead }: { kind: SymbolKind; pr
               className={tileClass(on)}
             >
               <svg viewBox={`${-b.w / 2 - pad} ${-b.h / 2 - pad} ${b.w + pad * 2} ${b.h + pad * 2}`} className="h-10 w-full" aria-hidden>
-                <ItemSymbol kind={kind} footprint={f} count={count} tone={tone} drawStyle={st} chandelier={chandelierDrawOf(product.appearance, product.variants)} chuppah={chuppahDrawOf(product.appearance)} candles={candleSpecOf(product.appearance)} />
+                <ItemSymbol kind={kind} footprint={f} count={count} tone={tone} drawStyle={st} chandelier={chandelierDrawOf(product.appearance, product.variants)} chuppah={chuppahDrawOf(product.appearance)} candles={candleSpecOf(product.appearance)} fire={fireSpecOf(product.appearance)} />
               </svg>
               <span className="w-full truncate text-center text-[10px] leading-tight text-ink-soft">{set.label[st]}</span>
             </button>
@@ -1084,7 +1085,33 @@ function PictureFields({
       {/* The candles themselves (lib/catalog/candles.ts CandleSpec — §5.3): what burns, how big, in
           what glass, how high each arm stands, what crystal hangs, how the arms curve — and how many
           arms. Every field blank = the candlestick it always was; a default is never stored. */}
+      {/* A fire trough's look (lib/catalog/fire.ts, §5.4): its stones, their colour and size, a glass
+          guard, the body's height — its material is the look group's "חומר" (concrete when none). */}
       {product.category === "candlesticks" &&
+        drawStyleOf(preview) === "fire" &&
+        (() => {
+          const fs = fireSpecOf(preview.appearance);
+          const set = (patch: Parameters<typeof firePatch>[1]) => onChange({ fire: firePatch(fs, patch) as Record<string, unknown> | undefined });
+          return (
+            <div className="space-y-2.5">
+              <Segmented label="אבנים" value={fs?.stones ?? FIRE_DEFAULTS.stones} options={FIRE_STONES.map((v) => [v, FIRE_STONES_LABEL[v]] as const)} onChange={(v) => set({ stones: v })} />
+              {(fs?.stones ?? FIRE_DEFAULTS.stones) !== "none" && (
+                <>
+                  <ColorField label="צבע האבנים" value={fs?.stoneColour ?? FIRE_DEFAULTS.stoneColour} opacity={undefined} emptyLabel="לבן" onChange={(v) => set({ stoneColour: v ?? null })} onClear={() => set({ stoneColour: null })} />
+                  <PanelRow label="גודל אבן (ס״מ)" htmlFor="fire-stone">
+                    <NumberField id="fire-stone" decimals={1} min={0.8} max={10} value={(fs?.stoneSizeMm ?? FIRE_DEFAULTS.stoneSizeMm) / 10} onChange={(v) => set({ stoneSizeMm: Math.round(v * 10) })} className="w-20" />
+                  </PanelRow>
+                </>
+              )}
+              <PanelRow label="גובה הגוף (ס״מ)" htmlFor="fire-body">
+                <NumberField id="fire-body" decimals={0} min={3} max={100} value={Math.round((fs?.bodyHeightMm ?? FIRE_DEFAULTS.bodyHeightMm) / 10)} onChange={(v) => set({ bodyHeightMm: Math.round(v * 10) })} className="w-20" />
+              </PanelRow>
+              <SwitchRow checked={!!fs?.guard} onChange={(on) => set({ guard: on })} label="מגן זכוכית סביב המבער" hint="לוחות זכוכית שקופים סביב האש — מגן רוח." />
+            </div>
+          );
+        })()}
+      {product.category === "candlesticks" &&
+        drawStyleOf(preview) !== "fire" &&
         (() => {
           const spec = candleSpecOf(preview.appearance);
           const set = (patch: Parameters<typeof candlePatch>[1]) => onChange({ candles: candlePatch(spec, patch) as Record<string, unknown> | undefined });
@@ -3519,7 +3546,7 @@ export function AppearanceModal({
                             overhead={preview.layer === "ceiling"}
                             chairStyle={chairStyleOf(preview)}
                             drawStyle={drawStyleOf(preview)}
-                            chandelier={chandelierDrawOf(preview.appearance, preview.variants)} chuppah={chuppahDrawOf(preview.appearance)} candles={candleSpecOf(preview.appearance)}
+                            chandelier={chandelierDrawOf(preview.appearance, preview.variants)} chuppah={chuppahDrawOf(preview.appearance)} candles={candleSpecOf(preview.appearance)} fire={fireSpecOf(preview.appearance)}
                             postMm={pergolaPostOf(preview)}
                             rise={climbRise(preview)}
                             border={previewSymbol === "runner" ? borderOf(undefined, preview) : undefined}

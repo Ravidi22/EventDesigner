@@ -101,6 +101,7 @@
     "check:edge-touch": "tsx lib/design-document/edge-touch.ts",
     "check:material": "tsx lib/catalog/material.ts",
     "check:candles": "tsx lib/catalog/candles.ts",
+    "check:fire": "tsx lib/catalog/fire.ts",
     "db:seed": "tsx lib/db/seed.ts",
     "db:reset": "tsx lib/db/reset.ts && tsx lib/db/seed.ts",
     "db:verify": "tsx lib/db/verify-roundtrip.ts",

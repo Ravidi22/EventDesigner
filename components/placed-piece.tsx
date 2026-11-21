@@ -1,6 +1,7 @@
 "use client";
 
 import { candleSpecOf } from "@/lib/catalog/candles";
+import { fireSpecOf } from "@/lib/catalog/fire";
 import { memo } from "react";
 import type { Placement, Point } from "@/lib/design-document/types";
 import type { Product } from "@/lib/catalog/types";
@@ -86,7 +87,7 @@ export function PlacedPiece({
           chairStyle={chairStyleOf(product)}
           drawStyle={drawStyleOf(product)}
           chandelier={chandelierDrawOf(product.appearance, product.variants)}
-          chuppah={chuppahDrawOf(product.appearance)} candles={candleSpecOf(product.appearance)}
+          chuppah={chuppahDrawOf(product.appearance)} candles={candleSpecOf(product.appearance)} fire={fireSpecOf(product.appearance)}
           postMm={pergolaPostOf(product)}
           rise={symbol === "stairs" || symbol === "ramp" ? climbRise(product, p.climb) : undefined}
           detail={detail}

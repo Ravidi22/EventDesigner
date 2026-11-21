@@ -46,6 +46,7 @@ import { chairRequest, itemBody, vesselRimShare, type ItemContext } from "./item
 import { clothMaterial, hexOf, swatchMaterial } from "./materials";
 import { MATERIAL_TONE, materialOf } from "@/lib/catalog/material";
 import { candleSpecOf } from "@/lib/catalog/candles";
+import { fireSpecOf } from "@/lib/catalog/fire";
 import { type BodyNode, type LabelNode, type NodeTag, type Part, type SceneInput, type Transform, transform, vec3 } from "./types";
 
 // --- the rules, as numbers ------------------------------------------------------------------------
@@ -432,6 +433,7 @@ function contextFor(product: Product | undefined, resolved: Resolved | undefined
     tone: own ?? (material ? MATERIAL_TONE[material] : kind ? DEFAULT_TONE[kind].toLowerCase() : NO_PICTURE_TONE),
     ...(material ? { material } : {}),
     ...(candleSpecOf(product?.appearance) ? { candles: candleSpecOf(product?.appearance) } : {}),
+    ...(fireSpecOf(product?.appearance) ? { fire: fireSpecOf(product?.appearance) } : {}),
     count: product && kind ? symbolCount(product, kind) : 1,
     author,
   };

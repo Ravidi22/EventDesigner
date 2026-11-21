@@ -1,4 +1,5 @@
 import { candleSpecOf } from "@/lib/catalog/candles";
+import { fireSpecOf } from "@/lib/catalog/fire";
 import { VenueItemGlyph, itemHasPicture } from "@/components/venue-item";
 import { BackToStudio } from "./back-to-studio";
 import { Fragment } from "react";
@@ -1861,7 +1862,7 @@ export function PlacementGlyph({
         {block && <ChairBlock product={block.product} spec={block.spec} tone={own} ink={MUTED} />}
         {aisle && <AisleDrawing view={aisle} ink={MUTED} detail={textMm === undefined || textMm <= 2.6 * 50} />}
         {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} ink={MUTED} />}
-        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} chandelier={chandelierDrawOf(r.product.appearance, r.product.variants)} chuppah={chuppahDrawOf(r.product.appearance)} candles={candleSpecOf(r.product.appearance)} postMm={pergolaPostOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} {...(symbol === "screen" ? { label: r.product.name, textMm } : {})} />}
+        {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={own} overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} chandelier={chandelierDrawOf(r.product.appearance, r.product.variants)} chuppah={chuppahDrawOf(r.product.appearance)} candles={candleSpecOf(r.product.appearance)} fire={fireSpecOf(r.product.appearance)} postMm={pergolaPostOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} {...(symbol === "screen" ? { label: r.product.name, textMm } : {})} />}
         {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={MUTED} />}
         {!symbol && !block && !aisle && cut && (
           <CarpetCut
@@ -1906,7 +1907,7 @@ export function PlacementGlyph({
       {block && <ChairBlock product={block.product} spec={block.spec} tone={flat} ink={INK} print />}
       {aisle && <AisleDrawing view={aisle} tone={flat} runnerTone={fl ? fl.rug : "#ffffff"} ink={INK} print detail={textMm === undefined || textMm <= 2.6 * 50} />}
       {vessel && <VesselMark variantId={vessel} pass="under" holder={footprint} ink={INK} print tone={flat} />}
-      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={flat} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} chandelier={chandelierDrawOf(r.product.appearance, r.product.variants)} chuppah={chuppahDrawOf(r.product.appearance)} candles={candleSpecOf(r.product.appearance)} postMm={pergolaPostOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} {...(symbol === "screen" ? { label: r.product.name, textMm } : {})} />}
+      {symbol && r && <ItemSymbol kind={symbol} footprint={footprint} count={symbolCount(r.product, symbol)} tone={flat} ink={INK} print overhead={overhead} chairStyle={chairStyleOf(r.product)} drawStyle={drawStyleOf(r.product)} chandelier={chandelierDrawOf(r.product.appearance, r.product.variants)} chuppah={chuppahDrawOf(r.product.appearance)} candles={candleSpecOf(r.product.appearance)} fire={fireSpecOf(r.product.appearance)} postMm={pergolaPostOf(r.product)} {...climbProps} {...benchProps} {...flowerProps} border={symbol === "runner" ? borderOf(placement, r.product) : undefined} {...(symbol === "screen" ? { label: r.product.name, textMm } : {})} />}
       {vessel && <VesselMark variantId={vessel} pass="over" holder={footprint} ink={INK} print />}
       {/* A block's chairs are each outlined; round them all goes the line the crew sets the block
           out by, at the weight of a note. */}

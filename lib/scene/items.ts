@@ -54,6 +54,7 @@ import { applyTransform, compose, turn } from "./frame";
 import { ENVELOPE, clothMaterial, glassMaterial, glossMaterial, materialRefOf, metalMaterial } from "./materials";
 import type { Material } from "@/lib/catalog/material";
 import { armLevels, candleLook, type CandleLook, type CandleSpec } from "@/lib/catalog/candles";
+import { fireLayout } from "@/lib/catalog/fire";
 
 /** What a candlestick's spec asks of every recipe (lib/catalog/candles.ts) — absent fields = the
  *  recipe's own, as before. */
@@ -702,7 +703,7 @@ function candlestickBody(ctx: ItemContext): ItemBuild {
     case "lantern":
       return lanterns(w, d, h, n, long, tone);
     case "fire":
-      return fireBurner(w, d, h, round, tone);
+      return fireBurner(ctx);
     default:
       return candleRing(w, d, h, n, false, tone, ctx.material, o);
   }
@@ -950,38 +951,59 @@ function lanterns(w: number, d: number, h: number, n: number, long: boolean, ton
 /** A fire feature (item-symbol.tsx:608 fireBurner): a bowl with its burner 0.72 R across and a ring
  *  of flames at 0.46 R — one per ~90 mm of that ring, six at least; or a trough down a long piece
  *  with a slot 0.4 D wide and a tongue of flame every 130 mm along it. Its count is not candles. */
-function fireBurner(w: number, d: number, h: number, round: boolean, tone: string): ItemBuild {
+function fireBurner(ctx: ItemContext): ItemBuild {
+  const { widthMm: w, depthMm: d, tone } = ctx;
+  const round = isRound(ctx.footprint);
+  const spec = ctx.fire;
   const dark = matte(BURNER);
-  if (round) {
-    const R = Math.min(w, d) / 2;
-    const b = make(matte(tone));
-    b.parts.push(lathe([{ r: R * 0.4, z: 0 }, { r: R * 0.95, z: h * 0.55 }, { r: R, z: h * 0.9 }, { r: R, z: h }, { r: R * 0.9, z: h }, { r: R * 0.76, z: h * 0.86 }], vec3(0, 0, 0)));
-    b.parts.push(cyl(R * 0.72, 12, vec3(0, 0, h * 0.86), dark));
-    const k = Math.max(6, Math.round((2 * Math.PI * R * 0.46) / 90));
-    const tongue = Math.min(R * 0.12, ((Math.PI * R * 0.46) / k) * 0.6);
-    for (let i = 0; i < k; i++) {
-      const p = polar(R * 0.46, (i * 360) / k);
-      b.emitters.push({ at: vec3(p.x * (w / 2 / R), p.y * (d / 2 / R), h), radiusMm: Math.max(FLAME_R_MM, tongue), colour: ENVELOPE.flame, strength: FIRE });
+  // A LOW body (lib/catalog/fire.ts, §5.4 — the row's height is the flames', never one block that
+  // tall), in its material — concrete unless the row says, its own colour when it has one.
+  const own = hexOf(ctx.resolved?.swatch) ?? hexOf(ctx.product?.appearance?.style?.fill);
+  const body = ctx.material ? materialRefOf(ctx.material, tone) : materialRefOf("concrete", own);
+  const tag = tagOf(ctx, "item");
+  const build = (L: number, D: number): ItemBuild => {
+    const lay = fireLayout(L, D, round, spec);
+    const H = lay.bodyH;
+    const b = make(body);
+    if (round) {
+      const R = L / 2;
+      b.parts.push(cyl(R, H, vec3(0, 0, 0), body));
+      b.parts.push(cyl(lay.slot.halfL, 8, vec3(0, 0, H - 4), dark));
+      const k = Math.max(6, Math.round((2 * Math.PI * lay.slot.halfL * 0.8) / 90));
+      for (let i = 0; i < k; i++) {
+        const q = polar(lay.slot.halfL * 0.8, (i * 360) / k);
+        b.emitters.push({ at: vec3(q.x, q.y, H + 10), radiusMm: FLAME_R_MM * 1.4, colour: ENVELOPE.flame, strength: FIRE });
+      }
+      if (lay.guard) b.parts.push(hurricane(lay.slot.halfL + 40, 260, vec3(0, 0, H)));
+    } else {
+      b.parts.push(box(L, D, H, vec3(0, 0, 0), body));
+      b.parts.push(box(lay.slot.halfL * 2, lay.slot.halfD * 2, 8, vec3(0, 0, H - 4), dark));
+      const slotL = lay.slot.halfL * 2;
+      const k = Math.max(3, Math.floor(slotL / 130));
+      const step = slotL / k;
+      for (let i = 0; i < k; i++)
+        b.emitters.push({ at: vec3(-slotL / 2 + step * (i + 0.5), (i % 2 ? 1 : -1) * D * 0.03, H + 10), radiusMm: Math.max(FLAME_R_MM, step * (i % 3 === 1 ? 0.48 : 0.4)), colour: ENVELOPE.flame, strength: FIRE });
+      if (lay.guard) {
+        // A glass wind screen round the burner: four panes standing on the trough's top.
+        const gx = lay.slot.halfL + 40;
+        const gy = lay.slot.halfD + 40;
+        for (const sy of [-1, 1]) b.parts.push(box(gx * 2, 6, 260, vec3(0, sy * gy, H), GUARD_GLASS));
+        for (const sx of [-1, 1]) b.parts.push(box(6, gy * 2, 260, vec3(sx * gx, 0, H), GUARD_GLASS));
+      }
     }
+    // The pebbles — one shared pebble, instanced, each at its own size: half sunk in the trough's
+    // bed, or lying on the table round it.
+    const base = Math.max(4, (spec?.stoneSizeMm ?? 25) / 2);
+    const colour = lay.colour.toLowerCase();
+    const pebble: Part[] = [lathe([{ r: 0, z: 0 }, { r: base * 0.82, z: base * 0.12 }, { r: base, z: base * 0.38 }, { r: base * 0.78, z: base * 0.7 }, { r: 0, z: base * 0.8 }], vec3(0, 0, 0))];
+    const onTrough = (x: number, y: number) => (round ? Math.hypot(x, y) <= L / 2 : Math.abs(x) <= L / 2 && Math.abs(y) <= D / 2);
+    lay.stones.forEach((st, i) => {
+      const z = onTrough(st.x, st.y) ? H - st.r * 0.25 : 0;
+      b.instanced.push({ key: `pebble:${colour}:${Math.round(base)}`, parts: pebble, material: glossMaterial(colour), tag, castShadow: false, at: { at: vec3(st.x, st.y, z), rotationDeg: (i * 47) % 360, scale: st.r / base } });
+    });
     return b;
-  }
-  return along(w, d, (L, D) => {
-    const b = make(matte(tone));
-    const slotL = L - D * 0.6;
-    const k = Math.max(3, Math.floor(slotL / 130));
-    const step = slotL / k;
-    b.parts.push(box(L, D, h, vec3(0, 0, 0)));
-    b.parts.push(box(slotL, D * 0.4, 10, vec3(0, 0, h - 8), dark));
-    for (let i = 0; i < k; i++) {
-      b.emitters.push({
-        at: vec3(-slotL / 2 + step * (i + 0.5), (i % 2 ? 1 : -1) * D * 0.03, h),
-        radiusMm: Math.max(FLAME_R_MM, step * (i % 3 === 1 ? 0.48 : 0.4)),
-        colour: ENVELOPE.flame,
-        strength: FIRE,
-      });
-    }
-    return b;
-  });
+  };
+  return round ? build(Math.min(w, d), Math.min(w, d)) : along(w, d, build);
 }
 
 // ── lamp, vase, runner (item-symbol.tsx:647, :670, :1244) ───────────────────────────────────────
@@ -1338,6 +1360,12 @@ if (isMain(import.meta.url)) {
   assert(trough.emitters.length === Math.floor((1200 - 180) / 130) && trough.emitters.every((e) => e.strength === FIRE), "a fire trough's flames follow its length, not its count");
   const bowl = itemBody("candlestick", ctxOf({ kind: "circle", diameterMm: 600 }, 300, { count: 1, drawStyle: "fire" }));
   assert(bowl.emitters.length >= 6, "a fire bowl has a ring of flames");
+  // §5.4: a LOW body (12 cm, never the row's height), white pebbles round the burner, a frame on ask.
+  const troughTop = Math.max(...trough.parts.filter((p) => p.shape === "box").map((p) => (p as { at: { z: number }; h: number }).at.z + (p as { h: number }).h));
+  assert(troughTop <= 130, `the trough is a low body, not a block the row's height (${troughTop})`);
+  assert(trough.instanced.length > 50 && trough.instanced.every((r) => r.key.startsWith("pebble:#f2f0ea")), "white pebbles fill the trough round its burner");
+  const framedT = itemBody("candlestick", ctxOf({ kind: "rect", widthMm: 1200, depthMm: 300 }, 250, { count: 1, drawStyle: "fire", fire: { stones: "frame", guard: true } }));
+  assert(framedT.instanced.some((r) => r.at.at.z === 0) && framedT.parts.filter((p) => p.material?.kind === "glass").length === 4, "a frame of stones on the table round it; a glass guard of four panes");
   const crystal = itemBody("candlestick", ctxOf({ kind: "circle", diameterMm: 300 }, 600, { count: 4, drawStyle: "ring", tone: "#f7f6fc" }));
   assert(crystal.parts.some((p) => p.shape === "box" && p.material?.kind === "glass"), "a crystal piece's arms are faint glass, not white metal");
 

@@ -35,6 +35,7 @@ import type { CurtainStyle } from "@/lib/catalog/symbols";
 import { CASCADE, EMPIRE, FITTING_COLOUR, chandelierOf, chandelierTiers, crystalBeads, empireCrownR, equalGlobes, glassFinishOf, ringGlobe, type ChandelierDraw, type CrystalBead } from "@/lib/catalog/chandelier";
 import { CHUPPAH_FINISH_COLOUR, chuppahLayout, chuppahOf, cloudFlowers, cloudPieces, type ChuppahDraw } from "@/lib/catalog/chuppah";
 import type { CandleSpec } from "@/lib/catalog/candles";
+import { fireLayout, type FireSpec } from "@/lib/catalog/fire";
 import { FlowerDrawing } from "./flower-symbol";
 import { SurfaceFill } from "./surface-fill";
 import { defaultMix, seedOf, type FlowerDrawSpec, type FlowerForm } from "@/lib/catalog/flower-draw";
@@ -149,6 +150,8 @@ export interface ItemSymbolProps {
   /** A candlestick's candles and guards (MapAppearance.candles, lib/catalog/candles.ts): a guard is
    *  drawn as the glass round each candle. Absent = the candlestick it always was. */
   candles?: CandleSpec;
+  /** A fire trough's stones and guard (MapAppearance.fire, lib/catalog/fire.ts). Absent = its defaults. */
+  fire?: FireSpec;
   /** For a flight or a ramp: the height it climbs and which way (climbRise, lib/studio/climb-item.ts). */
   rise?: PlacementClimb & { heightMm: number };
   /** How the caller turns and flips the item — so a ramp's slope, written along it, reads upright. */
@@ -173,7 +176,7 @@ export interface ItemSymbolProps {
   label?: string;
 }
 
-function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, drawStyle, chandelier: chandelierSpec, chuppah: chuppahSpec, candles, rise, turnDeg, mirrored, textMm, bench, chairs = true, border, postMm, label }: ItemSymbolProps) {
+function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, ink = "var(--color-ink-soft)", print, overhead, chairStyle, drawStyle, chandelier: chandelierSpec, chuppah: chuppahSpec, candles, fire, rise, turnDeg, mirrored, textMm, bench, chairs = true, border, postMm, label }: ItemSymbolProps) {
   // A pergola — posts on its outline's corners, its roof across them — is the venue's own drawing
   // (components/pergola-glyph.tsx), on ANY outline: a bowed or rounded one too (symbolOf lets it
   // through), so it is drawn before the primitive-box rule below. On paper its posts are solid ink.
@@ -219,7 +222,7 @@ function ItemSymbolView({ kind, footprint, count, flowers, detail = true, tone, 
   let body: ReactNode;
   switch (kind) {
     case "candlestick":
-      body = candlestick(w, h, round, count, c, line, drawStyle as CandleStyle | undefined, !!candles?.guard && candles.guard !== "none");
+      body = candlestick(w, h, round, count, c, line, drawStyle as CandleStyle | undefined, !!candles?.guard && candles.guard !== "none", fire);
       break;
     case "lamp":
       body = lamp(w, h, round, c, line, drawStyle as LampStyle | undefined);
@@ -481,7 +484,7 @@ function plainFlowers(w: number, h: number, tone: string | undefined, form?: Flo
  *  footprint: a long piece a row of candles on a bar, anything else its candles round a stem. Each
  *  candle wears its flame, which is what makes it read as light. `n` is the row's arms: candles,
  *  cylinders or glasses, whichever the style is made of. */
-function candlestick(w: number, h: number, round: boolean, n: number, c: Colours, line: Line, style?: CandleStyle, guarded = false) {
+function candlestick(w: number, h: number, round: boolean, n: number, c: Colours, line: Line, style?: CandleStyle, guarded = false, fire?: FireSpec) {
   const long = !round && Math.max(w, h) / Math.min(w, h) >= 1.8;
   switch (style ?? (long ? "row" : "ring")) {
     case "row":
@@ -504,7 +507,7 @@ function candlestick(w: number, h: number, round: boolean, n: number, c: Colours
     case "lantern":
       return lanterns(w, h, n, long, c, line);
     case "fire":
-      return fireBurner(w, h, round, c, line);
+      return fireBurner(w, h, round, c, line, fire);
     default:
       return candleRing(w, h, n, guarded, c, line);
   }
@@ -774,7 +777,7 @@ function lanterns(w: number, h: number, n: number, long: boolean, c: Colours, li
 
 /** A fire feature: a burner trough down a long piece (a "שולחן אש" — the slot, its tongues of
  *  flame along it), or a fire bowl when round. Its count is not candles — the flames follow its length. */
-function fireBurner(w: number, h: number, round: boolean, c: Colours, line: Line) {
+function fireBurner(w: number, h: number, round: boolean, c: Colours, line: Line, spec?: FireSpec) {
   const burner = c.print ? "#ffffff" : "#3B3431";
   const tongue = (key: string, x: number, y: number, rx: number, ry: number, deg: number) => (
     <g key={key} transform={`translate(${x} ${y}) rotate(${deg})`}>
@@ -782,30 +785,45 @@ function fireBurner(w: number, h: number, round: boolean, c: Colours, line: Line
       {!c.print && <ellipse rx={rx * 0.5} ry={ry * 0.45} fill="#FFE7A6" />}
     </g>
   );
+  // The pebbles (lib/catalog/fire.ts fireLayout — the room lays the very same): a white dot each, its
+  // edge in a faint ink so white stones read on a white cloth; ink only, in print.
+  const pebbles = (stones: { x: number; y: number; r: number }[], colour: string) => (
+    <g>
+      {stones.map((st, i) => (
+        <circle key={i} cx={st.x} cy={st.y} r={st.r} fill={c.print ? "#ffffff" : colour} stroke={c.ink} strokeOpacity={0.35} strokeWidth={0.6} vectorEffect="non-scaling-stroke" />
+      ))}
+    </g>
+  );
   if (round) {
     const R = Math.min(w, h) / 2;
-    const k = Math.max(6, Math.round((2 * Math.PI * R * 0.46) / 90));
+    const lay = fireLayout(R * 2, R * 2, true, spec);
+    const k = Math.max(6, Math.round((2 * Math.PI * lay.slot.halfL * 0.8) / 90));
     return (
       <>
         <ellipse rx={w / 2} ry={h / 2} fill={c.tone} {...line} />
-        <ellipse rx={w * 0.36} ry={h * 0.36} fill={burner} {...line} />
+        {pebbles(lay.stones, lay.colour)}
+        <circle r={lay.slot.halfL} fill={burner} {...line} />
         {Array.from({ length: k }, (_, i) => {
           const a = (i * 360) / k;
-          const p = polar(R * 0.46, a);
-          return tongue(`f${i}`, p.x * (w / 2 / R), p.y * (h / 2 / R), Math.min(R * 0.12, (Math.PI * R * 0.46) / k * 0.6), R * 0.07, a + 90);
+          const p = polar(lay.slot.halfL * 0.8, a);
+          return tongue(`f${i}`, p.x, p.y, Math.min(R * 0.12, ((Math.PI * lay.slot.halfL * 0.8) / k) * 0.6), R * 0.07, a + 90);
         })}
+        {lay.guard && <circle r={lay.slot.halfL + 40} fill="none" {...line} strokeDasharray="4 3" />}
       </>
     );
   }
   return along(w, h, (L, D) => {
-    const slotL = L - D * 0.6;
+    const lay = fireLayout(L, D, false, spec);
+    const slotL = lay.slot.halfL * 2;
     const k = Math.max(3, Math.floor(slotL / 130));
     const step = slotL / k;
     return (
       <>
         <rect x={-L / 2} y={-D / 2} width={L} height={D} rx={D * 0.2} fill={c.tone} {...line} />
-        <rect x={-slotL / 2} y={-D * 0.2} width={slotL} height={D * 0.4} rx={D * 0.1} fill={burner} {...line} />
-        {Array.from({ length: k }, (_, i) => tongue(`f${i}`, -slotL / 2 + step * (i + 0.5), (i % 2 ? 1 : -1) * D * 0.03, step * (i % 3 === 1 ? 0.48 : 0.4), D * (i % 2 ? 0.19 : 0.23), 0))}
+        {pebbles(lay.stones, lay.colour)}
+        <rect x={-slotL / 2} y={-lay.slot.halfD} width={slotL} height={lay.slot.halfD * 2} rx={D * 0.1} fill={burner} {...line} />
+        {Array.from({ length: k }, (_, i) => tongue(`f${i}`, -slotL / 2 + step * (i + 0.5), (i % 2 ? 1 : -1) * D * 0.03, step * (i % 3 === 1 ? 0.48 : 0.4), D * 0.13, 0))}
+        {lay.guard && <rect x={-lay.slot.halfL - 40} y={-lay.slot.halfD - 40} width={slotL + 80} height={lay.slot.halfD * 2 + 80} fill="none" {...line} strokeDasharray="4 3" />}
       </>
     );
   });
