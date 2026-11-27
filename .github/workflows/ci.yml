@@ -1,5 +1,6 @@
-# CI (EVE-19): typecheck, lint, every self-check and the production build, on every push and on
-# pull requests to master. Master takes changes only through a PR whose four jobs are green.
+# CI (EVE-19): typecheck, lint, every self-check, the production build and the cross-tenant isolation
+# test (EVE-23), on every push and on pull requests to master. Master takes changes only through a PR
+# whose five jobs are green.
 #
 # No secrets: nothing here reaches Neon, Vercel or R2. The build gets dummy values for the two
 # variables it needs just to construct the auth module — it never connects to anything.
