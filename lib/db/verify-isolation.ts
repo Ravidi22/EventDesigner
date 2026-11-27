@@ -14,9 +14,9 @@
 import { LOCAL_HOSTS, refusal } from "./isolation/env";
 import { actAsUserForScript } from "@/lib/auth/session";
 import { CASES } from "./isolation/cases";
-import { cleanup, rowsOfA, seed, snapshotA, sweep, type Fixture } from "./isolation/fixture";
+import { cleanup, rowsOfA, seed, snapshot, sweep, type Fixture } from "./isolation/fixture";
 import { missingCases, serverActions } from "./isolation/inventory";
-import { judge } from "./isolation/judge";
+import { judge, newRefs } from "./isolation/judge";
 
 const TIMEOUT_MS = 15000;
 
@@ -63,7 +63,7 @@ async function main() {
       }
       called++;
       const actor = c.as ?? "studioB";
-      const before = await snapshotA(f);
+      const before = await snapshot(f);
       actAsUserForScript(f.users[actor]);
       let result: unknown;
       try {
@@ -73,13 +73,16 @@ async function main() {
       } finally {
         actAsUserForScript(null);
       }
-      const after = await snapshotA(f);
+      const after = await snapshot(f);
       const allowed = new Set(c.allow?.(f) ?? []);
-      const verdict = judge(result, f.aIds.filter((id) => !allowed.has(id)));
+      // A's ids and A's private text (its people's emails, the marker on its private names).
+      const verdict = judge(result, [...f.aIds.filter((id) => !allowed.has(id)), ...f.aText]);
       const expected = c.expect ? c.expect(result, f) : true;
       const kept = c.verify ? await c.verify(f) : true;
-      const changed = before !== after;
-      if (verdict.refused && expected && kept && !changed) {
+      const changed = before.a !== after.a;
+      // B's rows that started pointing at A during the call; A's venue and zones are shared by design.
+      const linked = newRefs(before.bRefs, after.bRefs, new Set([...allowed, f.venueId, f.zoneId]));
+      if (verdict.refused && expected && kept && !changed && linked.length === 0) {
         console.log(`  ok   ${key}  [${actor}] ${verdict.why}`);
       } else {
         leaks++;
@@ -88,6 +91,7 @@ async function main() {
           !expected && "the answer was not what an outsider may get",
           !kept && "A's data outside the database changed",
           changed && "A's rows CHANGED",
+          linked.length > 0 && `B's rows now point at A's data: ${linked.slice(0, 3).join("; ")}`,
         ].filter(Boolean);
         console.error(`  LEAK ${key}  [${actor}] ${reasons.join("; ")}`);
         if (changed) for (const row of (await rowsOfA(f)).slice(0, 5)) console.error(`         ${row.slice(0, 300)}`);

@@ -48,7 +48,7 @@ import { saveDish, saveMenuPackage } from "@/lib/menus/actions";
 import type { Dish, MenuPackage } from "@/lib/menus/types";
 import { acceptLinkInvite, inviteDesigner } from "@/lib/event-links/actions";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
-import { stable } from "./judge";
+import { refsOf, stable } from "./judge";
 
 export type Actor = "studioB" | "supplierB" | "venueB" | "clientB";
 
@@ -106,6 +106,8 @@ export interface Fixture {
   // ── for the judge ──
   aOrgs: string[];
   aIds: string[];
+  /** A's private TEXT: the marker on its private names, and its people's email addresses. */
+  aText: string[];
 }
 
 const TAG = "(בדיקת בידוד)";
@@ -166,6 +168,10 @@ export async function seed(): Promise<Fixture> {
   const stamp = Date.now();
   const mail = (who: string) => `isolation-${who}-${stamp}@example.test`;
   const id = () => randomUUID();
+  const marker = randomUUID();
+  /** On A's PRIVATE records only — shared things (a venue, an organisation's name, a published row)
+   *  carry none — so a leak of one shows even when no id comes back with it (round-1 review). */
+  const M = marker.slice(0, 8);
 
   const orgA = id(), orgS = id(), orgV = id(), orgB = id(), orgB2 = id(), orgB3 = id();
   await database.insert(schema.organizations).values([
@@ -199,7 +205,7 @@ export async function seed(): Promise<Fixture> {
   // ── the supplier's catalog: one published row, one private ──
   actAsUserForScript(supplierUserS);
   const publicS = aProduct("מפה מפורסמת", { visibility: "public" } as Partial<Product>);
-  const privateS = aProduct("מפה פרטית", { visibility: "private" } as Partial<Product>);
+  const privateS = aProduct(`מפה פרטית ${M}`, { visibility: "private" } as Partial<Product>);
   ok(await saveProduct(publicS), "the supplier's public row");
   ok(await saveProduct(privateS), "the supplier's private row");
 
@@ -214,13 +220,13 @@ export async function seed(): Promise<Fixture> {
   await database.insert(schema.zones).values({ id: zone.id, organizationId: orgA, venueId, name: zone.name, kind: zone.kind, source: zone.source, ceilingHeightMm: 0 } as never);
 
   step("A product");
-  const product = aProduct("מפת קטיפה");
+  const product = aProduct(`מפת קטיפה ${M}`);
   ok(await saveProduct(product), "A's product");
   const variantId = product.variants![0].id;
 
   step("A event");
   const eventId = id();
-  await saveEvent(anEvent(eventId, "אירוע א", { venueId, zoneIds: [zone.id] } as Partial<EventSummary>));
+  await saveEvent(anEvent(eventId, `אירוע א ${M}`, { venueId, zoneIds: [zone.id] } as Partial<EventSummary>));
   const content = {
     calibration: { mmPerUnit: 1 },
     tables: [],
@@ -229,7 +235,7 @@ export async function seed(): Promise<Fixture> {
   await saveDocument(eventId, content);
   step("quote");
   await issueQuote(eventId, { layout: { ...DEFAULT_LAYOUT, finalPrice: 11800 }, total: 11800, discount: 0 } as never);
-  const marker = id();
+
   await saveQuoteDraft(eventId, { ...DEFAULT_LAYOUT, paletteNote: `סימון ${marker}` });
   step("billing order");
   const today = ISO(new Date());
@@ -241,21 +247,21 @@ export async function seed(): Promise<Fixture> {
   const billingDocId = (order as { id: string }).id;
 
   step("appointment");
-  const appointment: Appointment = { id: id(), eventId, clientName: `פגישה ${TAG}`, phone: "050-0000000", date: "2027-01-10", time: "10:00", durationMin: 60, kind: "consultation", note: "", createdAt: Date.now() };
+  const appointment: Appointment = { id: id(), eventId, clientName: `פגישה ${TAG} ${M}`, phone: "050-0000000", date: "2027-01-10", time: "10:00", durationMin: 60, kind: "consultation", note: "", createdAt: Date.now() };
   await saveAppointment(appointment);
 
   step("gallery");
-  const image: GalleryImage = { id: id(), name: `תמונה ${TAG}`, productId: product.id, productName: product.name };
+  const image: GalleryImage = { id: id(), name: `תמונה ${TAG} ${M}`, productId: product.id, productName: product.name };
   await saveImage(image);
-  const presentation: Presentation = { id: id(), name: `מצגת ${TAG}`, imageIds: [image.id], createdAt: Date.now() };
+  const presentation: Presentation = { id: id(), name: `מצגת ${TAG} ${M}`, imageIds: [image.id], createdAt: Date.now() };
   await savePresentation(presentation);
   await toggleLike(eventId, image.id);
 
   step("supplier + expense");
-  const supplier: Supplier = { id: id(), name: `ספק של א ${TAG}`, phone: "050-1111111" };
+  const supplier: Supplier = { id: id(), name: `ספק של א ${TAG} ${M}`, phone: "050-1111111" };
   await saveSupplier(supplier);
   await database.update(schema.suppliers).set({ linkedOrgId: orgS } as never).where(eq(schema.suppliers.id, supplier.id));
-  const expense: Expense = { id: id(), supplierId: supplier.id, eventId, description: `הוצאה ${TAG}`, amount: 500, spentAt: today, paid: false };
+  const expense: Expense = { id: id(), supplierId: supplier.id, eventId, description: `הוצאה ${TAG} ${M}`, amount: 500, spentAt: today, paid: false };
   await saveExpense(expense);
   step("order");
   await sendOrder({ supplierId: supplier.id, windowFrom: "2027-05-01", windowTo: "2027-06-30", lines: [{ variantId, description: "מפות", quantity: 10, unitLabel: "יח׳", unitCost: 20 }] });
@@ -268,10 +274,10 @@ export async function seed(): Promise<Fixture> {
   await saveSceneSettings(eventId, { tableware: false });
   const { links } = await mintSceneLink(eventId);
   const sceneLinkId = links[0]?.id;
-  const sketches = ok(await saveSketchTemplate({ name: `סקיצה ${TAG}`, venueId, content }), "A's saved sketch");
+  const sketches = ok(await saveSketchTemplate({ name: `סקיצה ${TAG} ${M}`, venueId, content }), "A's saved sketch");
   const sketchTemplateId = sketches[0]?.id;
   await setEventCrew(eventId, [memberA]);
-  const invited = await inviteMember(`מוזמנת ${TAG}`, mail("pending-a"), "designer");
+  const invited = await inviteMember(`מוזמנת ${TAG} ${M}`, mail("pending-a"), "designer");
   const pendingMemberA = invited.members.find((m) => m.status === "invited")?.id;
 
   step("grant");
@@ -280,7 +286,7 @@ export async function seed(): Promise<Fixture> {
 
   step("client + proposal");
   // A's client, and her proposal (it notifies A's owner and designer).
-  const share = await shareEventWithClient(eventId, { name: `לקוחה ${TAG}`, email: mail("client-c") });
+  const share = await shareEventWithClient(eventId, { name: `לקוחה ${TAG} ${M}`, email: mail("client-c") });
   const clientC = share.userId ?? share.clients[0]?.userId;
   if (!clientC) throw new Error(`fixture: A's client was not shared (${share.error ?? "no id"})`);
   await database.update(schema.users).set({ state: "active" }).where(eq(schema.users.id, clientC));
@@ -297,11 +303,11 @@ export async function seed(): Promise<Fixture> {
   // ── venue V: a booking, a menu, and studio A invited onto the evening ──
   actAsUserForScript(venueUserV);
   const bookingEventId = id();
-  const booking = anEvent(bookingEventId, "הזמנה באולם");
+  const booking = anEvent(bookingEventId, `הזמנה באולם ${M}`);
   await saveBooking(booking, emptyHosting());
-  const dish: Dish = { id: id(), name: `מנה ${TAG}`, course: "main" as Dish["course"], description: "", tags: [], position: 0 };
+  const dish: Dish = { id: id(), name: `מנה ${TAG} ${M}`, course: "main" as Dish["course"], description: "", tags: [], position: 0 };
   await saveDish(dish);
-  const pkg: MenuPackage = { id: id(), name: `חבילה ${TAG}`, description: "", priceAdult: 300, priceChild: 150, priceVendor: 100, minGuests: 100, courses: [], extras: [] };
+  const pkg: MenuPackage = { id: id(), name: `חבילה ${TAG} ${M}`, description: "", priceAdult: 300, priceChild: 150, priceVendor: 100, minGuests: 100, courses: [], extras: [] };
   await saveMenuPackage(pkg);
   const link = ok(await inviteDesigner(bookingEventId, mail("owner-a")), "V's invitation to studio A");
   const linkId = (link as { id: string }).id;
@@ -354,6 +360,7 @@ export async function seed(): Promise<Fixture> {
     dish, pkg, fileKey, filePath,
     orgB, orgB2, orgB3, users: { studioB: ownerB, supplierB: supplierUserB, venueB: venueUserB, clientB }, eventB,
     aOrgs, aIds,
+    aText: [M, ...["owner-a", "member-a", "pending-a", "supplier-s", "venue-v", "client-c"].map(mail)],
   };
 }
 
@@ -373,8 +380,18 @@ const OWNED_BY: Record<string, string[]> = {
  * A fingerprint of everything on A's side: every row owned by A's organisations, and the link rows that
  * hang off A's events, orders and presentations. A grant on A's venue is A's too — except a VIEWER
  * grant one of B's businesses gave itself by following the venue, which is open to everyone by design.
+ *
+ * And every reference the REST of the database holds to A's ids — B linking its own rows to A's product,
+ * image or template changes nothing of A's and returns nothing, yet is a leak (round-1 review).
  */
-export async function snapshotA(f: Fixture): Promise<string> {
+export interface Snapshot {
+  /** A fingerprint of A's side. */
+  a: string;
+  /** "<table> <row> → <A id>" for every row outside A's side that names one of A's ids. */
+  bRefs: Set<string>;
+}
+
+export async function snapshot(f: Fixture): Promise<Snapshot> {
   const database = db();
   const tables = (await database.execute(sql`
     select table_name, bool_or(column_name = 'organization_id') as owned
@@ -385,6 +402,7 @@ export async function snapshotA(f: Fixture): Promise<string> {
   const orgs = new Set(f.aOrgs);
   const bOrgs = new Set([f.orgB, f.orgB2, f.orgB3]);
   const lines: string[] = [];
+  const bRefs = new Set<string>();
   for (const { table_name: table, owned } of tables) {
     if (table.startsWith("auth_")) continue;
     const rows = (await database.execute(sql.raw(`select * from "${table}"`))) as unknown as Record<string, unknown>[];
@@ -397,10 +415,11 @@ export async function snapshotA(f: Fixture): Promise<string> {
         mine = ids.has(String(row.venue_id)) && !(bOrgs.has(String(row.grantee_org_id)) && row.role === "viewer");
       } else mine = (OWNED_BY[table] ?? []).some((col) => ids.has(String(row[col])));
       if (mine) lines.push(`${table} ${stable(row)}`);
+      else for (const ref of refsOf(table, row, f.aIds)) bRefs.add(ref);
     }
   }
   lines.sort();
-  return createHash("sha256").update(lines.join("\n")).digest("hex");
+  return { a: createHash("sha256").update(lines.join("\n")).digest("hex"), bRefs };
 }
 
 /** A readable list of A's rows, for the report when a snapshot changes. */

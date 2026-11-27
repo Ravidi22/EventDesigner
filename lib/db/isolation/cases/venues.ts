@@ -35,7 +35,7 @@ export const VENUE_CASES: Cases = {
   // ── venues: everyone READS a plan; editing, sharing and deleting are the owner's and its grants' ──
   "lib/venues/actions.ts#fetchVenues": { call: () => fetchVenues(), allow: THE_PLAN, reason: "B may have followed A's venue (followVenue) — then it is on B's list" },
   "lib/venues/actions.ts#fetchVenueDirectory": { call: () => fetchVenueDirectory(), allow: (a) => [...THE_PLAN(a), a.orgA], reason: SHARED },
-  "lib/venues/actions.ts#followVenue": { call: (a) => followVenue(a.venueId), allow: THE_PLAN, reason: "following a venue is a viewer grant to B's own organisation, by design" },
+  "lib/venues/actions.ts#followVenue": { call: (a) => followVenue(a.venueId), allow: (a) => [...THE_PLAN(a), a.orgA], reason: "following a venue is a viewer grant to B's own organisation, by design" },
   "lib/venues/actions.ts#fetchVenuePlan": { call: (a) => fetchVenuePlan(a.venueId), allow: THE_PLAN, reason: SHARED },
   "lib/venues/actions.ts#fetchVenueGeometry": { call: (a) => fetchVenueGeometry(a.venueId), allow: THE_PLAN, reason: SHARED },
   "lib/venues/actions.ts#saveVenuePlan": { call: (a) => saveVenuePlan(a.venueId, emptyStructure(), []) },

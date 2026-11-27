@@ -21,6 +21,19 @@ export function stable(value: unknown): string {
   );
 }
 
+/** Every A id a row OUTSIDE A's side mentions, as "<table> <row> → <id>" — B linking its own rows to
+ *  A's product, image or template is a leak even when A's rows do not change (round-1 review). */
+export function refsOf(table: string, row: Record<string, unknown>, aIds: readonly string[]): string[] {
+  const text = stable(row);
+  const key = typeof row.id === "string" ? row.id : text;
+  return aIds.filter((id) => text.includes(id)).map((id) => `${table} ${key} → ${id}`);
+}
+
+/** The references that appeared during a call, minus those to ids the case allows by design. */
+export function newRefs(before: ReadonlySet<string>, after: ReadonlySet<string>, allowed: ReadonlySet<string>): string[] {
+  return [...after].filter((ref) => !before.has(ref) && !allowed.has(ref.slice(ref.lastIndexOf("→ ") + 2)));
+}
+
 export function judge(result: unknown, aIds: readonly string[]): Verdict {
   if (result instanceof Error) return { refused: true, why: `threw: ${result.message.slice(0, 120)}` };
   if (result === null || result === undefined) return { refused: true, why: "nothing" };
