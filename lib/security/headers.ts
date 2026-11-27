@@ -73,7 +73,9 @@ export function reportOnlyPolicy(env: HeaderEnv): string {
     "style-src 'self' 'unsafe-inline'",
     `img-src ${list("'self'", "data:", "blob:", files)}`,
     "font-src 'self' data:",
-    `connect-src ${list("'self'", files, upload, env.dev && "ws:")}`,
+    // data: and blob: because the quote / billing / booklet PDF builder fetch()es every page's data
+    // URL from html-to-image (app/(app)/outputs/quote-pdf.ts) — found by the round-1 review.
+    `connect-src ${list("'self'", "data:", "blob:", files, upload, env.dev && "ws:")}`,
     `media-src ${list("'self'", "blob:", files)}`,
     "worker-src 'self' blob:",
     "frame-src 'none'",

@@ -54,7 +54,10 @@ assert(ENFORCED_POLICY === "frame-ancestors 'none'; object-src 'none'; base-uri 
 const bare = reportOnlyPolicy(prod);
 assert(valueOf(prod, "Content-Security-Policy-Report-Only") === bare, "the report-only header is reportOnlyPolicy()");
 assert(directive(bare, "img-src") === "img-src 'self' data: blob:", "no storage host: images from this origin, data: and blob:");
-assert(directive(bare, "connect-src") === "connect-src 'self'", "no storage host: connections to this origin only");
+assert(
+  directive(bare, "connect-src") === "connect-src 'self' data: blob:",
+  "no storage host: this origin, plus data: and blob: — the quote PDF fetch()es each page's data URL (quote-pdf.ts)",
+);
 assert(directive(bare, "report-uri") === "report-uri /api/csp-report", "reports go to /api/csp-report");
 assert(bare.includes("upgrade-insecure-requests"), "production upgrades http subresources");
 assert(!bare.includes("'unsafe-eval'"), "production never allows eval");
