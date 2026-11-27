@@ -9,6 +9,7 @@
 // mergeChanges onto the designer's LIVE drawing, one history entry so Ctrl+Z takes an approval
 // back). resolveProposal is handed the result and writes it through saveDocument — the same path,
 // the same sealed-version rules, as every autosave — before it marks the proposal answered.
+import { FORMER_CLIENT } from "@/lib/account/words";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentActor, currentOrg } from "@/lib/db/org";
@@ -53,7 +54,9 @@ export async function fetchSubmittedProposal(eventId: string): Promise<Submitted
     content: row.p.content,
     note: row.p.note,
     submittedAt: row.p.submittedAt?.toISOString() ?? "",
-    submittedBy: row.name || row.email || "הלקוח",
+    // A submitted proposal always names who sent it; null means that client has since deleted their
+    // login (lib/account/member.ts) — the proposal stays, theirs no longer.
+    submittedBy: row.p.submittedBy === null ? FORMER_CLIENT : row.name || row.email || "הלקוח",
   };
 }
 

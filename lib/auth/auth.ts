@@ -25,6 +25,7 @@ import { after } from "next/server";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { nextCookies } from "better-auth/next-js";
+import { APIError } from "better-auth/api";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { authAccounts, authRateLimits, authSessions, authVerifications, users } from "@/lib/db/schema";
@@ -34,6 +35,7 @@ import { sendEmail } from "@/lib/email/send";
 import { resetPasswordEmail, verifyEmailEmail } from "@/lib/email/templates";
 import { googleConfig } from "@/lib/google/config";
 import { hashPassword, verifyPassword } from "./password";
+import { beforePersonErased, personRow } from "@/lib/account/member";
 
 /** The longest a "remembered" session lives; an unremembered one is a day (Better Auth's
  *  dontRememberMe) and its cookie dies with the browser — the same two numbers as before. */
@@ -97,6 +99,21 @@ export function buildAuth(database: Database = db()) {
         organizationId: { type: "string", input: false, required: false },
         role: { type: "string", input: false, required: false, defaultValue: "designer" },
         state: { type: "string", input: false, required: false, defaultValue: "active" },
+      },
+      // "מחיקת החשבון" (EVE-22, lib/account/member.ts). A designer, crew member or client deletes
+      // their own account; an OWNER cannot — closing the business is their way out. A credential
+      // account must send its password (lib/auth/actions.ts deleteMyAccount insists); a Google-only one
+      // needs a fresh session (Better Auth's freshAge).
+      deleteUser: {
+        enabled: true,
+        beforeDelete: async (user) => {
+          const person = await personRow(database, user.id);
+          if (!person) return;
+          if (person.kind === "studio" && person.role === "owner") {
+            throw new APIError("FORBIDDEN", { message: "an owner closes the business instead" });
+          }
+          await beforePersonErased(database, person, "self");
+        },
       },
     },
 

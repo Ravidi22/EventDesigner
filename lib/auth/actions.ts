@@ -537,6 +537,39 @@ export async function changePassword(input: {
 }
 
 /**
+ * "מחיקת החשבון" (EVE-22, spec §5.6–5.7) — a designer, crew member or client deletes their own
+ * account. The owner cannot: their way out is closing the business (settings → סגירת העסק).
+ *
+ * Through Better Auth's delete-user, so the router's checks run: an account with a password must
+ * send it (insisted on here — Better Auth alone would accept a session under a day old instead), a
+ * Google-only account needs a session that fresh. lib/auth/auth.ts's `beforeDelete` writes the audit
+ * row, wipes the name from the log, revokes Google and rings the bells (lib/account/member.ts).
+ */
+export async function deleteMyAccount(input: { password?: string }): Promise<{ ok: true } | { error: string }> {
+  const session = await currentSession();
+  if (!session) return { error: "יש להתחבר מחדש" };
+  if (session.kind === "studio" && session.role === "owner") {
+    return { error: "בעלים לא יכולים למחוק את החשבון — אפשר לסגור את העסק בהגדרות" };
+  }
+  const password = String(input?.password ?? "");
+  const [credential] = await db()
+    .select({ id: authAccounts.id })
+    .from(authAccounts)
+    .where(and(eq(authAccounts.userId, session.userId), eq(authAccounts.providerId, "credential")))
+    .limit(1);
+  if (credential && !password) return { error: "יש להזין את הסיסמה" };
+
+  const result = await callAuth("/delete-user", credential ? { password } : {});
+  if (!result.ok) {
+    if (result.status === 429) return { error: TOO_MANY };
+    if (result.code === "INVALID_PASSWORD") return { error: "הסיסמה שגויה" };
+    if (result.code === "SESSION_EXPIRED") return { error: "יש להתחבר מחדש ואז למחוק" };
+    return { error: "המחיקה לא הצליחה" };
+  }
+  return { ok: true };
+}
+
+/**
  * "שכחתי סיסמה". ALWAYS the same answer, whether or not the address has an account — the mail
  * itself is the only place the difference shows (lib/auth/auth.ts sends it, after the response).
  */

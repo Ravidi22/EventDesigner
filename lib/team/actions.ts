@@ -22,6 +22,7 @@ import { sendEmail } from "@/lib/email/send";
 import { invitationEmail } from "@/lib/email/templates";
 import { peopleOf, recordAudit } from "@/lib/audit/write";
 import { personToken } from "@/lib/audit/render";
+import { eraseMember } from "@/lib/account/member";
 import {
   canManagePeople,
   isStudioRole,
@@ -314,32 +315,8 @@ export async function removeMember(id: string): Promise<StudioMember[]> {
   if (!canManagePeople(actor.role)) throw new Error("only the owner can remove people");
   if (id === actor.userId) throw new Error("you cannot remove yourself");
 
-  await db().transaction(async (tx) => {
-    const people = await peopleOf(tx, [actor.userId, id]);
-    const gone = await tx
-      .delete(users)
-      .where(
-        and(
-          eq(users.id, id),
-          eq(users.organizationId, actor.organizationId),
-          eq(users.kind, "studio"),
-          // Belt and braces next to the self-check above: whatever happens to roles later, the row
-          // that owns this studio is not deletable through the people screen.
-          ne(users.role, "owner"),
-        ),
-      )
-      .returning({ id: users.id });
-    if (gone.length === 0) return;
-    await recordAudit(tx, {
-      organizationId: actor.organizationId,
-      actorUserId: actor.userId,
-      action: "member.removed",
-      target: { kind: "user", id },
-      summary: `הסרה מהצוות: ${personToken(id)}`,
-      // The removed person's name is not kept (they are erased): the line reads "former member".
-      people: { ...people, [id]: { name: null, kind: "member" } },
-    });
-  });
+  if (!actor.userId) throw new Error("not signed in");
+  await eraseMember(actor.organizationId, id, actor.userId);
   revalidateSettings();
   return membersOf(actor.organizationId);
 }

@@ -1,13 +1,16 @@
 // npm run db:verify:account — the account lifecycle against a real Postgres (EVE-22, EVE-51, EVE-52).
 //
-//   DATABASE_URL=postgres://eve:eve@127.0.0.1:55432/eve_isolation npm run db:verify:account
+//   DATABASE_URL=postgres://eve:eve@127.0.0.1:55432/eve_account npm run db:verify:account
+//
+// (A UTF8 database: the embedded Postgres on a Hebrew Windows initialises WIN1255.)
 //
 // Each step seeds its OWN fixture (lib/db/isolation/fixture.ts — studio A with everything that hangs
 // off an event, A's supplier and venue owner, and B's businesses) and deletes it afterwards, whatever
 // happens: a step that erases a person or a business must never leave the next one with less to act
 // on. Refuses any database that is not this machine's or CI's — it creates and deletes organisations.
 import { refusal } from "@/lib/db/isolation/env";
-import { eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { actAsUserForScript } from "@/lib/auth/session";
@@ -15,6 +18,8 @@ import { cleanup, seed, sweep, type Fixture } from "@/lib/db/isolation/fixture";
 import { issuePaymentRequest } from "@/lib/billing/actions";
 import { removeMember, setMemberRole } from "@/lib/team/actions";
 import { fetchAuditLog } from "@/lib/audit/actions";
+import { AUTH_BASE_PATH, auth, authOrigin } from "@/lib/auth/auth";
+import { hashPassword } from "@/lib/auth/password";
 
 const steps: { name: string; run: (f: Fixture) => Promise<void> }[] = [];
 
@@ -37,7 +42,76 @@ async function as<T>(userId: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/** Give this person a password (the fixture writes people without one) and sign in through Better
+ *  Auth's own router, as a browser would: the cookie that comes back is a real session. */
+async function signInWithPassword(userId: string): Promise<{ cookie: string; password: string }> {
+  const password = `pw-${randomUUID()}`;
+  const [person] = await db().select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, userId));
+  await db()
+    .insert(schema.authAccounts)
+    .values({ id: randomUUID(), userId, accountId: userId, providerId: "credential", password: await hashPassword(password) });
+  // The steps sign in more often than the router's 5-a-minute limit allows; this is a throwaway
+  // database, so the counters are cleared rather than the limit loosened.
+  await db().delete(schema.authRateLimits);
+  const res = await authPost("/sign-in/email", { email: person.email, password });
+  assert(res.status === 200, `signed in (${res.status} ${await res.text()})`);
+  const cookie = (res.headers.getSetCookie?.() ?? [res.headers.get("set-cookie") ?? ""])
+    .map((c) => c.split(";")[0])
+    .join("; ");
+  return { cookie, password };
+}
+
+/** POST to a Better Auth endpoint, as the router sees a browser's request. */
+function authPost(path: string, body: unknown, cookie?: string): Promise<Response> {
+  const headers = new Headers({ "content-type": "application/json", origin: authOrigin() });
+  if (cookie) headers.set("cookie", cookie);
+  return auth().handler(new Request(`${authOrigin()}${AUTH_BASE_PATH}${path}`, { method: "POST", headers, body: JSON.stringify(body) }));
+}
+
+async function notificationsOf(userId: string, kind: string) {
+  return db()
+    .select()
+    .from(schema.notifications)
+    .where(and(eq(schema.notifications.userId, userId), eq(schema.notifications.kind, kind as never)));
+}
+
 // ── the people ──────────────────────────────────────────────────────────────────────────────────
+
+step("a designer deletes their own account", async (f) => {
+  await as(f.ownerA, () => setMemberRole(f.memberA, "crew"));
+  const { cookie, password } = await signInWithPassword(f.memberA);
+  const res = await authPost("/delete-user", { password }, cookie);
+  assert(res.status === 200, `deleted (${res.status} ${await res.text()})`);
+
+  const left = await db().select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, f.memberA));
+  assert(left.length === 0, "the member's row is gone");
+  assert((await notificationsOf(f.ownerA, "member.left")).length === 1, "the owner's bell rang once");
+  const log = await as(f.ownerA, () => fetchAuditLog());
+  const self = log.rows.find((r) => r.action === "member.self_deleted");
+  assert(self?.line === "מחיקת חשבון: חבר/ת צוות לשעבר", `the self-delete row forgot the name (got: ${self?.line})`);
+  const role = log.rows.find((r) => r.action === "member.role_changed");
+  assert(role?.line.startsWith("תפקיד: חבר/ת צוות לשעבר"), `an older row forgot the name too (got: ${role?.line})`);
+});
+
+step("the owner cannot delete their account", async (f) => {
+  const { cookie, password } = await signInWithPassword(f.ownerA);
+  const res = await authPost("/delete-user", { password }, cookie);
+  assert(res.status === 403, `refused by our hook (${res.status})`);
+  const left = await db().select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, f.ownerA));
+  assert(left.length === 1, "the owner is still there");
+});
+
+step("a client deletes their login", async (f) => {
+  const [before] = await db().select().from(schema.events).where(eq(schema.events.id, f.eventId));
+  const { cookie, password } = await signInWithPassword(f.clientC);
+  const res = await authPost("/delete-user", { password }, cookie);
+  assert(res.status === 200, `deleted (${res.status} ${await res.text()})`);
+  const left = await db().select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, f.clientC));
+  assert(left.length === 0, "the client's row is gone");
+  const [after] = await db().select().from(schema.events).where(eq(schema.events.id, f.eventId));
+  assert(after.clientName === before.clientName && after.phone === before.phone, "the studio's event is untouched");
+  assert((await notificationsOf(f.ownerA, "client.left")).length >= 1, "the studio's bell rang");
+});
 
 step("a member who issued a billing document can be removed", async (f) => {
   const issued = await as(f.memberA, () =>

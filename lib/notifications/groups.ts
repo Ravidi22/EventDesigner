@@ -4,7 +4,7 @@
 //
 // PURE: no I/O, no React. The icons are plain component references, so this stays importable from
 // the self-check under Node.
-import { Building2, PenTool, Share2, UserCheck, type LucideIcon } from "lucide-react";
+import { Building2, type LucideIcon, PenTool, Share2, UserCheck, UserMinus } from "lucide-react";
 import { KIND_SIDE, type AppNotification, type NotificationKind } from "./types";
 
 export type WhenBucket = "היום" | "אתמול" | "מוקדם יותר";
@@ -32,6 +32,9 @@ export const NOTIFICATION_ICON: Record<NotificationKind, LucideIcon> = {
   "link.accepted": Building2,
   "link.declined": Building2,
   "link.updated": Building2,
+  "link.venue_closed": Building2,
+  "member.left": UserMinus,
+  "client.left": UserMinus,
 };
 
 const ms = (iso: string) => Date.parse(iso);
