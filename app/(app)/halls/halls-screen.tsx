@@ -2015,7 +2015,7 @@ export function HallsScreen() {
                   setUnderlayChip(false);
                   void removeUnderlay();
                 }}
-                className="inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 font-semibold text-alert hover:bg-inset focus-visible:bg-inset focus-visible:outline-none"
+                className="inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 font-semibold text-alert-ink hover:bg-inset focus-visible:bg-inset focus-visible:outline-none"
               >
                 <Trash2 className="h-3.5 w-3.5" strokeWidth={1.6} />
                 הסרה
@@ -2438,7 +2438,7 @@ export function HallsScreen() {
                       )
                     }
                   />
-                  {r.detached && <p className="px-2 pb-1 text-xs text-alert">{detachedNote(r.zone)}</p>}
+                  {r.detached && <p className="px-2 pb-1 text-xs text-alert-ink">{detachedNote(r.zone)}</p>}
                 </div>
               ))}
               {!readOnly && (

@@ -87,7 +87,7 @@ export function SupplierSelect({
           placeholder="שם הספק"
           aria-label="שם הספק החדש"
           autoFocus
-          className={`${controlClassName} min-w-0 flex-1 px-2.5 placeholder:text-faint`}
+          className={`${controlClassName} min-w-0 flex-1 px-2.5 placeholder:text-quiet`}
         />
         <Button size="sm" onClick={() => void create()} disabled={busy || !name.trim()} icon={<Plus className="h-3.5 w-3.5" strokeWidth={2.5} />}>
           הוספה

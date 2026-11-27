@@ -181,7 +181,7 @@ export function Field({
         </p>
       )}
       {error && (
-        <p id={`${id}-error`} className="inline-flex items-center gap-1.5 text-xs text-alert">
+        <p id={`${id}-error`} className="inline-flex items-center gap-1.5 text-xs text-alert-ink">
           <CircleAlert className="h-3.5 w-3.5" strokeWidth={2} />
           {error}
         </p>
@@ -197,7 +197,7 @@ export function FormError({ message }: { message: string | null }) {
   return (
     <p
       role="alert"
-      className="flex items-start gap-2 rounded-md border border-alert/30 bg-alert/5 px-3 py-2.5 text-sm text-alert"
+      className="flex items-start gap-2 rounded-md border border-alert/30 bg-alert/5 px-3 py-2.5 text-sm text-alert-ink"
     >
       <CircleAlert className="mt-px h-4 w-4 shrink-0" strokeWidth={2} />
       {message}

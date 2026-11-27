@@ -184,7 +184,7 @@ export function PanelListHeading({
 }) {
   const EyeIcon = visible ? Eye : EyeOff;
   return (
-    <div className={"mt-1 flex h-7 items-center gap-1.5 px-1.5 " + (visible ? "" : "text-faint")}>
+    <div className={"mt-1 flex h-7 items-center gap-1.5 px-1.5 " + (visible ? "" : "text-quiet")}>
       <button
         type="button"
         onClick={onActivate}
@@ -195,7 +195,7 @@ export function PanelListHeading({
         {label}
       </button>
       {active && <span className="rounded-pill bg-accent-wash px-[7px] text-[10px] font-bold text-accent-hover">פעילה</span>}
-      {count !== undefined && <span className="nums text-xs text-faint">{count}</span>}
+      {count !== undefined && <span className="nums text-xs text-quiet">{count}</span>}
       <div className="h-px flex-1 bg-border-soft" aria-hidden />
       {onToggleVisible && (
         <button

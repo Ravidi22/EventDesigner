@@ -305,7 +305,7 @@ export function SketchPickStage({ onDone }: { onDone: () => void }) {
               הסקיצה נשמרה במתחם אחר — וילונות על הקירות שם והזזות של רהיטי המתחם לא עוברים. כל השאר עובר, ואפשר לגרור למקום.
             </p>
           )}
-          {sketch && source === null && <p className="text-sm text-alert">הסקיצה לא נמצאה — אולי נמחקה.</p>}
+          {sketch && source === null && <p className="text-sm text-alert-ink">הסקיצה לא נמצאה — אולי נמחקה.</p>}
           {sketch && lines && (
             <fieldset className="flex flex-col gap-0.5 rounded-md border border-border bg-inset p-1.5">
               <legend className="sr-only">מה לקחת מהסקיצה?</legend>
@@ -325,14 +325,14 @@ export function SketchPickStage({ onDone }: { onDone: () => void }) {
                     className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-accent)]"
                   />
                   <span className="min-w-0">
-                    <span className={"block text-sm font-semibold " + (ticked[id] ? "text-ink" : "text-faint")}>{label}</span>
-                    <span className={"block text-xs " + (ticked[id] ? "text-muted" : "text-faint")}>{present[id] ? lines[id] || "—" : "אין בסקיצה הזו"}</span>
+                    <span className={"block text-sm font-semibold " + (ticked[id] ? "text-ink" : "text-muted")}>{label}</span>
+                    <span className={"block text-xs " + (ticked[id] ? "text-muted" : "text-muted")}>{present[id] ? lines[id] || "—" : "אין בסקיצה הזו"}</span>
                   </span>
                 </label>
               ))}
             </fieldset>
           )}
-          {error && <p className="text-sm text-alert">{error}</p>}
+          {error && <p className="text-sm text-alert-ink">{error}</p>}
           <Button className="w-full" onClick={start} disabled={busy || !event || (!!sketch && !result)}>
             {sketch ? "התחלה מהסקיצה" : hasDrawing ? "המשך עם הנוכחית" : "המשך"}
           </Button>

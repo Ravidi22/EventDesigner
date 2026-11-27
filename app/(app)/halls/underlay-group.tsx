@@ -272,7 +272,7 @@ export function UnderlayGroupBody({
         </label>
         <button
           onClick={() => void onRemove()}
-          className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-canvas px-2.5 py-1.5 text-xs font-semibold text-alert hover:bg-inset"
+          className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-canvas px-2.5 py-1.5 text-xs font-semibold text-alert-ink hover:bg-inset"
         >
           <Trash2 className="h-3.5 w-3.5" strokeWidth={1.6} />
           הסרה
@@ -280,7 +280,7 @@ export function UnderlayGroupBody({
       </div>
 
       {unlocked && (
-        <p className="text-xs leading-relaxed text-alert">
+        <p className="text-xs leading-relaxed text-alert-ink">
           התוכנית פתוחה להזזה. הזזתה אחרי שציירתם קירות מעליה תסיט אותם ממנה.
         </p>
       )}

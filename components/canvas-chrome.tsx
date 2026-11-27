@@ -36,7 +36,7 @@ export function SavePill({ state, onRetry }: { state: SaveState; onRetry?: () =>
           שומר…
         </span>
       ) : state === "error" ? (
-        <button type="button" onClick={onRetry} className="inline-flex items-center gap-1.5 font-semibold text-alert hover:underline">
+        <button type="button" onClick={onRetry} className="inline-flex items-center gap-1.5 font-semibold text-alert-ink hover:underline">
           <TriangleAlert className="h-3.5 w-3.5" strokeWidth={2} />
           לא נשמר · נסו שוב
         </button>

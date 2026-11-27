@@ -154,7 +154,7 @@ export function TeamSection({
                 </IconButton>
               </div>
             </div>
-            {error && <p className="mt-2 text-xs text-alert">{error}</p>}
+            {error && <p className="mt-2 text-xs text-alert-ink">{error}</p>}
             <p className="mt-3 text-xs leading-relaxed text-muted">{ROLE_SUMMARY[role]}</p>
           </div>
         )}
@@ -375,7 +375,7 @@ function Cell({ on }: { on: boolean }) {
       {on ? (
         <Check className="inline h-4 w-4 text-success" strokeWidth={2.5} aria-label="כן" />
       ) : (
-        <X className="inline h-4 w-4 text-faint" strokeWidth={2} aria-label="לא" />
+        <X className="inline h-4 w-4 text-quiet" strokeWidth={2} aria-label="לא" />
       )}
     </td>
   );

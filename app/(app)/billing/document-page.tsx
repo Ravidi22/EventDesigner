@@ -73,7 +73,7 @@ export function DocumentPage({ document: d, settings, event, venueName, follows,
       {/* A cancelled or replaced document says so across its face — on screen, on paper, in the file. */}
       {dead && (
         <div aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <span className="rotate-[-24deg] border-[3px] border-alert px-8 py-2 text-[64px] font-bold text-alert opacity-30">{d.status === "cancelled" ? "מבוטל" : "הוחלף"}</span>
+          <span className="rotate-[-24deg] border-[3px] border-alert px-8 py-2 text-[64px] font-bold text-alert-ink opacity-30">{d.status === "cancelled" ? "מבוטל" : "הוחלף"}</span>
         </div>
       )}
 

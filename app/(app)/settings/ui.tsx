@@ -102,7 +102,7 @@ export function RemoveButton({
       title={label}
       onClick={onClick}
       disabled={disabled}
-      className="shrink-0 rounded-md p-1.5 text-muted transition-colors hover:bg-alert-tint hover:text-alert disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted"
+      className="shrink-0 rounded-md p-1.5 text-muted transition-colors hover:bg-alert-tint hover:text-alert-ink disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted"
     >
       <Trash2 className="h-4 w-4" strokeWidth={1.7} />
     </button>

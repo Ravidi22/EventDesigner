@@ -128,7 +128,7 @@ export function ImageDropzone({
               onChange(undefined);
             }}
             aria-label="הסרת התמונה"
-            className="absolute inset-inline-end-2 top-2 rounded-full border border-border bg-canvas p-1 text-muted shadow-floating transition-colors hover:bg-alert-tint hover:text-alert"
+            className="absolute inset-inline-end-2 top-2 rounded-full border border-border bg-canvas p-1 text-muted shadow-floating transition-colors hover:bg-alert-tint hover:text-alert-ink"
           >
             <X className="h-3.5 w-3.5" strokeWidth={2.5} />
           </button>
@@ -147,7 +147,7 @@ export function ImageDropzone({
       />
 
       {(error || hint) && (
-        <p className={"mt-1 text-[11px] leading-relaxed " + (error ? "text-alert" : "text-muted")}>
+        <p className={"mt-1 text-[11px] leading-relaxed " + (error ? "text-alert-ink" : "text-muted")}>
           {error ?? hint}
         </p>
       )}

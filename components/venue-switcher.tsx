@@ -285,7 +285,7 @@ export function VenueSwitcher({
                       aria-label={`הסרת התמונה של ${v.name}`}
                       title="הסרת תמונה"
                       onClick={() => clearLogo(v.id)}
-                      className="shrink-0 rounded-sm p-1 text-ink-soft hover:bg-canvas hover:text-alert"
+                      className="shrink-0 rounded-sm p-1 text-ink-soft hover:bg-canvas hover:text-alert-ink"
                     >
                       <X className="h-3.5 w-3.5" strokeWidth={2} />
                     </button>
@@ -351,7 +351,7 @@ export function VenueSwitcher({
                     setDeleteError(null);
                     setPendingDelete(v);
                   }}
-                  className="shrink-0 rounded-sm p-1 text-ink-soft opacity-0 transition-colors hover:bg-canvas hover:text-alert group-hover:opacity-100"
+                  className="shrink-0 rounded-sm p-1 text-ink-soft opacity-0 transition-colors hover:bg-canvas hover:text-alert-ink group-hover:opacity-100"
                 >
                   <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
                 </button>
@@ -362,7 +362,7 @@ export function VenueSwitcher({
 
           {deleteError && (
             <div className="w-full rounded-sm bg-alert-tint px-4 py-3 text-xs leading-relaxed">
-              <p className="break-words text-alert">{deleteError.error}</p>
+              <p className="break-words text-alert-ink">{deleteError.error}</p>
               {/* The way out of the refusal. /production scoped to this venue lists every event on
                   it — undated and archived ones included — with open and delete on each row. */}
               {deleteError.eventCount > 0 && (
@@ -379,7 +379,7 @@ export function VenueSwitcher({
           )}
 
           {editError && (
-            <p className="w-full break-words rounded-sm bg-alert-tint px-4 py-3 text-xs leading-relaxed text-alert">
+            <p className="w-full break-words rounded-sm bg-alert-tint px-4 py-3 text-xs leading-relaxed text-alert-ink">
               {editError.message}
             </p>
           )}

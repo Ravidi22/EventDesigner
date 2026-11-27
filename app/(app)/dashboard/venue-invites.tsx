@@ -81,7 +81,7 @@ export function InviteCard({
           <p className="text-sm font-semibold leading-snug text-ink">{host ? `${host} הזמינו אתכם לעצב אירוע` : "הזמנה לעצב אירוע"}</p>
           <p className="mt-0.5 text-xs text-muted">{facts.join(" · ")}</p>
         </div>
-        {ago && <span className="nums whitespace-nowrap text-xs text-quiet">{ago}</span>}
+        {ago && <span className="nums whitespace-nowrap text-xs text-muted">{ago}</span>}
       </div>
       <div className="flex flex-col gap-1.5 rounded-sm border border-inset-border bg-inset px-3 py-2.5">
         <span className="text-xs font-medium text-ink-soft" aria-hidden>

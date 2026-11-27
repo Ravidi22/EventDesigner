@@ -159,7 +159,7 @@ export function CalendarSection({ initialStatus }: { initialStatus: GoogleStatus
         <div
           className={`mb-5 flex items-start gap-2 rounded-md border px-4 py-3 text-[13px] leading-relaxed ${
             notice.tone === "bad"
-              ? "border-alert-tint bg-alert-tint text-alert"
+              ? "border-alert-tint bg-alert-tint text-alert-ink"
               : "border-border bg-inset text-muted"
           }`}
         >
@@ -174,7 +174,7 @@ export function CalendarSection({ initialStatus }: { initialStatus: GoogleStatus
           className={`mb-5 flex items-center gap-2 rounded-md px-4 py-3 text-[13px] ${
             outcome.tone === "ok"
               ? "border border-accent-tint bg-accent-tint text-accent-deep"
-              : "border border-alert-tint bg-alert-tint text-alert"
+              : "border border-alert-tint bg-alert-tint text-alert-ink"
           }`}
         >
           {outcome.tone === "ok" ? (
@@ -197,7 +197,7 @@ export function CalendarSection({ initialStatus }: { initialStatus: GoogleStatus
       ) : (
         <>
           {connection.lastError && (
-            <div className="mb-5 flex items-center gap-2 rounded-md border border-alert-tint bg-alert-tint px-4 py-3 text-[13px] text-alert">
+            <div className="mb-5 flex items-center gap-2 rounded-md border border-alert-tint bg-alert-tint px-4 py-3 text-[13px] text-alert-ink">
               <AlertTriangle className="h-4 w-4 shrink-0" strokeWidth={1.8} />
               {connection.lastError}
             </div>

@@ -130,7 +130,7 @@ export function ImageField({
                 onChange(undefined);
               }}
               aria-label="הסרת התמונה"
-              className="absolute -end-1.5 -top-1.5 rounded-full border border-border bg-canvas p-1 text-muted shadow-floating transition-colors hover:bg-alert-tint hover:text-alert"
+              className="absolute -end-1.5 -top-1.5 rounded-full border border-border bg-canvas p-1 text-muted shadow-floating transition-colors hover:bg-alert-tint hover:text-alert-ink"
             >
               <X className="h-3 w-3" strokeWidth={2.5} />
             </button>
@@ -139,7 +139,7 @@ export function ImageField({
 
         <div className="min-w-0 text-[13px] leading-relaxed">
           {error ? (
-            <p className="text-alert">{error}</p>
+            <p className="text-alert-ink">{error}</p>
           ) : uploading ? (
             <p className="text-ink-soft">מעלה…</p>
           ) : (

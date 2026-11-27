@@ -393,7 +393,7 @@ function EntryLine({ appointment: a, behind, onOpen }: { appointment: Appointmen
   const length = a.time ? durationLabel(a.durationMin) : "";
   return (
     <div className="flex shrink-0 items-center gap-2">
-      <HourCell text={hourOf(a)} tone={behind ? "text-faint" : "text-ink"} />
+      <HourCell text={hourOf(a)} tone={behind ? "text-quiet" : "text-ink"} />
       <button
         type="button"
         onClick={onOpen}
@@ -420,14 +420,14 @@ function EntryLine({ appointment: a, behind, onOpen }: { appointment: Appointmen
 function BusyLine({ block: b }: { block: BusyBlock }) {
   return (
     <div className="flex shrink-0 items-center gap-2">
-      <HourCell text={b.time ?? "כל היום"} tone="text-faint" />
+      <HourCell text={b.time ?? "כל היום"} tone="text-muted" />
       <div
         title={[b.title, b.calendarName, "יומן Google"].filter(Boolean).join(" · ")}
         className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-dashed border-border bg-inset/60 px-2.5 py-2"
       >
         <Lock className="h-[13px] w-[13px] shrink-0 text-faint" strokeWidth={1.75} aria-hidden />
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-muted">{b.title}</span>
-        <span className="shrink-0 text-[11px] text-faint">Google</span>
+        <span className="shrink-0 text-[11px] text-muted">Google</span>
       </div>
     </div>
   );

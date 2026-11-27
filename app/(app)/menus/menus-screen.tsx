@@ -132,7 +132,7 @@ export function MenusScreen({ initialDishes, initialPackages }: { initialDishes:
                 <section key={course} aria-label={COURSE_LABEL[course]}>
                   <div className="mb-2 flex items-baseline gap-2">
                     <h2 className="text-caption font-bold text-muted">{COURSE_LABEL[course]}</h2>
-                    <span className="nums text-caption font-semibold text-quiet">{list.length}</span>
+                    <span className="nums text-caption font-semibold text-muted">{list.length}</span>
                     <button type="button" onClick={() => setDish(newDish(course))} className="ms-auto text-xs font-semibold text-accent hover:text-accent-hover">
                       + מנה
                     </button>
@@ -462,7 +462,7 @@ function RemoveRow({ label, onClick }: { label: string; onClick: () => void }) {
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="mb-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-muted transition-colors hover:bg-alert-tint hover:text-alert"
+      className="mb-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-muted transition-colors hover:bg-alert-tint hover:text-alert-ink"
     >
       <Trash2 className="h-4 w-4" strokeWidth={1.75} />
     </button>

@@ -59,7 +59,7 @@ export function SupplierCard({
               the alert tint; the all-time total is context and stays quiet underneath. */}
           <span className="flex flex-col items-end">
             {supplier.outstanding > 0 ? (
-              <span className="nums text-lg font-bold text-alert">{formatPrice(supplier.outstanding)}</span>
+              <span className="nums text-lg font-bold text-alert-ink">{formatPrice(supplier.outstanding)}</span>
             ) : (
               <span className="nums text-lg font-bold text-ink">{formatPrice(supplier.spent)}</span>
             )}

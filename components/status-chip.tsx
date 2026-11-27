@@ -6,9 +6,9 @@ type Tone = "neutral" | "accent" | "success" | "warn" | "alert";
 const tones: Record<Tone, string> = {
   neutral: "bg-bg text-muted",
   accent: "bg-accent-wash text-accent-hover",
-  success: "bg-success-tint text-success",
+  success: "bg-success-tint text-success-ink",
   warn: "bg-warn-tint text-warn-ink",
-  alert: "bg-alert-tint text-alert",
+  alert: "bg-alert-tint text-alert-ink",
 };
 
 /**

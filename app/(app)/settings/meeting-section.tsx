@@ -121,7 +121,7 @@ export function MeetingSection() {
                 <div className="flex items-center gap-1.5">
                   <span className={"text-sm font-semibold " + (on ? "text-ink" : "text-muted")}>{step.label}</span>
                   {locked && (
-                    <span className="inline-flex items-center gap-1 text-xs text-faint" title="שלב קבוע — פותח את האירוע">
+                    <span className="inline-flex items-center gap-1 text-xs text-quiet" title="שלב קבוע — פותח את האירוע">
                       <Lock className="h-3 w-3" strokeWidth={2} />
                       קבוע
                     </span>

@@ -319,8 +319,8 @@ export function Menu({
                   className={`flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-start text-sm transition-colors ${
                     item.danger
                       ? index === activeIndex
-                        ? "bg-alert-tint text-alert"
-                        : "text-alert"
+                        ? "bg-alert-tint text-alert-ink"
+                        : "text-alert-ink"
                       : item.emphasis
                         ? index === activeIndex
                           ? "bg-accent-tint font-semibold text-accent"

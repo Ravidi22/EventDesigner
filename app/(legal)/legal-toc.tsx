@@ -24,6 +24,10 @@ function useCurrent(entries: TocEntry[]) {
         const el = document.getElementById(e.id);
         if (el && el.getBoundingClientRect().top <= UNDER_HEADER + 8) at = e.id;
       }
+      // The last sections are too short to ever reach the header: at the foot of the page, the last
+      // one is where you are (a click on "יצירת קשר" marked "קטינים").
+      const root = document.documentElement;
+      if (entries.length && window.scrollY + window.innerHeight >= root.scrollHeight - 4) at = entries[entries.length - 1].id;
       setCurrent((c) => (c === at ? c : at));
     };
     read();

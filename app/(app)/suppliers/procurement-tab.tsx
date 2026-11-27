@@ -213,7 +213,7 @@ function SetupStrip({ setup, windowTo }: { setup: ProcurementSetup; windowTo: st
             (r.tone === "warn" ? "border-alert bg-alert-tint text-ink" : "border-border bg-surface text-ink-soft")
           }
         >
-          <r.icon className={"h-4 w-4 shrink-0 " + (r.tone === "warn" ? "text-alert" : "text-accent")} strokeWidth={2} />
+          <r.icon className={"h-4 w-4 shrink-0 " + (r.tone === "warn" ? "text-alert-ink" : "text-accent")} strokeWidth={2} />
           <span className="min-w-0 flex-1">{r.text}</span>
           {r.href && (
             <Link href={r.href} className="shrink-0 text-sm font-semibold text-accent transition-colors hover:text-accent-hover">
@@ -399,7 +399,7 @@ export function ProcurementTab() {
               : "border-border bg-surface text-ink-soft")
           }
         >
-          {n.tone === "warn" && <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-alert" strokeWidth={2} />}
+          {n.tone === "warn" && <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-alert-ink" strokeWidth={2} />}
           {n.text}
         </p>
       ))}
@@ -550,7 +550,7 @@ export function ProcurementTab() {
                           </td>
                           <td className="px-4 py-2.5">
                             {s.shortfall !== undefined ? (
-                              <span className="nums inline-flex items-center gap-1 rounded-pill bg-alert-tint px-2 py-0.5 text-xs font-semibold text-alert">
+                              <span className="nums inline-flex items-center gap-1 rounded-pill bg-alert-tint px-2 py-0.5 text-xs font-semibold text-alert-ink">
                                 <AlertTriangle className="h-3 w-3" strokeWidth={2} />
                                 {s.shortfall}
                               </span>

@@ -150,7 +150,7 @@ export function ShareLink({ link, clientName, phone }: { link: SceneLink; client
           <button
             type="button"
             onClick={() => setRevoking(current)}
-            className="rounded-sm p-1 text-alert transition-colors hover:bg-alert-tint"
+            className="rounded-sm p-1 text-alert-ink transition-colors hover:bg-alert-tint"
             title="ביטול הקישור"
             aria-label="ביטול הקישור"
             disabled={busy}
@@ -165,7 +165,7 @@ export function ShareLink({ link, clientName, phone }: { link: SceneLink; client
           קישור חדש (מבטל את הקודם)
         </Button>
       )}
-      {error && <p className="text-[13px] text-alert">{error}</p>}
+      {error && <p className="text-[13px] text-alert-ink">{error}</p>}
 
       <ConfirmDialog
         open={!!revoking}

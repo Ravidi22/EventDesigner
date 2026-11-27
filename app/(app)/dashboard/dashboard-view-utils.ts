@@ -65,7 +65,7 @@ export type CardTone = StatusTone | "alert";
 export const TONE_CLASS: Record<CardTone, string> = {
   neutral: "bg-bg text-muted",
   accent: "bg-accent-wash text-accent-hover",
-  success: "bg-success-tint text-success",
+  success: "bg-success-tint text-success-ink",
   warn: "bg-warn-tint text-warn-ink",
   alert: "bg-alert-tint text-alert-ink",
 };
@@ -86,7 +86,7 @@ export const STATUS_CARD_THEME: Record<CardTone, CardTheme> = {
   neutral: { bg: "bg-bg", text: "text-muted", bar: "bg-faint", rail: "border-s-faint" },
   warn: { bg: "bg-warn-tint", text: "text-warn-ink", bar: "bg-warn", rail: "border-s-warn" },
   accent: { bg: "bg-accent-tint", text: "text-accent-hover", bar: "bg-accent", rail: "border-s-accent" },
-  success: { bg: "bg-success-tint", text: "text-success", bar: "bg-success", rail: "border-s-success" },
+  success: { bg: "bg-success-tint", text: "text-success-ink", bar: "bg-success", rail: "border-s-success" },
   alert: { bg: "bg-alert-tint", text: "text-alert-ink", bar: "bg-alert", rail: "border-s-alert" },
 };
 
@@ -217,7 +217,7 @@ export interface NoteTheme {
 // still the only thing in that cell worth reading, and grey made it recede further than the plain
 // purple line it replaced.
 //
-// `blocked` uses `text-alert-ink`, not `text-alert`. StatusChip pairs alert with its own tint at
+// `blocked` uses `text-alert-ink`, not `text-alert-ink`. StatusChip pairs alert with its own tint at
 // 3.2:1, under AA, and this text is smaller than a status chip's rather than larger — so alert got
 // the ink variant warn already had. (warn-ink itself was missing AA too and was darkened in
 // globals.css; that one is a shared token, so it moved for every warn chip in the app, not here.)

@@ -21,9 +21,15 @@
   /* --- Ink --- */
   --color-ink: #1b1725;
   --color-ink-soft: #4a4658; /* body copy and strong labels */
-  --color-muted: #7c7889; /* section subtitles, meta */
-  --color-quiet: #9c98ac; /* captions and swatch labels */
-  --color-faint: #a29eb2; /* kickers, rules, dividers, disabled glyphs */
+  /* WCAG AA for text (EVE-10, approved by Ravid in Claude Design 2026-11-27). Was #7c7889 — 4.3:1 on
+     white, 3.7:1 on the plane. Now 5.4:1 on white, 4.65:1 on the plane, 4.6:1 on accent-tint. Its
+     one miss: accent-wash (3.9:1) — text on a chosen chip is accent-deep, never muted. */
+  --color-muted: #6c6877; /* section subtitles, meta — text on ANY ground */
+  /* Was #9c98ac, 2.8:1. Now 4.6:1 on white — and ONLY on white/surface/canvas: on inset it is 4.4:1,
+     on the plane 4.0:1, so a caption on a tinted ground is muted instead (Ravid's choice, "4a"). */
+  --color-quiet: #77718c; /* captions, counts, placeholders — text on white only */
+  /* 2.6:1 — never text that has to be read. Rules, dividers, bullets, decorative and disabled glyphs. */
+  --color-faint: #a29eb2;
 
   /* --- Indigo (primary) --- */
   --color-indigo-900: #4b3a8c;
@@ -153,7 +159,7 @@ body {
   font-size: 12px;
   line-height: 1;
   letter-spacing: 4px;
-  color: var(--color-faint);
+  color: var(--color-quiet); /* was faint (2.6:1) — an overline is read (EVE-10) */
 }
 
 /* Counts, dimensions, and prices always align (DESIGN.md — The Tabular Count Rule). */
@@ -278,7 +284,8 @@ body {
 
 /* Button fills. Kept as classes so the two gradients are defined once. */
 .grad-cta {
-  background-image: linear-gradient(150deg, #8b6fd6, #6d55bd);
+  /* The light stop was #8b6fd6 — white type on it was 3.9:1. #7f61d2 is 4.6:1 (EVE-10). */
+  background-image: linear-gradient(150deg, #7f61d2, #6d55bd);
 }
 .grad-soft {
   background-image: linear-gradient(150deg, #efeafb, #e7e0f7);

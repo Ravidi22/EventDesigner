@@ -451,7 +451,7 @@ export function OrderDialog({
             <div key={l.id} className="flex items-end gap-2">
               <TextField aria-label="תיאור" value={l.label} onChange={(label) => setLine(l.id, { label })} wrapperClassName="min-w-0 flex-1" />
               <NumberField aria-label="סכום" min={0} value={l.amount} onChange={(amount) => setLine(l.id, { amount })} className="w-32" />
-              <button type="button" onClick={() => setLines((ls) => ls.filter((x) => x.id !== l.id))} className="mb-1 rounded-sm p-1.5 text-muted hover:bg-alert-tint hover:text-alert" aria-label="הסרת השורה">
+              <button type="button" onClick={() => setLines((ls) => ls.filter((x) => x.id !== l.id))} className="mb-1 rounded-sm p-1.5 text-muted hover:bg-alert-tint hover:text-alert-ink" aria-label="הסרת השורה">
                 <Trash2 className="h-4 w-4" strokeWidth={1.75} />
               </button>
             </div>
@@ -478,7 +478,7 @@ export function OrderDialog({
               <TextField aria-label="תשלום" value={s.label} onChange={(label) => setItem(s.id, { label })} wrapperClassName="min-w-0 flex-1" />
               <NumberField aria-label="סכום" min={0} value={s.amount} onChange={(amount) => setItem(s.id, { amount })} className="w-28" />
               <DateField aria-label="עד תאריך" value={s.dueDate} onChange={(dueDate) => setItem(s.id, { dueDate })} wrapperClassName="w-40" align="end" />
-              <button type="button" onClick={() => setSchedule((ss) => ss.filter((x) => x.id !== s.id))} className="mb-1 rounded-sm p-1.5 text-muted hover:bg-alert-tint hover:text-alert" aria-label="הסרת התשלום">
+              <button type="button" onClick={() => setSchedule((ss) => ss.filter((x) => x.id !== s.id))} className="mb-1 rounded-sm p-1.5 text-muted hover:bg-alert-tint hover:text-alert-ink" aria-label="הסרת התשלום">
                 <Trash2 className="h-4 w-4" strokeWidth={1.75} />
               </button>
             </div>

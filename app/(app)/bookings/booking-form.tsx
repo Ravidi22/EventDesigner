@@ -633,7 +633,7 @@ function RemoveRow({ label, onClick }: { label: string; onClick: () => void }) {
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="mb-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-muted transition-colors hover:bg-alert-tint hover:text-alert"
+      className="mb-1 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-muted transition-colors hover:bg-alert-tint hover:text-alert-ink"
     >
       <Trash2 className="h-4 w-4" strokeWidth={1.75} />
     </button>

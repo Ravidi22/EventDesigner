@@ -171,7 +171,7 @@ export function DateField({
       {label && (
         <span className={fieldLabelClassName}>
           {label}
-          {required && <span className="text-alert"> *</span>}
+          {required && <span className="text-alert-ink"> *</span>}
         </span>
       )}
       <button
@@ -189,9 +189,9 @@ export function DateField({
         } ${className}`}
       >
         <Calendar className="h-4 w-4 shrink-0 text-muted" strokeWidth={2} />
-        <span className={`nums flex-1 truncate ${selected ? "text-ink" : "text-faint"}`}>{selected ? fullLabel(selected) : placeholder}</span>
+        <span className={`nums flex-1 truncate ${selected ? "text-ink" : "text-quiet"}`}>{selected ? fullLabel(selected) : placeholder}</span>
       </button>
-      {error && errorMessage && <p className="mt-1 text-xs text-alert">{errorMessage}</p>}
+      {error && errorMessage && <p className="mt-1 text-xs text-alert-ink">{errorMessage}</p>}
 
       {open && (
         <div className={`absolute ${align === "end" ? "end-0" : "start-0"} top-[calc(100%+6px)] z-20 w-72 rounded-md border border-border bg-surface p-3 shadow-lifted`}>
@@ -240,7 +240,7 @@ export function DateField({
                         ? "border border-accent-line text-ink"
                         : inMonth
                           ? "text-ink hover:bg-accent-tint"
-                          : "text-faint hover:bg-accent-tint"
+                          : "text-quiet hover:bg-accent-tint"
                   } ${isDisabled ? "cursor-not-allowed opacity-35 hover:bg-transparent" : ""}`}
                 >
                   {d.getDate()}
