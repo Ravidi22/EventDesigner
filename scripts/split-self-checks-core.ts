@@ -187,9 +187,19 @@ const applyEdits = (text: string, edits: Edit[]) =>
 function pruneImports(file: string, text: string, candidates: Set<string>): string {
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const used = new Set<string>();
+  // Names that look like a binding but are not a use of it: `export { x } from "…"` re-exports
+  // another module's x, and `o.x`, `{ x: 1 }`, `interface { x }` are property names.
+  const notAUse = (id: ts.Identifier) => {
+    const p = id.parent;
+    return (
+      ((ts.isPropertyAccessExpression(p) || ts.isQualifiedName(p)) && (ts.isPropertyAccessExpression(p) ? p.name : p.right) === id) ||
+      ((ts.isPropertyAssignment(p) || ts.isPropertySignature(p) || ts.isPropertyDeclaration(p) || ts.isMethodDeclaration(p)) && p.name === id)
+    );
+  };
   const walk = (n: ts.Node) => {
     if (ts.isImportDeclaration(n)) return;
-    if (ts.isIdentifier(n)) used.add(n.text);
+    if (ts.isExportDeclaration(n) && n.moduleSpecifier) return;
+    if (ts.isIdentifier(n) && !notAUse(n)) used.add(n.text);
     ts.forEachChild(n, walk);
   };
   walk(sf);

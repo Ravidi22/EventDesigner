@@ -66,16 +66,26 @@ try {
     `import { isMain } from "./self-check";\nexport let counter = 0;\nlet hidden = 0;\nexport const bump = () => ++hidden;\nif (isMain(import.meta.url)) {\n  hidden = 5;\n  console.log(counter, bump());\n}\n`,
   );
   writeFileSync(at("plain.ts"), `export const x = 1;\n`);
+  // Re-exports and property names look like the import's name but are not uses of it.
+  writeFileSync(
+    at("reexp.ts"),
+    `import { isMain } from "./self-check";\nimport { helper, type Shape } from "./dep";\nexport { helper } from "./dep";\nexport type { Shape } from "./dep";\nexport const o = { helper: 1 };\nexport const p = o.helper;\nif (isMain(import.meta.url)) {\n  const s: Shape = "circle";\n  console.log(helper(1), s);\n}\n`,
+  );
   writeFileSync(at("doc.ts"), `/**\n * Usage:\n *   if (isMain(import.meta.url)) {\n */\nexport const y = 2;\n`);
 
-  const found = findBlockModules([at("geo.ts"), at("mut.ts"), at("plain.ts"), at("doc.ts")]);
+  const found = findBlockModules([at("geo.ts"), at("mut.ts"), at("plain.ts"), at("doc.ts"), at("reexp.ts")]);
   assert(!found.includes(at("plain.ts")), "a module without the guard is not picked");
   assert(!found.includes(at("doc.ts")), "…nor one that only shows the guard in a comment");
-  assert(found.length === 2, "the two with a real top-level isMain block are");
+  assert(found.length === 3, "the three with a real top-level isMain block are");
 
   const results = splitAll(found, { "check:geo": "tsx geo.ts" }, (p) => p.replace(dir, "").replace(/^[\\/]/, ""));
   const geo = results.find((r) => r.file === at("geo.ts"))!;
   const mut = results.find((r) => r.file === at("mut.ts"))!;
+
+  // ── re-exports and property names ──
+  const reexp = results.find((r) => r.file === at("reexp.ts"))!;
+  assert(!/^import \{[^}]*\bhelper\b/m.test(reexp.moduleText ?? ""), "an import only the block used goes, though the module re-exports and property-names it");
+  assert(reexp.moduleText!.includes(`export { helper } from "./dep";`) && reexp.moduleText!.includes("o.helper"), "…and the re-export and the property stay");
 
   // ── the refused one ──
   assert(mut.problems.some((p) => p.includes("hidden")), "a block that assigns a module variable is refused, naming it");
