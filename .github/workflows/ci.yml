@@ -85,6 +85,9 @@ jobs:
       - run: npm ci
       - run: npm run db:migrate
       - run: npm run db:verify:isolation
+      # The account lifecycle against the same throwaway database: close, reopen, the erase sweep,
+      # a member's and a client's own delete, the export (EVE-22/51/52).
+      - run: npm run db:verify:account
 
   build:
     runs-on: ubuntu-latest
