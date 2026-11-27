@@ -6,10 +6,12 @@ import type { InstanceRequest, ItemBuild } from "./collect";
 import { type ItemContext } from "./item-context";
 import { flowerBuild } from "./flowers";
 import { applyTransform } from "./frame";
-import { ENVELOPE } from "./materials";
+import { ENVELOPE, glassMaterial } from "./materials";
 import { type Part, vec3 } from "./types";
 import { type ClothRun } from "@/lib/studio/ceiling-cloth";
-import { BULB, CABLE_R_MM, CANDLE_SLEEVE, ceilingDrapeBody, ceilingUndersideMm, CHAIN_R_MM, CHANDELIER_H_MM, CURTAIN_PLEATS, curtainBody, FAIRY_R_MM, flipPart, flipZ, GLASS, GLOBE, hungFlowersBody, LAMP_MAX_R_MM, overheadKindBody, partSpan, PLEAT_MM, POST_MM, ROD_R_MM, SAIL_GRID, sailBody, sailGrid, SWAG_ACROSS, SWAG_ONE_ACROSS, SWAG_ONE_ALONG } from "./overhead";
+import { BULB, CABLE_R_MM, CANDLE_SLEEVE, ceilingDrapeBody, ceilingUndersideMm, CHAIN_R_MM, CHANDELIER_H_MM, CURTAIN_PLEATS, curtainBody, FAIRY_R_MM, flipPart, flipZ, GLOBE, hungFlowersBody, LAMP_MAX_R_MM, overheadKindBody, partSpan, PLEAT_MM, POST_MM, ROD_R_MM, SAIL_GRID, sailBody, sailGrid, SWAG_ACROSS, SWAG_ONE_ACROSS, SWAG_ONE_ALONG } from "./overhead";
+
+const GLASS = glassMaterial();
 
 // ponytail: self-check. Run: npx tsx lib/scene/overhead.ts
 const assert = (ok: boolean, msg: string) => {

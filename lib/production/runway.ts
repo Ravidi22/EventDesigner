@@ -505,9 +505,3 @@ export function buildRunway(
     needsAttention: rows.filter((r) => r.alert).length,
   };
 }
-
-// ── Self-check ─────────────────────────────────────────────────────────────────────────────────
-
-export function assert(condition: boolean, message: string): void {
-  if (!condition) throw new Error(`runway: ${message}`);
-}

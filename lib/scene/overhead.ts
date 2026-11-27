@@ -32,7 +32,7 @@ import type { InstanceRequest, ItemBuild } from "./collect";
 import { type ItemContext, fallbackBody } from "./item-context";
 import { flowerBuild } from "./flowers";
 import { shapedFlowersBody } from "./flower-cover";
-import { ENVELOPE, clothMaterial, crystalMaterial, emissiveMaterial, foliageMaterial, glassMaterial, materialRefOf, metalMaterial } from "./materials";
+import { ENVELOPE, clothMaterial, crystalMaterial, emissiveMaterial, foliageMaterial, materialRefOf, metalMaterial } from "./materials";
 import type { Material } from "@/lib/catalog/material";
 import { type MaterialRef, type NodeTag, type Part, type Vec3, vec3 } from "./types";
 import { frondSpan } from "./organic";
@@ -109,8 +109,6 @@ const pale = (tone: string): boolean => HEX.test(tone.trim()) && isPale(tone.tri
 /** A chandelier's frame: the metal where it has a colour; faint and clear where it is crystal or
  *  white, or the frame would be the only thing you see of it (items.ts armMaterial). */
 const frameMaterial = (tone: string, material?: Material): MaterialRef => (material ? materialRefOf(material, tone) : pale(tone) ? { colour: "#d6d2dd", kind: "glass", opacity: 0.5 } : metalMaterial(tone));
-
-export const GLASS = glassMaterial();
 
 const box = (w: number, d: number, h: number, at: Vec3, material?: MaterialRef, rotDeg?: number): Part => {
   const p: Part = { shape: "box", w, d, h, at };

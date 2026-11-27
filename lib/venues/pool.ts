@@ -19,7 +19,7 @@ import type { EdgeCurve, Point } from "../studio/hall";
 import { bowShapeSide, roundShapeCorner, shapedOutline, type OutlineShape } from "../studio/shaped-outline";
 import { customShapeBounds } from "../studio/footprint";
 import { asOutline } from "./face-surfaces";
-import { featureFootprint, newFeature, type StructureFeature } from "./structure";
+import { newFeature, type StructureFeature } from "./structure";
 
 export type PoolPreset = "rect" | "ellipse" | "kidney" | "L" | "free";
 
@@ -110,9 +110,4 @@ export function poolOutline(preset: Exclude<PoolPreset, "free">, w: number, d: n
 /** A new pool of that shape standing at `at`, its own default size unless one is given. */
 export function newPoolFeature(preset: Exclude<PoolPreset, "free">, at: Point, size = POOL_PRESET_SIZE[preset]): Omit<StructureFeature, "id"> {
   return { ...newFeature("pool", at), ...poolOutline(preset, size.widthMm, size.depthMm) };
-}
-
-export function footprintBoxOf(f: Omit<StructureFeature, "id">) {
-  const fp = featureFootprint(f);
-  return fp.kind === "custom" ? customShapeBounds(fp.outline, fp.edgeCurves) : { w: f.widthMm, h: f.depthMm };
 }

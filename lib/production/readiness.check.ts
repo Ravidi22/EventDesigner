@@ -1,6 +1,10 @@
 // npm run check:readiness — the self-check of ./readiness.ts, kept beside it so it never ships in the browser bundle (EVE-54).
 import { type ProcurementItem } from "@/lib/suppliers/procurement";
-import { assert, readiness, stateOf } from "./readiness";
+import { readiness, stateOf } from "./readiness";
+
+function assert(condition: boolean, message: string): void {
+  if (!condition) throw new Error(`readiness: ${message}`);
+}
 
 const items: Record<string, ProcurementItem> = {
   chair: { label: "כיסא", categoryLabel: "", stockKind: "owned", unit: "unit", stockQty: 100 },

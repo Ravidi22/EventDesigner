@@ -2,7 +2,12 @@
 import { customShapeBounds } from "../studio/footprint";
 import { asOutline, featureEditOutline, featureWorldOutline } from "./face-surfaces";
 import { featureFootprint, newFeature, type StructureFeature } from "./structure";
-import { footprintBoxOf, newPoolFeature } from "./pool";
+import { newPoolFeature } from "./pool";
+
+function footprintBoxOf(f: Omit<StructureFeature, "id">) {
+  const fp = featureFootprint(f);
+  return fp.kind === "custom" ? customShapeBounds(fp.outline, fp.edgeCurves) : { w: f.widthMm, h: f.depthMm };
+}
 
 // ponytail: self-check. Run: npm run check:pool
 const assert = (c: boolean, m: string) => {

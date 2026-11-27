@@ -1,5 +1,9 @@
 // npm run check:runway — the self-check of ./runway.ts, kept beside it so it never ships in the browser bundle (EVE-54).
-import { assert, buildRow, buildRunway, CHECKPOINT_BY_ID, closedReason, daysBetween, DEFAULT_OFFSETS, laneOf, normalizeOffsets, ordersLine, shiftDays, type EventFacts } from "./runway";
+import { buildRow, buildRunway, CHECKPOINT_BY_ID, closedReason, daysBetween, DEFAULT_OFFSETS, laneOf, normalizeOffsets, ordersLine, shiftDays, type EventFacts } from "./runway";
+
+function assert(condition: boolean, message: string): void {
+  if (!condition) throw new Error(`runway: ${message}`);
+}
 
 const TODAY = "2026-09-01";
 const base: EventFacts = {
