@@ -2,7 +2,8 @@
 // answers onto the new user (`users.terms_version`, `users.terms_accepted_at`).
 import type { LegalStatus } from "./status";
 
-export const TERMS_REQUIRED = "יש לאשר את תנאי השימוש ואת מדיניות הפרטיות";
+/** Claude Design board ב2's wording — the impersonal voice of the form's other errors. */
+export const TERMS_REQUIRED = "כדי לפתוח חשבון יש לאשר את תנאי השימוש ואת מדיניות הפרטיות.";
 
 export type TermsAcceptance = { error: string } | { version: string; at: Date } | null;
 

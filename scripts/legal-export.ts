@@ -21,8 +21,13 @@ const inline = (text: string) =>
     )
     .join("");
 
-const block = (b: LegalBlock) =>
-  typeof b === "string" ? inline(b) : "list" in b ? b.list.map((i) => `- ${inline(i)}`).join("\n") : `> **הערה לבדיקה:** ${b.note}`;
+function block(b: LegalBlock): string {
+  if (typeof b === "string") return inline(b);
+  if ("list" in b) return b.list.map((i) => `- ${inline(i)}`).join("\n");
+  if ("note" in b) return `> **הערה לבדיקה:** ${b.note}`;
+  const c = b.contact;
+  return [`**${inline(c.title)}**${c.sub ? ` — ${inline(c.sub)}` : ""}`, ...c.rows.map((r) => `- ${r.label}: ${inline(r.value)}`), ...(c.foot ? [inline(c.foot)] : [])].join("\n");
+}
 
 const lines = [
   `# Eve — מסמכים משפטיים (${LEGAL_STATUS === "draft" ? "טיוטה, ממתינה לבדיקה משפטית" : "מפורסם"})`,

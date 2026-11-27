@@ -1,7 +1,7 @@
 // npm run check:legal — the self-check of ./documents.ts, ./inline.ts, ./facts.ts and ./acceptance.ts,
 // kept beside them so it never ships in the browser bundle (EVE-54).
 import { termsAcceptance } from "./acceptance";
-import { LEGAL_DOCS, docBySlug, factsUsed, publishBlockers } from "./documents";
+import { LEGAL_DOCS, blockTexts, docBySlug, factsUsed, publishBlockers } from "./documents";
 import { FACT_LABELS, LEGAL_FACTS, missingFacts, type FactKey } from "./facts";
 import { parseInline } from "./inline";
 import { LEGAL_STATUS, LEGAL_VERSION } from "./status";
@@ -18,6 +18,8 @@ assert(t[1].kind === "fact" && t[1].key === "privacyEmail", "a fact");
 assert(t[3].kind === "link" && t[3].label === "תנאי השימוש" && t[3].href === "/terms", "a link");
 assert(t[4].kind === "text" && t[4].text === ".", "trailing text");
 assert(parseInline("רק טקסט").length === 1, "plain text is one token");
+const here = parseInline("ראו [סעיף 2](#roles)");
+assert(here[1].kind === "link" && here[1].href === "#roles", "a link to a section of the same page");
 let threw = false;
 try {
   parseInline("{{noSuchFact}}");
@@ -53,10 +55,12 @@ for (const doc of LEGAL_DOCS) {
   // Every paragraph parses: no unknown fact, no link off the site or to a page that does not exist.
   for (const s of doc.sections) {
     for (const b of s.blocks) {
-      const texts = typeof b === "string" ? [b] : "list" in b ? b.list : [b.note];
+      const texts = blockTexts(b, { notes: true });
       for (const text of texts) {
         for (const tok of parseInline(text)) {
-          if (tok.kind === "link") {
+          if (tok.kind === "link" && tok.href.startsWith("#")) {
+            assert(ids.includes(tok.href.slice(1)), `${doc.slug}: ${tok.href} is a section of this page`);
+          } else if (tok.kind === "link") {
             const target = tok.href.split("#")[0];
             assert(
               LEGAL_DOCS.some((d) => d.path === target) || ["/", "/signup", "/login", "/settings"].includes(target),
@@ -69,6 +73,17 @@ for (const doc of LEGAL_DOCS) {
   }
 }
 assert(factsUsed().has("privacyEmail") && factsUsed().has("accessibilityName"), "the texts name the contacts they need");
+// The design (Claude Design, board א1/א5): each document's way to reach someone is a contact CARD.
+const cardOf = (slug: "privacy" | "accessibility", id: string) =>
+  docBySlug(slug).sections.find((s) => s.id === id)?.blocks.find((b) => typeof b !== "string" && "contact" in b);
+const privacyCard = cardOf("privacy", "contact");
+assert(!!privacyCard && blockTexts(privacyCard).some((t) => t.includes("{{privacyEmail}}")), "privacy ends on its contact card");
+const a11yCard = cardOf("accessibility", "coordinator");
+assert(
+  !!a11yCard && ["accessibilityName", "accessibilityPhone", "accessibilityEmail", "auditDate"].every((k) => blockTexts(a11yCard).some((t) => t.includes(`{{${k}}}`))),
+  "the coordinator card names the coordinator and the audit date",
+);
+assert(blockTexts({ note: "n" }).length === 0 && blockTexts({ note: "n" }, { notes: true })[0] === "n", "notes are read only when asked");
 for (const key of factsUsed()) assert(key in LEGAL_FACTS, `${key} is a known fact`);
 
 // ── The switch: publishing is refused while anything is still owed. ────────────────────────────

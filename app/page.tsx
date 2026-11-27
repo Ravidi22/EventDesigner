@@ -18,6 +18,8 @@ import { Wordmark } from "@/components/wordmark";
 import { GlassCta } from "@/components/glass-cta";
 import { CatalogItems, HallPlan, TableDetail } from "@/components/landing-plan";
 import type { AccountKind } from "@/lib/auth/kinds";
+import { LEGAL_DOCS } from "@/lib/legal/documents";
+import { legalPublished } from "@/lib/legal/status";
 
 // The header's links stay on this page: each one is a section below, reached by its id.
 const SECTIONS = [
@@ -378,6 +380,14 @@ export default function Home() {
                 {s.label}
               </a>
             ))}
+            {/* The legal documents (EVE-8/9/10) — linked from here only once a lawyer has approved
+                them; until then they are drafts nothing points at (lib/legal/status.ts). */}
+            {legalPublished() &&
+              LEGAL_DOCS.map((d) => (
+                <Link key={d.slug} href={d.path} className="transition-colors hover:text-accent">
+                  {d.title}
+                </Link>
+              ))}
             <Link href="/login" className="transition-colors hover:text-accent">
               כניסה
             </Link>

@@ -1,5 +1,5 @@
 // The two inline marks a legal paragraph may carry (see ./types.ts): `{{factKey}}` and
-// `[label](/path)`. Strict on purpose — an unknown fact or a link off the site throws, so a typo fails
+// `[label](/path)` or `[label](#section)`. Strict on purpose — an unknown fact or a link off the site throws, so a typo fails
 // the self-check and the build instead of printing "{{legalNmae}}" on a legal page.
 import { isFactKey, type FactKey } from "./facts";
 
@@ -19,8 +19,10 @@ export function parseInline(source: string): InlineToken[] {
       if (!isFactKey(m[1])) throw new Error(`legal text: unknown fact {{${m[1]}}}`);
       out.push({ kind: "fact", key: m[1] });
     } else {
-      // Only this site's own pages: an address elsewhere is a fact Ravid supplies, never typed in.
-      if (!m[3].startsWith("/") || m[3].startsWith("//")) throw new Error(`legal text: link leaves the site: ${m[3]}`);
+      // Only this site's own pages, or a section of this one (#id): an address elsewhere is a fact Ravid
+      // supplies, never typed in.
+      const local = m[3].startsWith("#") || (m[3].startsWith("/") && !m[3].startsWith("//"));
+      if (!local) throw new Error(`legal text: link leaves the site: ${m[3]}`);
       out.push({ kind: "link", label: m[2], href: m[3] });
     }
     at = m.index + m[0].length;

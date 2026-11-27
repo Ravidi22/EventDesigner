@@ -11,7 +11,17 @@ export const LEGAL_DOCS: LegalDoc[] = [PRIVACY, TERMS, ACCESSIBILITY];
 
 export const docBySlug = (slug: LegalSlug): LegalDoc => LEGAL_DOCS.find((d) => d.slug === slug)!;
 
-const blockTexts = (b: LegalBlock): string[] => (typeof b === "string" ? [b] : "list" in b ? b.list : []);
+/** Every text in a block, for the checks and the export. A reviewer note only when asked — it never
+ *  reaches a published page. */
+export function blockTexts(b: LegalBlock, { notes = false } = {}): string[] {
+  if (typeof b === "string") return [b];
+  if ("list" in b) return b.list;
+  if ("contact" in b) {
+    const c = b.contact;
+    return [c.title, ...(c.sub ? [c.sub] : []), ...c.rows.flatMap((r) => [r.label, r.value]), ...(c.foot ? [c.foot] : [])];
+  }
+  return notes ? [b.note] : [];
+}
 
 const allBlocks = (doc: LegalDoc): LegalBlock[] => [...doc.intro, ...doc.sections.flatMap((s) => s.blocks)];
 

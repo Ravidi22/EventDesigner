@@ -68,13 +68,17 @@ export const ACCESSIBILITY: LegalDoc = {
       blocks: [
         "נתקלתם בבעיה, או שיש לכם הצעה? נשמח לשמוע.",
         {
-          list: [
-            "רכז/ת הנגישות: {{accessibilityName}}",
-            "טלפון: {{accessibilityPhone}}",
-            "אימייל: {{accessibilityEmail}}",
-          ],
+          contact: {
+            title: "רכז/ת הנגישות",
+            sub: "נחזור אליכם תוך {{accessibilityReplyDays}} ימים.",
+            rows: [
+              { label: "שם", value: "{{accessibilityName}}" },
+              { label: "טלפון", value: "{{accessibilityPhone}}" },
+              { label: "אימייל", value: "{{accessibilityEmail}}" },
+            ],
+            foot: "הנגישות נבדקה לאחרונה ב־{{auditDate}}, לפי ת״י 5568.",
+          },
         },
-        "נחזור אליכם תוך {{accessibilityReplyDays}} ימים.",
       ],
     },
     {

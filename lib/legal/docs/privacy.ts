@@ -15,10 +15,10 @@ export const PRIVACY: LegalDoc = {
   sections: [
     {
       id: "who",
-      title: "מי אנחנו ואיך פונים אלינו",
+      title: "מי אנחנו",
       blocks: [
-        "{{legalName}}, {{address}}.",
-        "פניות בנושא פרטיות: {{privacyEmail}}. כל פנייה אחרת: {{contactEmail}}.",
+        "Eve מופעלת בידי {{legalName}}, {{companyNumber}}, שכתובתה {{address}}. בכל מקום שכתוב כאן ״אנחנו״, הכוונה לחברה הזו.",
+        "פניות בנושא פרטיות — ראו [יצירת קשר](#contact). כל פנייה אחרת: {{contactEmail}}.",
         { note: "לבדוק: האם לפי תיקון 13 נדרש למנות ממונה על הגנת הפרטיות, ואם כן — לפרסם כאן את פרטיו." },
       ],
     },
@@ -137,7 +137,20 @@ export const PRIVACY: LegalDoc = {
     {
       id: "contact",
       title: "יצירת קשר",
-      blocks: ["פניות בנושא פרטיות: {{privacyEmail}}. דואר: {{legalName}}, {{address}}."],
+      blocks: [
+        "שאלות ובקשות בנושא פרטיות:",
+        {
+          contact: {
+            title: "פניות בנושא פרטיות",
+            sub: "עונים לכל פנייה בכתב.",
+            rows: [
+              { label: "אימייל", value: "{{privacyEmail}}" },
+              { label: "דואר", value: "{{legalName}}, {{address}}" },
+            ],
+            foot: "לקוחות של סטודיו, של אולם או של ספק — פנו קודם אליהם. הם מחזיקים את המידע על האירוע שלכם ([סעיף 2](#roles)).",
+          },
+        },
+      ],
     },
   ],
 };
