@@ -1,0 +1,70 @@
+# CI (EVE-19): typecheck, lint, every self-check and the production build, on every push and on
+# pull requests to master. Master takes changes only through a PR whose four jobs are green.
+#
+# No secrets: nothing here reaches Neon, Vercel or R2. The build gets dummy values for the two
+# variables it needs just to construct the auth module — it never connects to anything.
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NEXT_TELEMETRY_DISABLED: 1
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run checks
+
+  build:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgres://ci:ci@127.0.0.1:5432/ci
+      BETTER_AUTH_SECRET: ci-build-only-not-a-secret-0123456789abcdef
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
