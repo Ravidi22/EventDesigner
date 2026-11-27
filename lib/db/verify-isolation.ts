@@ -14,7 +14,7 @@
 import { LOCAL_HOSTS, refusal } from "./isolation/env";
 import { actAsUserForScript } from "@/lib/auth/session";
 import { CASES } from "./isolation/cases";
-import { cleanup, rowsOfA, seed, snapshot, sweep, type Fixture } from "./isolation/fixture";
+import { cleanup, rowsOfA, seed, snapshot, sweep, type Actor, type Fixture } from "./isolation/fixture";
 import { missingCases, serverActions } from "./isolation/inventory";
 import { judge, newRefs } from "./isolation/judge";
 
@@ -42,18 +42,101 @@ async function main() {
     process.exit(1);
   }
 
+  const swept = await sweep();
+  if (swept) console.log(`swept ${swept} organisations an earlier run left behind`);
+  if (seedOnly) {
+    await withFixture(async () => 0);
+    console.log("seed and cleanup ok");
+    process.exit(0);
+  }
+
+  const only = process.argv.find((a) => a === "--only-b" || a === "--only-control");
+  let leaks = 0;
+  let vacuous = 0;
+  if (only !== "--only-control") {
+    console.log("── B calls every action with A's ids ──");
+    leaks = await withFixture((f) => outsiderPass(actions, f));
+  }
+  if (only !== "--only-b") {
+    console.log("\n── the positive control: A's own people make the same calls, which must WORK ──");
+    vacuous = await withFixture((f) => controlPass(actions, f));
+  }
+  console.log(`\n${actions.length} actions: ${leaks} leaks, ${vacuous} cases that prove nothing (A's own call did nothing either)`);
+  process.exit(leaks || vacuous ? 1 : 0);
+}
+
+/** Seed, run, and always clean up — a fresh fixture per pass, so one pass's writes never feed the other. */
+async function withFixture(run: (f: Fixture) => Promise<number>): Promise<number> {
   let fixture: Fixture | null = null;
+  try {
+    fixture = await seed();
+    console.log(`seeded: studio A ${fixture.orgA}, ${fixture.aIds.length} ids and ${fixture.aText.length} private strings on A's side\n`);
+    return await run(fixture);
+  } finally {
+    if (fixture) {
+      const f = fixture;
+      await cleanup([...f.aOrgs, f.orgB, f.orgB2, f.orgB3], [f.clientC, f.users.clientB], f.filePath);
+    } else {
+      await sweep();
+    }
+  }
+}
+
+async function call(f: Fixture, userId: string, run: (a: Fixture) => Promise<unknown>): Promise<unknown> {
+  actAsUserForScript(userId);
+  try {
+    return await withTimeout(run(f));
+  } catch (e) {
+    return e instanceof Error ? e : new Error(String(e));
+  } finally {
+    actAsUserForScript(null);
+  }
+}
+
+/** Which of A's people stands in for each of B's. */
+function counterpart(f: Fixture, actor: Actor): string {
+  return { studioB: f.ownerA, supplierB: f.supplierUserS, venueB: f.venueUserV, clientB: f.clientC }[actor];
+}
+
+/** An action whose call removes or ends something runs LAST in the control pass, so A's own delete
+ *  does not leave the cases after it with nothing to act on. */
+const ENDS = /#(delete|remove|archive|revoke|unshare|cancel|unlink|discard|withdraw|decline|markEventLost)/;
+
+/** Every case called again as A's own person: it must WORK — A's data comes back, A's rows change, the
+ *  `expect` flips or the `verify` fails — or B's refusal of it proves nothing (round-1 review). */
+async function controlPass(actions: string[], f: Fixture): Promise<number> {
+  let vacuous = 0;
+  const order = [...actions.filter((k) => !ENDS.test(k)), ...actions.filter((k) => ENDS.test(k))];
+  for (const key of order) {
+    const c = CASES[key];
+    if (!c.call) continue;
+    if (c.control) {
+      console.log(`  --   ${key}  (control: ${c.control})`);
+      continue;
+    }
+    const before = await snapshot(f);
+    const result = await call(f, counterpart(f, c.as ?? "studioB"), c.call);
+    const after = await snapshot(f);
+    const returned = !judge(result, [...f.aIds, ...f.aText]).refused;
+    const flipped = (c.expect && !c.expect(result, f)) || (c.verify && !(await c.verify(f)));
+    const changed = before.a !== after.a;
+    if (returned || flipped || changed) {
+      console.log(`  ok   ${key}  works for A (${[returned && "returns A's data", changed && "changes A's rows", flipped && "the check flips"].filter(Boolean).join(", ")})`);
+    } else {
+      vacuous++;
+      const answer = result instanceof Error ? `threw: ${result.message.slice(0, 160)}` : JSON.stringify(result)?.slice(0, 200);
+      console.error(`  VACUOUS ${key}  — A's own call did nothing either, so B's refusal proves nothing. A got: ${answer}`);
+    }
+  }
+  return vacuous;
+}
+
+/** B's people call every action with A's ids: nothing of A's may come back, change, or be pointed at. */
+async function outsiderPass(actions: string[], f: Fixture): Promise<number> {
   let leaks = 0;
   let called = 0;
   let skipped = 0;
-  const swept = await sweep();
-  if (swept) console.log(`swept ${swept} organisations an earlier run left behind`);
-  try {
-    fixture = await seed();
-    const f = fixture;
-    console.log(`seeded: studio A ${f.orgA}, ${f.aIds.length} ids on A's side\n`);
-    if (seedOnly) return;
-
+  {
     for (const key of actions) {
       const c = CASES[key];
       if (!c.call) {
@@ -64,24 +147,16 @@ async function main() {
       called++;
       const actor = c.as ?? "studioB";
       const before = await snapshot(f);
-      actAsUserForScript(f.users[actor]);
-      let result: unknown;
-      try {
-        result = await withTimeout(c.call(f));
-      } catch (e) {
-        result = e instanceof Error ? e : new Error(String(e));
-      } finally {
-        actAsUserForScript(null);
-      }
+      const result = await call(f, f.users[actor], c.call);
       const after = await snapshot(f);
-      const allowed = new Set(c.allow?.(f) ?? []);
+      const allowed = new Set([...f.shared, ...(c.allow?.(f) ?? [])]);
       // A's ids and A's private text (its people's emails, the marker on its private names).
       const verdict = judge(result, [...f.aIds.filter((id) => !allowed.has(id)), ...f.aText]);
       const expected = c.expect ? c.expect(result, f) : true;
       const kept = c.verify ? await c.verify(f) : true;
       const changed = before.a !== after.a;
       // B's rows that started pointing at A during the call; A's venue and zones are shared by design.
-      const linked = newRefs(before.bRefs, after.bRefs, new Set([...allowed, f.venueId, f.zoneId]));
+      const linked = newRefs(before.bRefs, after.bRefs, allowed);
       if (verdict.refused && expected && kept && !changed && linked.length === 0) {
         console.log(`  ok   ${key}  [${actor}] ${verdict.why}`);
       } else {
@@ -98,20 +173,9 @@ async function main() {
         if (!(result instanceof Error)) console.error(`         answer: ${JSON.stringify(result)?.slice(0, 300)}`);
       }
     }
-  } finally {
-    if (fixture) {
-      const f = fixture;
-      await cleanup([...f.aOrgs, f.orgB, f.orgB2, f.orgB3], [f.clientC, f.users.clientB], f.filePath);
-    } else {
-      await sweep();
-    }
   }
-  if (seedOnly) {
-    console.log("seed and cleanup ok");
-    process.exit(0);
-  }
-  console.log(`\n${actions.length} actions: ${called} called as B, ${skipped} not callable from a script (reasons above), ${leaks} leaks`);
-  process.exit(leaks ? 1 : 0);
+  console.log(`\n${called} called as B, ${skipped} not callable from a script (reasons above), ${leaks} leaks`);
+  return leaks;
 }
 
 main().catch((e) => {

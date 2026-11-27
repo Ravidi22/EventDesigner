@@ -17,6 +17,13 @@ import type { DesignDocumentContent } from "@/lib/design-document/types";
 import type { Cases } from "./types";
 
 const EMPTY = { calibration: { mmPerUnit: 1 }, tables: [], placements: [] } as unknown as DesignDocumentContent;
+/** A drawing with one thing on it (an empty one is refused as a template by everyone). Its variant is
+ *  a fresh id, so B's own template points at nothing of A's. */
+const SOMETHING = {
+  calibration: { mmPerUnit: 1 },
+  tables: [],
+  placements: [{ id: "p-1", variantId: "00000000-0000-4000-8000-0000000000aa", layer: "floor", quantity: 1, position: { x: 0, y: 0 }, rotation: 0, scale: 1 }],
+} as unknown as DesignDocumentContent;
 const stray = (who: string) => `isolation-stray-${who}-${Date.now()}@example.test`;
 const isError = (r: unknown) => r instanceof Error || (!!r && typeof r === "object" && typeof (r as { error?: unknown }).error === "string");
 /** A count an outsider may get: nothing, an error, or zero of everything. */
@@ -29,7 +36,8 @@ export const STUDIO_CASES: Cases = {
   "lib/events/actions.ts#fetchActiveEvent": { call: (a) => fetchActiveEvent(a.eventId) },
   "lib/events/actions.ts#saveEvent": { call: (a) => saveEvent({ ...a.event, clientName: "B was here" }) },
   "lib/events/actions.ts#patchEvent": { call: (a) => patchEvent(a.eventId, { clientName: "B was here" } as never) },
-  "lib/events/actions.ts#deleteEvent": { call: (a) => deleteEvent(a.eventId) },
+  // The bare event: A's main one holds billing documents, which even A may not delete.
+  "lib/events/actions.ts#deleteEvent": { call: (a) => deleteEvent(a.bareEventId) },
   "lib/events/actions.ts#fetchEventFootprint": { call: (a) => fetchEventFootprint(a.eventId), expect: noCounts },
   "lib/events/actions.ts#reachStep": { call: (a) => reachStep(a.eventId, 4) },
   "lib/events/actions.ts#confirmEvent": { call: (a) => confirmEvent(a.eventId) },
@@ -39,10 +47,16 @@ export const STUDIO_CASES: Cases = {
 
   // ── an event's clients ──
   "lib/events/client-actions.ts#fetchEventClients": { call: (a) => fetchEventClients(a.eventId) },
-  "lib/events/client-actions.ts#canEmailClients": { call: () => canEmailClients() },
+  "lib/events/client-actions.ts#canEmailClients": {
+    call: () => canEmailClients(),
+    control: "whether THIS server can send mail (off in this run); it takes no id and holds no data",
+  },
   "lib/events/client-actions.ts#shareEventWithClient": { call: (a) => shareEventWithClient(a.eventId, { name: "B", email: stray("share") }) },
   "lib/events/client-actions.ts#regenerateClientInvite": { call: (a) => regenerateClientInvite(a.eventId, a.clientC) },
-  "lib/events/client-actions.ts#emailClientInvite": { call: (a) => emailClientInvite(a.eventId, a.clientC, "x") },
+  "lib/events/client-actions.ts#emailClientInvite": {
+    call: (a) => emailClientInvite(a.eventId, a.clientC, "x"),
+    control: "mail is off in this run, so even A's call stops there — but the event's ownership (ownEvent) is checked BEFORE the mail settings, so B's refusal is the tenancy check",
+  },
   "lib/events/client-actions.ts#setEventClientRole": { call: (a) => setEventClientRole(a.eventId, a.clientC, "viewer" as never) },
   "lib/events/client-actions.ts#unshareEventClient": { call: (a) => unshareEventClient(a.eventId, a.clientC) },
 
@@ -52,14 +66,15 @@ export const STUDIO_CASES: Cases = {
   "lib/studio/actions.ts#sealDocument": { call: (a) => sealDocument(a.eventId) },
   "lib/studio/sketch-actions.ts#fetchSketchTemplates": { call: () => fetchSketchTemplates() },
   "lib/studio/sketch-actions.ts#saveSketchTemplate": {
-    call: (a) => saveSketchTemplate({ name: "B", venueId: a.venueId, content: EMPTY }),
+    call: (a) => saveSketchTemplate({ name: "B", venueId: a.venueId, content: SOMETHING }),
     allow: (a) => [a.venueId],
     reason: "B may pin its OWN sketch to A's venue — every business opens every venue's plan",
   },
   "lib/studio/sketch-actions.ts#deleteSketchTemplate": { call: (a) => deleteSketchTemplate(a.sketchTemplateId) },
   "lib/studio/sketch-actions.ts#setSketchPhoto": { call: (a) => setSketchPhoto(a.sketchTemplateId, "https://example.test/x.jpg") },
   "lib/studio/sketch-actions.ts#fetchSketchTemplateContent": { call: (a) => fetchSketchTemplateContent(a.sketchTemplateId) },
-  "lib/studio/sketch-actions.ts#seedEventDocument": { call: (a) => seedEventDocument(a.eventId, a.sketchTemplateId, 1) },
+  // The bare event: an event that already has a drawing is never seeded over, even by A.
+  "lib/studio/sketch-actions.ts#seedEventDocument": { call: (a) => seedEventDocument(a.bareEventId, a.sketchTemplateId, 1) },
 
   // ── quotes ──
   "lib/quotes/actions.ts#fetchIssuedQuote": { call: (a) => fetchIssuedQuote(a.eventId) },
@@ -85,7 +100,8 @@ export const STUDIO_CASES: Cases = {
 
   // ── production ──
   "lib/production/actions.ts#fetchRunway": { call: () => fetchRunway() },
-  "lib/production/actions.ts#setEventCrew": { call: (a) => setEventCrew(a.eventId, [a.memberA]) },
+  // An empty crew: A's member is already on it, so naming them again would change nothing even for A.
+  "lib/production/actions.ts#setEventCrew": { call: (a) => setEventCrew(a.eventId, []) },
   "lib/production/actions.ts#fetchEventProduction": { call: (a) => fetchEventProduction(a.eventId) },
   "lib/production/actions.ts#fetchLoadIn": { call: (a) => fetchLoadIn(a.eventId) },
 

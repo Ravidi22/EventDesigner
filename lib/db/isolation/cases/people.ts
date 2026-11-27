@@ -24,8 +24,11 @@ import { deleteFile, fileStorageBackend, requestUpload } from "@/lib/files/actio
 import type { Cases } from "./types";
 
 const stray = (who: string) => `isolation-stray-${who}-${Date.now()}@example.test`;
+const isErr = (r: unknown) => r instanceof Error || (!!r && typeof r === "object" && typeof (r as { error?: unknown }).error === "string");
 /** A's settings carry A's business name; an outsider must not read it. */
 const notAs = (r: unknown) => !JSON.stringify(r ?? null).includes("סטודיו א");
+const GOOGLE = "the caller's own Google connection: it takes no id, and Google is not configured in this run";
+const OWN_SETTINGS = "the caller's own settings row; it takes no id";
 const CREDENTIALS = "a credential flow — takes an email, a password or a token, never an organisation's id; it acts on whoever holds them";
 
 export const PEOPLE_CASES: Cases = {
@@ -48,8 +51,12 @@ export const PEOPLE_CASES: Cases = {
   "lib/team/actions.ts#fetchCurrentMember": { call: () => fetchCurrentMember() },
   "lib/team/actions.ts#inviteMember": { call: () => inviteMember("B", stray("member"), "designer" as never) },
   "lib/team/actions.ts#regenerateInvite": { call: (a) => regenerateInvite(a.pendingMemberA) },
-  "lib/team/actions.ts#emailInvite": { call: (a) => emailInvite(a.pendingMemberA, "x") },
-  "lib/team/actions.ts#setMemberRole": { call: (a) => setMemberRole(a.memberA, "owner" as never) },
+  "lib/team/actions.ts#emailInvite": {
+    call: (a) => emailInvite(a.pendingMemberA, "x"),
+    control: "mail is off in this run, so even A's call stops at the mail settings; the member is then read only within the caller's organisation (lib/team/actions.ts, users.organizationId = actor's) — not exercised here",
+  },
+  // "crew": a role an owner may set (owner is refused to everyone, which would prove nothing).
+  "lib/team/actions.ts#setMemberRole": { call: (a) => setMemberRole(a.memberA, "crew" as never) },
   "lib/team/actions.ts#removeMember": { call: (a) => removeMember(a.memberA) },
   "lib/team/actions.ts#updateMyName": { call: () => updateMyName("B") },
 
@@ -57,32 +64,35 @@ export const PEOPLE_CASES: Cases = {
   "lib/notifications/actions.ts#fetchNotifications": { call: () => fetchNotifications() },
   "lib/notifications/actions.ts#markNotificationsRead": { call: (a) => markNotificationsRead(a.notificationIds) },
 
-  // ── Google: every call is about the caller's own connection (and Google is off in this run) ──
-  "lib/google/actions.ts#fetchGoogleStatus": { call: () => fetchGoogleStatus() },
-  "lib/google/actions.ts#startGoogleConnect": { call: () => startGoogleConnect() },
-  "lib/google/actions.ts#disconnectGoogle": { call: () => disconnectGoogle() },
-  "lib/google/actions.ts#setGoogleDirections": { call: () => setGoogleDirections(true, true) },
-  "lib/google/actions.ts#syncGoogleNow": { call: () => syncGoogleNow() },
-  "lib/google/actions.ts#fetchGoogleBusy": { call: () => fetchGoogleBusy("2027-01-01T00:00:00Z", "2027-02-01T00:00:00Z") },
+  // ── Google: every call is about the caller's OWN connection, takes no id — and Google is off here ──
+  "lib/google/actions.ts#fetchGoogleStatus": { call: () => fetchGoogleStatus(), control: GOOGLE },
+  "lib/google/actions.ts#startGoogleConnect": { call: () => startGoogleConnect(), control: GOOGLE },
+  "lib/google/actions.ts#disconnectGoogle": { call: () => disconnectGoogle(), control: GOOGLE },
+  "lib/google/actions.ts#setGoogleDirections": { call: () => setGoogleDirections(true, true), control: GOOGLE },
+  "lib/google/actions.ts#syncGoogleNow": { call: () => syncGoogleNow(), control: GOOGLE },
+  "lib/google/actions.ts#fetchGoogleBusy": { call: () => fetchGoogleBusy("2027-01-01", "2027-02-01"), control: GOOGLE },
 
   // ── settings: the caller's own row; reads must not be A's ──
   "lib/settings/actions.ts#fetchSettings": { call: () => fetchSettings(), expect: notAs },
   "lib/settings/actions.ts#saveSettings": { call: async () => saveSettings(await fetchSettings()), expect: notAs },
   "lib/settings/actions.ts#saveDocStyle": { call: () => saveDocStyle({}) },
-  "lib/settings/actions.ts#fetchMeetingFlow": { call: () => fetchMeetingFlow() },
+  // A's flow has no gallery stage; the default (B's) does.
+  "lib/settings/actions.ts#fetchMeetingFlow": { call: () => fetchMeetingFlow(), expect: (r) => isErr(r) || JSON.stringify(r).includes("gallery") },
   "lib/settings/actions.ts#saveMeetingFlow": { call: async () => saveMeetingFlow(await fetchMeetingFlow()) },
   "lib/settings/actions.ts#resetMeetingFlow": { call: () => resetMeetingFlow() },
-  "lib/settings/actions.ts#fetchCheckpointOffsets": { call: () => fetchCheckpointOffsets() },
+  // A set its first checkpoint to 77 days; nobody else's says so.
+  "lib/settings/actions.ts#fetchCheckpointOffsets": { call: () => fetchCheckpointOffsets(), expect: (r) => isErr(r) || !JSON.stringify(r).includes('"zones":77') },
   "lib/settings/actions.ts#saveCheckpointOffsets": { call: () => saveCheckpointOffsets({}) },
   "lib/settings/actions.ts#resetCheckpointOffsets": { call: () => resetCheckpointOffsets() },
-  "lib/settings/actions.ts#fetchStageRules": { call: () => fetchStageRules() },
+  // A rails its stages above 777 mm; nobody else does.
+  "lib/settings/actions.ts#fetchStageRules": { call: () => fetchStageRules(), expect: (r) => isErr(r) || !JSON.stringify(r).includes("777") },
   "lib/settings/actions.ts#saveStageRules": { call: () => saveStageRules({}) },
-  "lib/settings/actions.ts#fetchStageTemplates": { call: () => fetchStageTemplates() },
-  "lib/settings/actions.ts#saveStageTemplate": { call: () => saveStageTemplate({ name: "B" }) },
+  "lib/settings/actions.ts#fetchStageTemplates": { call: () => fetchStageTemplates(), control: `${OWN_SETTINGS}; neither A nor B has a stage template` },
+  "lib/settings/actions.ts#saveStageTemplate": { call: () => saveStageTemplate({ name: "B" }), control: `${OWN_SETTINGS}; a template with no stage is refused to everyone` },
   "lib/settings/actions.ts#deleteStageTemplate": { call: () => deleteStageTemplate("00000000-0000-4000-8000-000000000000") },
 
   // ── files: a key's first segment is its organisation; A's file must survive B's delete ──
   "lib/files/actions.ts#requestUpload": { call: () => requestUpload({ kind: "gallery", contentType: "image/jpeg", size: 10 }) },
   "lib/files/actions.ts#deleteFile": { call: (a) => deleteFile(a.fileKey), verify: async (a) => existsSync(a.filePath) },
-  "lib/files/actions.ts#fileStorageBackend": { call: () => fileStorageBackend() },
+  "lib/files/actions.ts#fileStorageBackend": { call: () => fileStorageBackend(), control: "which storage this server uses; it takes no id and holds no data" },
 };

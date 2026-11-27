@@ -48,6 +48,11 @@ import { saveDish, saveMenuPackage } from "@/lib/menus/actions";
 import type { Dish, MenuPackage } from "@/lib/menus/types";
 import { acceptLinkInvite, inviteDesigner } from "@/lib/event-links/actions";
 import type { DesignDocumentContent } from "@/lib/design-document/types";
+import { fetchVenues } from "@/lib/venues/actions";
+import type { Venue } from "@/lib/venues/types";
+import { issuePaymentRequest, recordPayment } from "@/lib/billing/actions";
+import { addToCatalog } from "@/lib/marketplace/actions";
+import { saveCheckpointOffsets, saveMeetingFlow, saveStageRules, fetchMeetingFlow } from "@/lib/settings/actions";
 import { refsOf, stable } from "./judge";
 
 export type Actor = "studioB" | "supplierB" | "venueB" | "clientB";
@@ -97,6 +102,28 @@ export interface Fixture {
   pkg: MenuPackage;
   fileKey: string;
   filePath: string;
+  // ── targets the positive control needs: each a thing A itself COULD act on (round-1 review) ──
+  /** A tax invoice-receipt (a payment recorded), to credit. */
+  invoiceId: string;
+  /** An unsent payment request, cancellable in place. */
+  paymentRequestId: string;
+  /** A's marketplace copy of the supplier's published row — whose source price has since moved. */
+  copyProductId: string;
+  /** A's events by what hangs off them: a DRAFT proposal (to save and send), another draft (to
+   *  discard), a SENT proposal (to withdraw), and a bare event (no drawing, no billing: to seed, delete). */
+  draftEventId: string;
+  discardEventId: string;
+  withdrawEventId: string;
+  bareEventId: string;
+  /** A venue of A's with no events on it, to delete; A's main venue as the client holds it. */
+  spareVenueId: string;
+  venue: Venue;
+  /** V's invitations to A: one pending (to accept, then V cancels its evening), one pending (to
+   *  decline); V's booking of the first; a booking with no designer yet (to invite one). */
+  pendingLinkId: string;
+  pendingBookingId: string;
+  declineLinkId: string;
+  freeBookingId: string;
   // ── B's side ──
   orgB: string;
   orgB2: string;
@@ -108,6 +135,9 @@ export interface Fixture {
   aIds: string[];
   /** A's private TEXT: the marker on its private names, and its people's email addresses. */
   aText: string[];
+  /** A's ids every business may see BY DESIGN: its venues and their zones (every business opens every
+   *  venue's plan since 2026-10-30). Neither the judge nor the B-side scan counts them. */
+  shared: string[];
 }
 
 const TAG = "(בדיקת בידוד)";
@@ -220,21 +250,27 @@ export async function seed(): Promise<Fixture> {
   await database.insert(schema.zones).values({ id: zone.id, organizationId: orgA, venueId, name: zone.name, kind: zone.kind, source: zone.source, ceilingHeightMm: 0 } as never);
 
   step("A product");
-  const product = aProduct(`מפת קטיפה ${M}`);
+  // The shade's name carries the marker too: the catalog's shade list has no id to give a leak away.
+  const product = aProduct(`מפת קטיפה ${M}`, { variants: [{ id: id(), name: `זהב ${M}`, swatch: "#c9a227" }] } as Partial<Product>);
   ok(await saveProduct(product), "A's product");
   const variantId = product.variants![0].id;
+  // A table row, placed under its own id: a client's proposal can only move TABLES.
+  const table = aProduct(`שולחן עגול ${M}`, { category: "tables", layer: "floor", dimensions: { widthMm: 1800, depthMm: 1800, heightMm: 750 }, variants: [] } as Partial<Product>);
+  ok(await saveProduct(table), "A's table row");
 
   step("A event");
   const eventId = id();
   await saveEvent(anEvent(eventId, `אירוע א ${M}`, { venueId, zoneIds: [zone.id] } as Partial<EventSummary>));
-  const content = {
-    calibration: { mmPerUnit: 1 },
-    tables: [],
-    placements: [{ id: id(), variantId, layer: "floor", quantity: 1, position: { x: 1000, y: 1000 }, rotation: 0, scale: 1 }],
-  } as unknown as DesignDocumentContent;
+  const drawing = (x: number) =>
+    ({
+      calibration: { mmPerUnit: 1 },
+      tables: [{ id: "t-1", type: table.name, variantId: table.id, number: 1, position: { x, y: 0 }, rotation: 0, diameterMm: 1800, seats: 10 }],
+      placements: [{ id: id(), variantId, layer: "floor", quantity: 1, position: { x: 1000, y: 1000 }, rotation: 0, scale: 1 }],
+    }) as unknown as DesignDocumentContent;
+  const content = drawing(0);
   await saveDocument(eventId, content);
   step("quote");
-  await issueQuote(eventId, { layout: { ...DEFAULT_LAYOUT, finalPrice: 11800 }, total: 11800, discount: 0 } as never);
+  await issueQuote(eventId, { layout: { ...DEFAULT_LAYOUT, finalPrice: 11800, paletteNote: `סימון ${M}` }, total: 11800, discount: 0 } as never);
 
   await saveQuoteDraft(eventId, { ...DEFAULT_LAYOUT, paletteNote: `סימון ${marker}` });
   step("billing order");
@@ -245,6 +281,10 @@ export async function seed(): Promise<Fixture> {
     "A's billing order",
   );
   const billingDocId = (order as { id: string }).id;
+  const paid = ok(await recordPayment(eventId, { payment: { means: "transfer", amount: 1000, date: today }, label: "מקדמה" } as never), "A's payment");
+  const invoiceId = (paid as { id: string }).id;
+  const requested = ok(await issuePaymentRequest(eventId, { amount: 2000, dueDate: "2027-05-01", label: "תשלום שני" } as never), "A's payment request");
+  const paymentRequestId = (requested as { id: string }).id;
 
   step("appointment");
   const appointment: Appointment = { id: id(), eventId, clientName: `פגישה ${TAG} ${M}`, phone: "050-0000000", date: "2027-01-10", time: "10:00", durationMin: 60, kind: "consultation", note: "", createdAt: Date.now() };
@@ -285,19 +325,32 @@ export async function seed(): Promise<Fixture> {
   await database.insert(schema.venueGrants).values({ id: grantId, venueId, grantorOrgId: orgA, granteeOrgId: orgS, granteeEmail: mail("supplier-s"), granteeName: "ספק א", kind: "guest", role: "viewer", state: "active" } as never);
 
   step("client + proposal");
-  // A's client, and her proposal (it notifies A's owner and designer).
-  const share = await shareEventWithClient(eventId, { name: `לקוחה ${TAG} ${M}`, email: mail("client-c") });
+  // A's client — an EDITOR, so her proposals are real — on four of A's events: the main one with a
+  // SENT proposal (A's people answer it), one with a draft to save and send, one with a draft to
+  // discard, one with a sent proposal to withdraw. Each drawing has a table she moves.
+  const share = await shareEventWithClient(eventId, { name: `לקוחה ${TAG} ${M}`, email: mail("client-c"), role: "editor" as never });
   const clientC = share.userId ?? share.clients[0]?.userId;
   if (!clientC) throw new Error(`fixture: A's client was not shared (${share.error ?? "no id"})`);
   await database.update(schema.users).set({ state: "active" }).where(eq(schema.users.id, clientC));
+  const draftEventId = id(), discardEventId = id(), withdrawEventId = id();
+  for (const [eid, name] of [[draftEventId, "טיוטה"], [discardEventId, "לביטול"], [withdrawEventId, "למשיכה"]] as const) {
+    await saveEvent(anEvent(eid, `${name} ${M}`));
+    await saveDocument(eid, content);
+    await shareEventWithClient(eid, { name: `לקוחה ${TAG} ${M}`, email: mail("client-c"), role: "editor" as never });
+  }
   actAsUserForScript(clientC);
-  const draft = await startProposal(eventId);
-  if ("error" in draft) throw new Error(`fixture: proposal — ${draft.error}`);
-  const saved = await saveProposal(eventId, content, draft.revision);
-  await submitProposal(eventId, "נא לאשר", "revision" in saved ? saved.revision : draft.revision);
+  const propose = async (eid: string, send: boolean) => {
+    const draft = await startProposal(eid);
+    if ("error" in draft) throw new Error(`fixture: proposal — ${draft.error}`);
+    const saved = ok(await saveProposal(eid, drawing(1500), draft.revision), "a client's proposal");
+    if (send) ok(await submitProposal(eid, "נא לאשר", (saved as { revision: number }).revision), "sending a client's proposal");
+  };
+  await propose(eventId, true);
+  await propose(withdrawEventId, true);
+  await propose(draftEventId, false);
+  await propose(discardEventId, false);
   actAsUserForScript(ownerA);
-  const proposalId = (await fetchPendingProposals()).find((p) => p.eventId === eventId)?.id ??
-    (await database.select({ id: schema.sketchProposals.id }).from(schema.sketchProposals).where(eq(schema.sketchProposals.eventId, eventId)))[0]?.id;
+  const proposalId = (await fetchPendingProposals()).find((p) => p.eventId === eventId)?.id;
 
   step("venue V");
   // ── venue V: a booking, a menu, and studio A invited onto the evening ──
@@ -309,12 +362,43 @@ export async function seed(): Promise<Fixture> {
   await saveDish(dish);
   const pkg: MenuPackage = { id: id(), name: `חבילה ${TAG} ${M}`, description: "", priceAdult: 300, priceChild: 150, priceVendor: 100, minGuests: 100, courses: [], extras: [] };
   await saveMenuPackage(pkg);
-  const link = ok(await inviteDesigner(bookingEventId, mail("owner-a")), "V's invitation to studio A");
-  const linkId = (link as { id: string }).id;
+  const invite = async (booked: string) => (ok(await inviteDesigner(booked, mail("owner-a")), "V's invitation to studio A") as { id: string }).id;
+  const evening = async (name: string) => {
+    const eid = id();
+    await saveBooking(anEvent(eid, `${name} ${M}`), emptyHosting());
+    return eid;
+  };
+  const linkId = await invite(bookingEventId);
+  const pendingBookingId = await evening("ערב ממתין");
+  const pendingLinkId = await invite(pendingBookingId);
+  const declineBookingId = await evening("ערב לסירוב");
+  const declineLinkId = await invite(declineBookingId);
+  const freeBookingId = await evening("ערב בלי מעצב");
   actAsUserForScript(ownerA);
   const accepted = ok(await acceptLinkInvite(linkId, null), "studio A accepting V's invitation");
   const linkedEventId = accepted.eventId;
   const event = (await fetchEvents()).find((e) => e.id === eventId)!;
+
+  step("A's other targets");
+  // A venue with no events (to delete), an event with no drawing and no billing (to seed and delete).
+  const spareVenueId = id();
+  await database.insert(schema.venues).values({ id: spareVenueId, organizationId: orgA, name: `מתחם נוסף ${TAG}`, plan: { mmPerUnit: 1 } } as never);
+  await database.insert(schema.venueStructures).values({ venueId: spareVenueId, organizationId: orgA, structure: emptyStructure() } as never);
+  const venue = (await fetchVenues()).find((v) => v.id === venueId);
+  if (!venue) throw new Error("fixture: A's venue is not on A's list");
+  const bareEventId = id();
+  await saveEvent(anEvent(bareEventId, `אירוע ריק ${M}`));
+  // A's copy of the supplier's published row — and then the supplier moves its price, so A has a
+  // newer price to take.
+  const copied = ok(await addToCatalog(publicS.id), "A's marketplace copy");
+  const copyProductId = copied.productId;
+  actAsUserForScript(supplierUserS);
+  ok(await saveProduct({ ...publicS, unitPrice: 99 }), "the supplier's new price");
+  actAsUserForScript(ownerA);
+  // Settings no default answers: an outsider reading them must not see these.
+  await saveStageRules({ railingAboveMm: 777, stairRiserMm: null, stairTreadMm: null });
+  await saveCheckpointOffsets({ zones: 77 });
+  await saveMeetingFlow((await fetchMeetingFlow()).filter((s) => s !== "gallery"));
 
   step("file");
   // A file of A's on the local driver (the run has no bucket).
@@ -341,14 +425,38 @@ export async function seed(): Promise<Fixture> {
   const required = { pendingMemberA, sceneLinkId, sketchTemplateId, proposalId };
   for (const [name, value] of Object.entries(required)) if (!value) throw new Error(`fixture: ${name} was not created`);
 
+  // Every seeded row really exists — a seed call that failed quietly would make its cases vacuous.
+  const expectRows: [string, string][] = [
+    ["events", eventId], ["events", linkedEventId], ["events", bookingEventId], ["events", pendingBookingId], ["events", declineBookingId],
+    ["events", freeBookingId], ["events", draftEventId], ["events", discardEventId], ["events", withdrawEventId], ["events", bareEventId],
+    ["products", product.id], ["products", table.id], ["products", copyProductId], ["products", publicS.id], ["products", privateS.id],
+    ["appointments", appointment.id], ["gallery_images", image.id], ["presentations", presentation.id], ["suppliers", supplier.id],
+    ["expenses", expense.id], ["orders", orderId], ["billing_documents", billingDocId], ["billing_documents", invoiceId],
+    ["billing_documents", paymentRequestId], ["venues", venueId], ["venues", spareVenueId], ["zones", zone.id], ["venue_grants", grantId],
+    ["event_links", linkId], ["event_links", pendingLinkId], ["event_links", declineLinkId], ["menu_dishes", dish.id], ["menu_packages", pkg.id],
+    ["scene_links", sceneLinkId!], ["sketch_templates", sketchTemplateId!], ["sketch_proposals", proposalId!], ["users", pendingMemberA!],
+  ];
+  for (const [table, rowId] of expectRows) {
+    const found = (await database.execute(sql.raw(`select 1 from "${table}" where id = '${rowId}'`))) as unknown as unknown[];
+    if (found.length !== 1) throw new Error(`fixture: ${table} ${rowId} was not written`);
+  }
+  const proposals = (await database.execute(sql.raw(`select event_id, status from sketch_proposals where event_id in ('${eventId}','${withdrawEventId}','${draftEventId}','${discardEventId}')`))) as unknown as { event_id: string; status: string }[];
+  const statusOf = (eid: string) => proposals.find((p) => p.event_id === eid)?.status;
+  if (statusOf(eventId) !== "submitted" || statusOf(withdrawEventId) !== "submitted" || statusOf(draftEventId) !== "draft" || statusOf(discardEventId) !== "draft") {
+    throw new Error(`fixture: the client's proposals are not where the cases need them (${JSON.stringify(proposals)})`);
+  }
+
   const aOrgs = [orgA, orgS, orgV];
   const aIds = [
     ...aOrgs,
     ownerA, memberA, pendingMemberA!, supplierUserS, venueUserV, clientC,
     venueId, zone.id, grantId, eventId, linkedEventId, bookingEventId, linkId,
-    marker, product.id, variantId, publicS.id, publicS.variants![0].id, privateS.id, privateS.variants![0].id,
+    marker, product.id, variantId, table.id, publicS.id, publicS.variants![0].id, privateS.id, privateS.variants![0].id,
     appointment.id, image.id, presentation.id, supplier.id, expense.id, orderId, billingDocId,
     proposalId!, sceneLinkId!, sketchTemplateId!, dish.id, pkg.id, ...notificationIds,
+    invoiceId, paymentRequestId, copyProductId, draftEventId, discardEventId, withdrawEventId, bareEventId,
+    spareVenueId, pendingLinkId, pendingBookingId, declineLinkId, declineBookingId, freeBookingId,
+    ...proposals.map((p) => p.event_id),
   ];
 
   return {
@@ -358,9 +466,12 @@ export async function seed(): Promise<Fixture> {
     appointment, image, presentation, supplier, expense, orderId, billingDocId,
     proposalId: proposalId!, sceneLinkId: sceneLinkId!, sketchTemplateId: sketchTemplateId!, notificationIds,
     dish, pkg, fileKey, filePath,
+    invoiceId, paymentRequestId, copyProductId, draftEventId, discardEventId, withdrawEventId, bareEventId,
+    spareVenueId, venue, pendingLinkId, pendingBookingId, declineLinkId, freeBookingId,
     orgB, orgB2, orgB3, users: { studioB: ownerB, supplierB: supplierUserB, venueB: venueUserB, clientB }, eventB,
     aOrgs, aIds,
     aText: [M, ...["owner-a", "member-a", "pending-a", "supplier-s", "venue-v", "client-c"].map(mail)],
+    shared: [venueId, spareVenueId, zone.id],
   };
 }
 

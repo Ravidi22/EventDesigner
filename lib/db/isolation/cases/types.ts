@@ -17,6 +17,10 @@ export interface Case {
   expect?: (result: unknown, a: Fixture) => boolean;
   /** A's data outside the database (a file) still as it was. */
   verify?: (a: Fixture) => Promise<boolean>;
+  /** The positive control calls every case again as A's OWN person and requires it to WORK (A's data
+   *  comes back, or A's rows change) — otherwise B's refusal proves nothing. When even A's call does
+   *  nothing, this says why B's case still tests tenancy (e.g. it takes no id at all). */
+  control?: string;
 }
 
 export type Cases = Record<string, Case>;

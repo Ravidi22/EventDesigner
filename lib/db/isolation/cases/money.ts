@@ -44,14 +44,16 @@ export const MONEY_CASES: Cases = {
   "lib/billing/actions.ts#fetchEventBilling": { call: (a) => fetchEventBilling(a.eventId) },
   "lib/billing/actions.ts#fetchDocument": { call: (a) => fetchBillingDocument(a.billingDocId) },
   "lib/billing/actions.ts#fetchLedger": { call: () => fetchLedger() },
-  "lib/billing/actions.ts#fetchCounters": { call: () => fetchCounters() },
-  "lib/billing/actions.ts#setCounterStart": { call: () => setCounterStart("order" as never, 5000) },
+  // A's order series has been used; B's has not — an outsider must never read "used".
+  "lib/billing/actions.ts#fetchCounters": { call: () => fetchCounters(), expect: (r) => isError(r) || !JSON.stringify(r).includes('"used":true') },
+  // The receipt series is the one A has not used yet, so A's own call can set it.
+  "lib/billing/actions.ts#setCounterStart": { call: () => setCounterStart("receipt" as never, 5000) },
   "lib/billing/actions.ts#issueOrder": { call: (a) => issueOrder(a.eventId, orderInput() as never) },
-  "lib/billing/actions.ts#recordPayment": { call: (a) => recordPayment(a.eventId, { amount: 100, method: "transfer", date: today() } as never) },
-  "lib/billing/actions.ts#issueInvoice": { call: (a) => issueInvoice(a.eventId, { lines: orderInput().lines } as never) },
+  "lib/billing/actions.ts#recordPayment": { call: (a) => recordPayment(a.eventId, { payment: { means: "transfer", amount: 100, date: today() } } as never) },
+  "lib/billing/actions.ts#issueInvoice": { call: (a) => issueInvoice(a.eventId, { amount: 100, label: "B" } as never) },
   "lib/billing/actions.ts#issuePaymentRequest": { call: (a) => issuePaymentRequest(a.eventId, { amount: 100, dueDate: today() } as never) },
-  "lib/billing/actions.ts#creditDocument": { call: (a) => creditDocument(a.billingDocId, { reason: "B", amount: 100 } as never) },
-  "lib/billing/actions.ts#cancelDocument": { call: (a) => cancelDocument(a.billingDocId, "B") },
+  "lib/billing/actions.ts#creditDocument": { call: (a) => creditDocument(a.invoiceId, { reason: "B", amount: 50 } as never) },
+  "lib/billing/actions.ts#cancelDocument": { call: (a) => cancelDocument(a.paymentRequestId, "B") },
   "lib/billing/actions.ts#markOriginal": { call: (a) => markOriginal(a.billingDocId) },
   "lib/billing/actions.ts#markSent": { call: (a) => markSent(a.billingDocId, "b@example.test") },
   "lib/billing/actions.ts#setAllocationNumber": { call: (a) => setAllocationNumber(a.billingDocId, "123456789") },
@@ -60,7 +62,10 @@ export const MONEY_CASES: Cases = {
   "lib/suppliers/actions.ts#assignSupplier": { call: (a) => assignSupplier(a.variantId, null) },
   "lib/suppliers/actions.ts#assignSupplierMany": { call: (a) => assignSupplierMany([a.variantId], a.supplier.id) },
   "lib/suppliers/actions.ts#setSourcing": { call: (a) => setSourcing([a.productId], { stockKind: "owned" } as never) },
-  "lib/suppliers/actions.ts#fetchProcurementSetup": { call: () => fetchProcurementSetup("2027-12-31") },
+  "lib/suppliers/actions.ts#fetchProcurementSetup": {
+    call: () => fetchProcurementSetup("2027-12-31"),
+    control: "counts of the CALLER's own catalog and events; it takes no id, and A's and B's counts can match",
+  },
   "lib/suppliers/actions.ts#fetchSuppliers": { call: () => fetchSuppliers() },
   "lib/suppliers/actions.ts#saveSupplier": { call: (a) => saveSupplier({ ...a.supplier, name: "B was here" }) },
   "lib/suppliers/actions.ts#removeSupplier": { call: (a) => removeSupplier(a.supplier.id) },
@@ -94,10 +99,20 @@ export const MONEY_CASES: Cases = {
     expect: (r, a) => !JSON.stringify(r ?? null).includes(a.privateProductS),
   },
   // A PRIVATE row must never be copied, whatever the answer says.
-  "lib/marketplace/actions.ts#addToCatalog": { call: (a) => addToCatalog(a.privateProductS), verify: noCopyOf((a) => a.privateProductS) },
-  "lib/marketplace/actions.ts#fetchSourceStatus": { call: (a) => fetchSourceStatus(a.productId) },
-  "lib/marketplace/actions.ts#acceptSourcePrice": { call: (a) => acceptSourcePrice(a.productId) },
-  "lib/marketplace/actions.ts#fetchMarketFlowers": { call: () => fetchMarketFlowers(), allow: PUBLISHED, reason: MARKET },
+  "lib/marketplace/actions.ts#addToCatalog": {
+    call: (a) => addToCatalog(a.privateProductS),
+    verify: noCopyOf((a) => a.privateProductS),
+    control: "a private row is refused to EVERY caller — what this case holds is that one is never copied (the verify), not tenancy",
+  },
+  // A's copy, whose supplier has since moved the price.
+  "lib/marketplace/actions.ts#fetchSourceStatus": { call: (a) => fetchSourceStatus(a.copyProductId), expect: (r) => isError(r) || r === null },
+  "lib/marketplace/actions.ts#acceptSourcePrice": { call: (a) => acceptSourcePrice(a.copyProductId) },
+  "lib/marketplace/actions.ts#fetchMarketFlowers": {
+    call: () => fetchMarketFlowers(),
+    allow: PUBLISHED,
+    reason: MARKET,
+    control: "the marketplace is shared by design, and the fixture's supplier publishes no stems",
+  },
 
   // ── the catalog ──
   "lib/catalog/actions.ts#fetchProducts": { call: () => fetchProducts() },
@@ -106,8 +121,15 @@ export const MONEY_CASES: Cases = {
   // A's variant IS placed in A's drawing: an outsider must hear "no".
   "lib/catalog/actions.ts#isPlacedAnywhere": { call: (a) => isPlacedAnywhere([a.variantId]), expect: (r) => isError(r) || r === false },
   "lib/catalog/actions.ts#removeProduct": { call: (a) => removeProduct(a.productId) },
-  "lib/catalog/actions.ts#isStandardProduct": { call: (a) => isStandardProduct(a.productId), expect: (r) => isError(r) || r === false },
+  "lib/catalog/actions.ts#isStandardProduct": {
+    call: (a) => isStandardProduct(a.productId),
+    expect: (r) => isError(r) || r === false,
+    control: "says whether an id is a base-library key of the CALLER's own catalog; A's hand-made row is none, for A too",
+  },
   "lib/catalog/actions.ts#installStageBasics": { call: () => installStageBasics() },
   "lib/catalog/actions.ts#installStageParts": { call: () => installStageParts() },
-  "lib/catalog/actions.ts#importProducts": { call: (a) => importProducts([{ ...a.product, name: "B was here" }]) },
+  "lib/catalog/actions.ts#importProducts": {
+    call: (a) => importProducts([{ ...a.product, name: "B was here" }]),
+    control: "an import only INSERTS new rows — even A's own id collides — so what this case holds is that another tenant's id is never written over (the snapshot)",
+  },
 };
