@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -26,11 +27,18 @@ import { VenueSwitcher } from "@/components/venue-switcher";
 import { NotificationBell } from "@/components/notification-bell";
 import { HeaderSearchProvider } from "@/components/header-search-context";
 import { HeaderSlotProvider } from "@/components/header-slot";
-import { EventDialog } from "@/components/event-dialog";
 import { requestNewEvent } from "@/components/new-event-request";
 import { SidePanel } from "@/components/side-panel";
 import { OrgKindProvider } from "@/components/org-kind-context";
 import { ORG_HOME, type OrgKind } from "@/lib/auth/kinds";
+
+// The "אירוע חדש" dialog is loaded on its own, not with the shell (EVE-54). Through its event form's
+// venue zones it brings the whole venue model — structure, stages, footprints, the catalog's types —
+// and the shell is on every page, so every page paid for it before anyone clicked — billing, orders,
+// gallery and the rest ~90 KB gzip each, on pages that do not even show the button. It is mounted on
+// the first click, and fetched while idle only where the button is on screen.
+const loadEventDialog = () => import("@/components/event-dialog");
+const EventDialog = dynamic(() => loadEventDialog().then((m) => m.EventDialog), { ssr: false });
 
 interface NavItem {
   href: string;
@@ -98,6 +106,8 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
   // Keyed by the page it was typed on, so a page never reads the previous page's text.
   const [search, setSearch] = useState({ pathname: "", value: "" });
   const [creating, setCreating] = useState(false);
+  // Mounted from the first opening on (it keeps its <dialog> for showModal), never before.
+  const [dialogMounted, setDialogMounted] = useState(false);
   // The top bar's own node, for a page that fills it (HeaderSlot). A callback ref into state, so the
   // page renders into it on the pass after the bar mounts.
   const [slot, setSlot] = useState<HTMLElement | null>(null);
@@ -134,6 +144,19 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
     user.orgKind === "studio"
       ? pathname.startsWith("/dashboard") || pathname.startsWith("/production")
       : user.orgKind === "venue" && (pathname.startsWith("/dashboard") || pathname.startsWith("/bookings"));
+  // Where a studio's button is on screen, fetch the dialog while the browser is idle, so the first
+  // click opens it at once. Nowhere else: a page without the button never downloads it.
+  const offersDialog = showHeaderActions && user.orgKind !== "venue";
+  useEffect(() => {
+    if (!offersDialog) return;
+    const warm = () => void loadEventDialog();
+    if (typeof window.requestIdleCallback === "function") {
+      const id = window.requestIdleCallback(warm, { timeout: 5000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const t = window.setTimeout(warm, 2000); // Safari has no requestIdleCallback
+    return () => window.clearTimeout(t);
+  }, [offersDialog]);
   const nav = GENERAL.filter((item) => (item.for ?? ["studio"]).includes(user.orgKind));
 
   // Someone who signed up without giving a name still needs something to see themselves as, and the
@@ -302,7 +325,11 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
               {showHeaderActions && (
               <button
                 type="button"
-                onClick={() => (user.orgKind === "venue" ? requestNewEvent() : setCreating(true))}
+                onClick={() => {
+                  if (user.orgKind === "venue") return requestNewEvent();
+                  setDialogMounted(true);
+                  setCreating(true);
+                }}
                 className="inline-flex items-center rounded-pill bg-accent px-5 py-2.5 text-sm font-bold text-canvas shadow-cta transition-colors hover:bg-accent-hover"
               >
                 + יצירת אירוע חדש
@@ -324,7 +351,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
         {/* Mounted at the shell, so "אירוע חדש" is reachable from every page without each of them
             carrying its own copy. A <dialog> renders in the top layer — where it sits in the tree
             has no bearing on where it appears. */}
-        <EventDialog open={creating} onClose={() => setCreating(false)} />
+        {dialogMounted && <EventDialog open={creating} onClose={() => setCreating(false)} />}
       </div>
     </div>
   );
