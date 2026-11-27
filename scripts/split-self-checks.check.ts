@@ -74,13 +74,43 @@ try {
     `import { isMain } from "./self-check";\nimport { helper, type Shape } from "./dep";\nexport { helper } from "./dep";\nexport type { Shape } from "./dep";\nexport const o = { helper: 1 };\nexport const p = o.helper;\nif (isMain(import.meta.url)) {\n  const s: Shape = "circle";\n  console.log(helper(1), s);\n}\n`,
   );
   writeFileSync(at("doc.ts"), `/**\n * Usage:\n *   if (isMain(import.meta.url)) {\n */\nexport const y = 2;\n`);
+  // A .tsx module whose JSX uses an import the block uses too, and a block with JSX of its own.
+  writeFileSync(at("fmt.ts"), `export const fmt = (n: number) => String(n);\n`);
+  writeFileSync(
+    at("rows.tsx"),
+    `import { fmt } from "./fmt";\nimport { isMain } from "./self-check";\nexport function Rows({ items }: { items: number[] }) {\n  return <ul>{items.map((i) => <Row key={i} label={fmt(i)} />)}</ul>;\n}\nfunction Row({ label }: { label: string }) {\n  return <li>{label}</li>;\n}\nif (isMain(import.meta.url)) {\n  const el = <Row label={fmt(1)} />;\n  console.log(el);\n}\n`,
+  );
+  // A default-exported function the block calls.
+  writeFileSync(at("def.ts"), `import { isMain } from "./self-check";\nexport default function area(w: number, h: number) {\n  return w * h;\n}\nif (isMain(import.meta.url)) {\n  console.log(area(2, 3));\n}\n`);
+  // Two names from one statement.
+  writeFileSync(at("multi.ts"), `import { isMain } from "./self-check";\nconst A = 1, B = 2;\nexport const sum = () => A + B;\nif (isMain(import.meta.url)) {\n  console.log(A, B, sum());\n}\n`);
+  // A block that names nothing of its module — whose top level must still run under the check.
+  writeFileSync(at("bare.ts"), `import { helper } from "./dep";\nimport { isMain } from "./self-check";\nif (helper(0) !== 1) throw new Error("load-time invariant");\nif (isMain(import.meta.url)) {\n  console.log(helper(2));\n}\n`);
 
-  const found = findBlockModules([at("geo.ts"), at("mut.ts"), at("plain.ts"), at("doc.ts"), at("reexp.ts"), at("geocrlf.ts")]);
+  const found = findBlockModules([at("geo.ts"), at("mut.ts"), at("plain.ts"), at("doc.ts"), at("reexp.ts"), at("geocrlf.ts"), at("rows.tsx"), at("def.ts"), at("multi.ts"), at("bare.ts")]);
   assert(!found.includes(at("plain.ts")), "a module without the guard is not picked");
   assert(!found.includes(at("doc.ts")), "…nor one that only shows the guard in a comment");
-  assert(found.length === 4, "the four with a real top-level isMain block are");
+  assert(found.length === 8, "the eight with a real top-level isMain block are");
 
   const results = splitAll(found, { "check:geo": "tsx geo.ts" }, (p) => p.replace(dir, "").replace(/^[\\/]/, ""));
+
+  // ── a .tsx module ──
+  const rows = results.find((r) => r.file === at("rows.tsx"))!;
+  assert(rows.problems.length === 0 && rows.checkFile.endsWith("rows.check.tsx"), "a .tsx module's sibling is a .check.tsx (the block may hold JSX)");
+  assert(rows.moduleText!.includes(`import { fmt } from "./fmt";`), "an import its JSX still uses stays — the module is read as TSX");
+  assert(rows.checkText!.includes("<Row label={fmt(1)} />") && rows.checkText!.includes(`import { Row } from "./rows";`), "…and the sibling carries the block's JSX and imports the component it renders");
+
+  // ── a default export ──
+  const def = results.find((r) => r.file === at("def.ts"))!;
+  assert(def.checkText!.includes(`import area from "./def";`) && !def.checkText!.includes("import default"), "a default-exported function is imported by its own name");
+
+  // ── two names from one statement ──
+  const multi = results.find((r) => r.file === at("multi.ts"))!;
+  assert(multi.moduleText!.includes("export const A = 1, B = 2;") && !multi.moduleText!.includes("export export"), "a statement declaring two used names is exported once");
+
+  // ── a block that names nothing of its module ──
+  const bare = results.find((r) => r.file === at("bare.ts"))!;
+  assert(bare.checkText!.includes(`import "./bare";`), "a sibling that names nothing from its module still loads it, so its top level runs");
   const geo = results.find((r) => r.file === at("geo.ts"))!;
   const mut = results.find((r) => r.file === at("mut.ts"))!;
 
@@ -141,10 +171,23 @@ try {
   assert(out.includes("ok area") && out.includes("ok template kept") && out.includes("ok imports"), "the moved check runs and passes");
 
   // ── package.json ──
-  const pkg = JSON.stringify({ scripts: { "check:geo": "tsx lib/x/geo.ts && tsx lib/x/other.ts", "check:geom": "tsx lib/x/geometry.ts" } }, null, 2);
-  const re = retargetScripts(pkg, ["lib/x/geo.ts"]);
+  const pkg = JSON.stringify(
+    {
+      scripts: {
+        "check:geo": "tsx lib/x/geo.ts && tsx lib/x/other.ts",
+        "check:geom": "tsx lib/x/geometry.ts",
+        "check:flags": "tsx --tsconfig tsconfig.json lib/x/rows.tsx",
+        "cli:geo": "tsx lib/x/geo.ts --write",
+      },
+    },
+    null,
+    2,
+  );
+  const re = retargetScripts(pkg, ["lib/x/geo.ts", "lib/x/rows.tsx"]);
   assert(re.includes(`"tsx lib/x/geo.check.ts && tsx lib/x/other.ts"`), "a script running the module now runs its sibling");
   assert(re.includes(`"tsx lib/x/geometry.ts"`), "…and a module whose name merely starts the same is left alone");
+  assert(re.includes(`"tsx --tsconfig tsconfig.json lib/x/rows.check.tsx"`), "…a script with flags before the path is retargeted too, a .tsx to its .check.tsx");
+  assert(re.includes(`"tsx lib/x/geo.ts --write"`), "…and a script that is not a check:* is never touched");
   assert(!existsSync(at("mut.check.ts")), "the refused module got no sibling");
 } finally {
   rmSync(dir, { recursive: true, force: true });

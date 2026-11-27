@@ -37,17 +37,25 @@ export interface SplitResult {
 const GUARD_LINE = /^if \(isMain\(import\.meta\.url\)\)/m;
 
 export function findBlockModules(files: string[]): string[] {
-  return files.filter((f) => !/\.(check|d)\.ts$/.test(f) && GUARD_LINE.test(readFileSync(f, "utf8")));
+  return files.filter((f) => !/\.(check\.tsx?|d\.ts)$/.test(f) && GUARD_LINE.test(readFileSync(f, "utf8")));
 }
 
-/** Point every `tsx <module>` in package.json's text at `<module>.check.ts` instead. */
+/** `a.ts` → `a.check.ts`, `a.tsx` → `a.check.tsx` (a .tsx module's block may hold JSX). */
+export const checkPathOf = (path: string) => path.replace(/\.(tsx?)$/, ".check.$1");
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** `path` as a whole word of a script command: after a space or the opening quote, before a space,
+ *  a separator or the closing quote — so `tsx --flag lib/a.ts` matches and `lib/a.tsx` does not. */
+const inCommand = (path: string) => new RegExp(`(?<=^|[\\s"])${escapeRe(path)}(?=$|["\\s&;|])`, "g");
+const CHECK_SCRIPT_LINE = /^\s*"check:[^"]+"\s*:/;
+
+/** In package.json's text, point every `check:*` script that runs a moved module at its sibling —
+ *  wherever in the command the path stands. Other scripts are never touched. */
 export function retargetScripts(packageJson: string, moved: string[]): string {
-  let out = packageJson;
-  for (const path of moved) {
-    const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    out = out.replace(new RegExp(`(\\btsx\\s+)${escaped}(?=["\\s&;|])`, "g"), `$1${path.replace(/\.tsx?$/, ".check.ts")}`);
-  }
-  return out;
+  return packageJson
+    .split("\n")
+    .map((line) => (CHECK_SCRIPT_LINE.test(line) ? moved.reduce((l, p) => l.replace(inCommand(p), checkPathOf(p)), line) : line))
+    .join("\n");
 }
 
 const norm = (p: string) => p.replace(/\\/g, "/");
@@ -185,7 +193,8 @@ const applyEdits = (text: string, edits: Edit[]) =>
 
 /** Drop the bindings in `candidates` that `text` no longer uses outside its imports. */
 function pruneImports(file: string, text: string, candidates: Set<string>): string {
-  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const kind = file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind);
   const used = new Set<string>();
   // Names that look like a binding but are not a use of it: `export { x } from "…"` re-exports
   // another module's x, and `o.x`, `{ x: 1 }`, `interface { x }` are property names.
@@ -229,7 +238,7 @@ function splitOne(
   scripts: Record<string, string>,
   rel: (abs: string) => string,
 ): SplitResult {
-  const checkFile = file.replace(/\.tsx?$/, ".check.ts");
+  const checkFile = checkPathOf(file);
   const result: SplitResult = { file, checkFile, exported: [], problems: [], notes: [] };
   const sf = program.getSourceFile(norm(file));
   if (!sf) return { ...result, problems: ["not in the program"] };
@@ -263,10 +272,11 @@ function splitOne(
         }
         const stmt = topStatementOf(d, sf);
         if (!stmt || stmt === guard) continue;
-        const list = locals.get(sym!.name) ?? [];
+        // The name as the block writes it: a default export's symbol is called "default".
+        const list = locals.get(n.text) ?? [];
         if (!list.includes(stmt)) list.push(stmt);
-        locals.set(sym!.name, list);
-        if (isWrite(n)) written.add(sym!.name);
+        locals.set(n.text, list);
+        if (isWrite(n)) written.add(n.text);
       }
     }
     ts.forEachChild(n, visit);
@@ -291,7 +301,7 @@ function splitOne(
       selfNames.push({ local: name, exported: aliases.get(name)!, type });
     } else {
       selfNames.push({ local: name, exported: name, type });
-      toExport.push(...stmts);
+      for (const s of stmts) if (!toExport.includes(s)) toExport.push(s); // `const A = 1, B = 2` once
       result.exported.push(name);
     }
   }
@@ -321,7 +331,7 @@ function splitOne(
   const base = basename(file).replace(/\.tsx?$/, "");
   const path = rel(file);
   const runners = Object.entries(scripts)
-    .filter(([, cmd]) => new RegExp(`(^|\\s)${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[\\s&;|])`).test(cmd))
+    .filter(([name, cmd]) => name.startsWith("check:") && inCommand(path).test(cmd))
     .map(([name]) => name);
   if (!runners.length) result.notes.push("no package.json script runs it");
   const head = runners.length
@@ -343,6 +353,9 @@ function splitOne(
       .map((n) => `${n.type ? "type " : ""}${n.exported === n.local ? n.local : `${n.exported} as ${n.local}`}`);
     const parts = [def?.local, named.length ? `{ ${named.join(", ")} }` : undefined].filter(Boolean);
     lines.push(`import ${parts.join(", ")} from "./${base}";`);
+  } else {
+    // It names nothing of the module, but the module's top level must still run under the check.
+    lines.push(`import "./${base}";`);
   }
   lines.push("");
   const comments = leading.map((c) => text.slice(c.pos, c.end)).join("\n");
