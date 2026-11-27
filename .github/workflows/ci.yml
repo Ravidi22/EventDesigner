@@ -55,6 +55,36 @@ jobs:
       - run: npm ci
       - run: npm run checks
 
+  # Studio B calls every server action with studio A's ids (EVE-23), against a throwaway Postgres
+  # of Neon's major version that lives only for this job.
+  isolation:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: eve
+          POSTGRES_PASSWORD: eve
+          POSTGRES_DB: eve
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U eve"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://eve:eve@localhost:5432/eve
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run db:migrate
+      - run: npm run db:verify:isolation
+
   build:
     runs-on: ubuntu-latest
     env:
