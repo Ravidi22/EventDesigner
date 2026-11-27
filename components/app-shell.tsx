@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -36,9 +36,9 @@ import { ORG_HOME, type OrgKind } from "@/lib/auth/kinds";
 // venue zones it brings the whole venue model — structure, stages, footprints, the catalog's types —
 // and the shell is on every page, so every page paid for it before anyone clicked — billing, orders,
 // gallery and the rest ~90 KB gzip each, on pages that do not even show the button. It is mounted on
-// the first click, and fetched while idle only where the button is on screen.
-const loadEventDialog = () => import("@/components/event-dialog");
-const EventDialog = dynamic(() => loadEventDialog().then((m) => m.EventDialog), { ssr: false });
+// the first click. The two pages that show the button (/dashboard, /production) load the dialog with
+// the page anyway — their event drawer edits through it — so that click never waits on a download.
+const EventDialog = dynamic(() => import("@/components/event-dialog").then((m) => m.EventDialog), { ssr: false });
 
 interface NavItem {
   href: string;
@@ -144,19 +144,6 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
     user.orgKind === "studio"
       ? pathname.startsWith("/dashboard") || pathname.startsWith("/production")
       : user.orgKind === "venue" && (pathname.startsWith("/dashboard") || pathname.startsWith("/bookings"));
-  // Where a studio's button is on screen, fetch the dialog while the browser is idle, so the first
-  // click opens it at once. Nowhere else: a page without the button never downloads it.
-  const offersDialog = showHeaderActions && user.orgKind !== "venue";
-  useEffect(() => {
-    if (!offersDialog) return;
-    const warm = () => void loadEventDialog();
-    if (typeof window.requestIdleCallback === "function") {
-      const id = window.requestIdleCallback(warm, { timeout: 5000 });
-      return () => window.cancelIdleCallback(id);
-    }
-    const t = window.setTimeout(warm, 2000); // Safari has no requestIdleCallback
-    return () => window.clearTimeout(t);
-  }, [offersDialog]);
   const nav = GENERAL.filter((item) => (item.for ?? ["studio"]).includes(user.orgKind));
 
   // Someone who signed up without giving a name still needs something to see themselves as, and the
