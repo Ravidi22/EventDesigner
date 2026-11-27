@@ -354,7 +354,7 @@ function splitOne(
 
 /** Split every module in `files`. Reads, never writes. `rel` turns an absolute path into the one package.json uses. */
 export function splitAll(files: string[], scripts: Record<string, string>, rel: (abs: string) => string): SplitResult[] {
-  const program = ts.createProgram(files.map(norm), {
+  const options: ts.CompilerOptions = {
     noEmit: true,
     noResolve: true,
     allowJs: false,
@@ -362,7 +362,23 @@ export function splitAll(files: string[], scripts: Record<string, string>, rel: 
     module: ts.ModuleKind.ESNext,
     moduleResolution: ts.ModuleResolutionKind.Bundler,
     jsx: ts.JsxEmit.Preserve,
-  });
+  };
+  // Every position below is worked out on LF text; a CRLF file (a Windows checkout with
+  // core.autocrlf) is read as LF and written back as CRLF, so no cut leaves a lone CR behind.
+  const crlf = new Set<string>();
+  const host = ts.createCompilerHost(options);
+  const read = host.getSourceFile.bind(host);
+  host.getSourceFile = (fileName, language, onError, shouldCreate) => {
+    const raw = ts.sys.readFile(fileName);
+    if (raw === undefined) return read(fileName, language, onError, shouldCreate);
+    if (raw.includes("\r\n")) crlf.add(norm(fileName));
+    return ts.createSourceFile(fileName, raw.replace(/\r\n/g, "\n"), language, true);
+  };
+  const program = ts.createProgram(files.map(norm), options, host);
   const checker = program.getTypeChecker();
-  return files.map((f) => splitOne(program, checker, f, scripts, rel));
+  const toCrlf = (s: string | undefined) => s?.replace(/\n/g, "\r\n");
+  return files.map((f) => {
+    const r = splitOne(program, checker, f, scripts, rel);
+    return crlf.has(norm(f)) ? { ...r, moduleText: toCrlf(r.moduleText), checkText: toCrlf(r.checkText) } : r;
+  });
 }

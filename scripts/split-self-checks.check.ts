@@ -66,6 +66,8 @@ try {
     `import { isMain } from "./self-check";\nexport let counter = 0;\nlet hidden = 0;\nexport const bump = () => ++hidden;\nif (isMain(import.meta.url)) {\n  hidden = 5;\n  console.log(counter, bump());\n}\n`,
   );
   writeFileSync(at("plain.ts"), `export const x = 1;\n`);
+  // A Windows checkout (core.autocrlf) hands the codemod CRLF files.
+  writeFileSync(at("geocrlf.ts"), GEO.replace(/\n/g, "\r\n"));
   // Re-exports and property names look like the import's name but are not uses of it.
   writeFileSync(
     at("reexp.ts"),
@@ -73,14 +75,22 @@ try {
   );
   writeFileSync(at("doc.ts"), `/**\n * Usage:\n *   if (isMain(import.meta.url)) {\n */\nexport const y = 2;\n`);
 
-  const found = findBlockModules([at("geo.ts"), at("mut.ts"), at("plain.ts"), at("doc.ts"), at("reexp.ts")]);
+  const found = findBlockModules([at("geo.ts"), at("mut.ts"), at("plain.ts"), at("doc.ts"), at("reexp.ts"), at("geocrlf.ts")]);
   assert(!found.includes(at("plain.ts")), "a module without the guard is not picked");
   assert(!found.includes(at("doc.ts")), "…nor one that only shows the guard in a comment");
-  assert(found.length === 3, "the three with a real top-level isMain block are");
+  assert(found.length === 4, "the four with a real top-level isMain block are");
 
   const results = splitAll(found, { "check:geo": "tsx geo.ts" }, (p) => p.replace(dir, "").replace(/^[\\/]/, ""));
   const geo = results.find((r) => r.file === at("geo.ts"))!;
   const mut = results.find((r) => r.file === at("mut.ts"))!;
+
+  // ── a CRLF file stays CRLF, with no lone CR where the block was cut ──
+  const crlf = results.find((r) => r.file === at("geocrlf.ts"))!;
+  const loneCr = (s: string) => /\r(?!\n)/.test(s);
+  const bareLf = (s: string) => /(?<!\r)\n/.test(s);
+  assert(crlf.problems.length === 0 && !loneCr(crlf.moduleText!) && !bareLf(crlf.moduleText!), "a CRLF module comes back all CRLF, no lone CR at the cut");
+  assert(!loneCr(crlf.checkText!) && !bareLf(crlf.checkText!), "…and its sibling is written CRLF throughout");
+  assert(crlf.moduleText!.replace(/\r\n/g, "\n") === geo.moduleText, "…with the same content as the LF module's");
 
   // ── re-exports and property names ──
   const reexp = results.find((r) => r.file === at("reexp.ts"))!;
