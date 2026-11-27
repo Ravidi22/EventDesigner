@@ -217,6 +217,7 @@
     "check:elevation": "tsx lib/scene/elevation.check.ts",
     "check:tableware": "tsx lib/scene/tableware.check.ts",
     "check:legal": "tsx lib/legal/documents.check.ts",
+    "check:account": "tsx lib/account/rules.check.ts",
     "legal:export": "tsx scripts/legal-export.ts"
   },
   "dependencies": {
