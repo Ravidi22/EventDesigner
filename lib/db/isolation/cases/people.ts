@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { currentUser } from "@/lib/auth/actions";
 import { emailInvite, fetchCurrentMember, fetchMembers, inviteMember, regenerateInvite, removeMember, setMemberRole, updateMyName } from "@/lib/team/actions";
 import { fetchNotifications, markNotificationsRead } from "@/lib/notifications/actions";
+import { fetchAuditLog } from "@/lib/audit/actions";
 import { disconnectGoogle, fetchGoogleBusy, fetchGoogleStatus, setGoogleDirections, startGoogleConnect, syncGoogleNow } from "@/lib/google/actions";
 import {
   deleteStageTemplate,
@@ -48,6 +49,8 @@ export const PEOPLE_CASES: Cases = {
 
   // ── the team ──
   "lib/team/actions.ts#fetchMembers": { call: () => fetchMembers() },
+  // Takes no id: the caller's own business's log. B's must hold nothing of A's (EVE-52).
+  "lib/audit/actions.ts#fetchAuditLog": { call: () => fetchAuditLog() },
   "lib/team/actions.ts#fetchCurrentMember": { call: () => fetchCurrentMember() },
   "lib/team/actions.ts#inviteMember": { call: () => inviteMember("B", stray("member"), "designer" as never) },
   "lib/team/actions.ts#regenerateInvite": { call: (a) => regenerateInvite(a.pendingMemberA) },

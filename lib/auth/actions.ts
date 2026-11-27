@@ -25,6 +25,7 @@ import { revalidateSettings } from "@/lib/db/revalidate";
 import { authAccounts, eventClients, events, legalAcceptances, organizations, studioSettings, users } from "@/lib/db/schema";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
 import { notify, studioRecipients } from "@/lib/notifications/write";
+import { peopleOf, recordAudit } from "@/lib/audit/write";
 import { termsAcceptance } from "@/lib/legal/acceptance";
 import { LEGAL_STATUS, LEGAL_VERSION } from "@/lib/legal/status";
 import { callAuth } from "./auth-call";
@@ -521,6 +522,16 @@ export async function changePassword(input: {
       return { error: "לחשבון הזה אין סיסמה: הוא נכנס עם Google.", field: "password" };
     }
     return { error: "הסיסמה הנוכחית שגויה", field: "password" };
+  }
+  // A client has no business, so no log to write to.
+  if (session.organizationId) {
+    await recordAudit(db(), {
+      organizationId: session.organizationId,
+      actorUserId: session.userId,
+      action: "security.password_changed",
+      summary: "שינוי סיסמה",
+      people: await peopleOf(db(), [session.userId]),
+    });
   }
   return {};
 }

@@ -13,7 +13,8 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { afterResponse } from "@/lib/after";
 import { db } from "@/lib/db";
-import { currentOrg } from "@/lib/db/org";
+import { currentActor, currentOrg } from "@/lib/db/org";
+import { peopleOf, recordAudit } from "@/lib/audit/write";
 import { revalidateEventStage, revalidateEvents } from "@/lib/db/revalidate";
 import {
   appointments,
@@ -348,11 +349,20 @@ export async function deleteEvent(id: string): Promise<EventSummary[] | { error:
   const [row] = await database
     .delete(events)
     .where(and(eq(events.id, id), eq(events.organizationId, organizationId)))
-    .returning({ id: events.id });
+    .returning({ id: events.id, clientName: events.clientName, date: events.eventDate });
   // Not found and not ours are the same answer, and it throws rather than returning `{ error }`:
   // a screen showing an event it cannot delete is holding a row that no longer exists, which is not
   // a correction the designer can make.
   if (!row) throw new Error("event not found");
+  const { userId } = await currentActor();
+  await recordAudit(database, {
+    organizationId,
+    actorUserId: userId,
+    action: "event.deleted",
+    target: { kind: "event", id },
+    summary: `מחיקת אירוע: ${row.clientName}${row.date ? ` · ${row.date}` : ""}`,
+    people: await peopleOf(database, [userId]),
+  });
 
   // The diary lives on /dashboard, which revalidateEvents already covers — the meetings that went
   // with the event are on the same screen as the event was.

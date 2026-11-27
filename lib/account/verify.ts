@@ -13,7 +13,8 @@ import * as schema from "@/lib/db/schema";
 import { actAsUserForScript } from "@/lib/auth/session";
 import { cleanup, seed, sweep, type Fixture } from "@/lib/db/isolation/fixture";
 import { issuePaymentRequest } from "@/lib/billing/actions";
-import { removeMember } from "@/lib/team/actions";
+import { removeMember, setMemberRole } from "@/lib/team/actions";
+import { fetchAuditLog } from "@/lib/audit/actions";
 
 const steps: { name: string; run: (f: Fixture) => Promise<void> }[] = [];
 
@@ -65,6 +66,22 @@ step("a member who issued a billing document can be removed", async (f) => {
     .where(eq(schema.billingDocuments.id, docId))
     .then(() => "updated", (e: unknown) => String((e as { cause?: unknown }).cause ?? e));
   assert(moved.includes("frozen after issue"), `a different issuer is refused (got: ${moved})`);
+});
+
+// ── the audit log ───────────────────────────────────────────────────────────────────────────────
+
+step("a role change writes one audit row the owner reads", async (f) => {
+  await as(f.ownerA, () => setMemberRole(f.memberA, "crew"));
+  const log = await as(f.ownerA, () => fetchAuditLog());
+  const row = log.rows.find((r) => r.action === "member.role_changed");
+  assert(row, `a member.role_changed row (got: ${log.rows.map((r) => r.action).join(", ")})`);
+  assert(row.line === "תפקיד: member-a · מעצב ← צוות הקמה", `the line names the member (got: ${row.line})`);
+  assert(row.actor === "owner-a", `the actor is the owner (got: ${row.actor})`);
+  const refused = await as(f.memberA, () => fetchAuditLog()).then(
+    () => false,
+    () => true,
+  );
+  assert(refused, "a member cannot read the log");
 });
 
 // ── the runner ──────────────────────────────────────────────────────────────────────────────────

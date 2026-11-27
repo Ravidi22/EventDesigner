@@ -23,12 +23,15 @@ import { revalidateSettings, revalidateShell } from "@/lib/db/revalidate";
 import { organizations, users, venues, venueGrants, zones, venueStructures, events, eventZones } from "@/lib/db/schema";
 import { reachesAllVenues } from "@/lib/team/types";
 import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
+import { peopleOf, recordAudit } from "@/lib/audit/write";
+import { personToken } from "@/lib/audit/render";
 import {
   atLeast,
   canSeeGrants,
   isGrantKind,
   isVenueRole,
   resolveVenueRole,
+  VENUE_ROLE_LABEL,
   type GrantKind,
   type ShareResult,
   type VenueGrant,
@@ -569,7 +572,20 @@ export async function deleteVenue(id: string): Promise<Venue[] | { error: string
     };
   }
 
-  await database.delete(venues).where(and(eq(venues.id, id), eq(venues.organizationId, actor.organizationId)));
+  const gone = await database
+    .delete(venues)
+    .where(and(eq(venues.id, id), eq(venues.organizationId, actor.organizationId)))
+    .returning({ name: venues.name });
+  if (gone.length > 0) {
+    await recordAudit(database, {
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      action: "venue.deleted",
+      target: { kind: "venue", id },
+      summary: `מחיקת מתחם: ${gone[0].name}`,
+      people: await peopleOf(database, [actor.userId]),
+    });
+  }
   revalidateShell();
   return fetchVenues();
 }
@@ -693,8 +709,9 @@ export async function shareVenue(input: {
     }
   }
 
+  let grantId: string;
   try {
-    await db().insert(venueGrants).values({
+    [{ id: grantId }] = await db().insert(venueGrants).values({
       venueId,
       grantorOrgId: actor.organizationId,
       granteeOrgId,
@@ -705,15 +722,37 @@ export async function shareVenue(input: {
       role: input.role,
       state: granteeOrgId ? "active" : "pending",
       invitedAt: today(),
-    });
+    }).returning({ id: venueGrants.id });
   } catch {
     // venue_grants_venue_email_key: one person, one grant per venue. Re-inviting an address that
     // already holds one is a role change, which has its own call.
     return { error: "הכתובת הזו כבר קיבלה גישה למתחם", grants: await grantsOf(venueId) };
   }
+  await auditGrant(actor, grantId, VENUE_ROLE_LABEL[input.role]);
 
   revalidateSettings();
   return { grants: await grantsOf(venueId) };
+}
+
+/** One audit row for a change to who may open a venue (EVE-52): a member as a person token, a guest
+ *  by the address the grant was made to. Written to the ACTING business's log. */
+async function auditGrant(actor: Actor, grantId: string, what: string): Promise<void> {
+  const [g] = await db()
+    .select({ venue: venues.name, kind: venueGrants.kind, userId: venueGrants.granteeUserId, email: venueGrants.granteeEmail })
+    .from(venueGrants)
+    .innerJoin(venues, eq(venues.id, venueGrants.venueId))
+    .where(eq(venueGrants.id, grantId))
+    .limit(1);
+  if (!g) return;
+  const who = g.kind === "member" && g.userId ? personToken(g.userId) : g.email;
+  await recordAudit(db(), {
+    organizationId: actor.organizationId,
+    actorUserId: actor.userId,
+    action: "venue.grant_changed",
+    target: { kind: "venue_grant", id: grantId },
+    summary: `שיתוף מתחם: ${g.venue} · ${who} · ${what}`,
+    people: await peopleOf(db(), [actor.userId, g.kind === "member" ? g.userId : null]),
+  });
 }
 
 /** The venue a grant belongs to — every mutation below needs it before it may check anything, and
@@ -728,8 +767,9 @@ async function venueOfGrant(id: string): Promise<string> {
 export async function setGrantRole(id: string, role: VenueRole): Promise<VenueGrant[]> {
   if (!isVenueRole(role)) throw new Error("role must be viewer | editor | manager");
   const venueId = await venueOfGrant(id);
-  await requireVenueAccess(venueId, "manager");
+  const { actor } = await requireVenueAccess(venueId, "manager");
   await db().update(venueGrants).set({ role }).where(eq(venueGrants.id, id));
+  await auditGrant(actor, id, VENUE_ROLE_LABEL[role]);
   revalidateSettings();
   return grantsOf(venueId);
 }
@@ -752,6 +792,8 @@ export async function revokeGrant(id: string): Promise<VenueGrant[]> {
     throw new Error("אי אפשר לבטל את הגישה של עצמכם");
   }
 
+  // Written before the delete: the row it reads is the one going.
+  await auditGrant(actor, id, "בוטל");
   await db().delete(venueGrants).where(eq(venueGrants.id, id));
   revalidateSettings();
   return grantsOf(venueId);

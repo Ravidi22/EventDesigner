@@ -20,6 +20,8 @@ import { emailConfig } from "@/lib/email/config";
 import { sendEmail } from "@/lib/email/send";
 import { clientInvitationEmail } from "@/lib/email/templates";
 import { notify } from "@/lib/notifications/write";
+import { peopleOf, recordAudit } from "@/lib/audit/write";
+import { personToken } from "@/lib/audit/render";
 import type { ClientRole } from "@/lib/client-portal/types";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -147,6 +149,17 @@ export async function shareEventWithClient(eventId: string, input: { name: strin
     .onConflictDoNothing()
     .returning({ userId: eventClients.userId });
 
+  if (added) {
+    await recordAudit(database, {
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      action: "client.access_granted",
+      target: { kind: "event", id: event.id },
+      summary: `שיתוף עם לקוח/ה: ${personToken(userId!)} · ${event.clientName}`,
+      people: await peopleOf(database, [actor.userId, userId]),
+    });
+  }
+
   // Someone who already signs in hears about it; a pending account will see it when they join.
   if (added && existing?.state === "active") {
     await notify([existing.id], {
@@ -232,10 +245,24 @@ export async function setEventClientRole(eventId: string, userId: string, role: 
 
 /** Take the event back from a client. Their account stays — it may hold other events. */
 export async function unshareEventClient(eventId: string, userId: string): Promise<EventClientRow[]> {
-  const { event } = await ownEvent(eventId);
+  const { actor, event } = await ownEvent(eventId);
   assertId(userId, "userId");
   const database = db();
-  await database.delete(eventClients).where(and(eq(eventClients.eventId, event.id), eq(eventClients.userId, userId)));
+  const people = await peopleOf(database, [actor.userId, userId]);
+  const removed = await database
+    .delete(eventClients)
+    .where(and(eq(eventClients.eventId, event.id), eq(eventClients.userId, userId)))
+    .returning({ userId: eventClients.userId });
+  if (removed.length > 0) {
+    await recordAudit(database, {
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      action: "client.access_revoked",
+      target: { kind: "event", id: event.id },
+      summary: `ביטול שיתוף: ${personToken(userId)} · ${event.clientName}`,
+      people,
+    });
+  }
   // Someone who never joined and now has nothing shared with them is an invitation to nothing — and
   // a row that would block their address from ever being invited cleanly again. It goes.
   const [stillShared] = await database

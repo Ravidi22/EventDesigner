@@ -20,9 +20,12 @@ import { currentSession } from "@/lib/auth/session";
 import { emailConfig } from "@/lib/email/config";
 import { sendEmail } from "@/lib/email/send";
 import { invitationEmail } from "@/lib/email/templates";
+import { peopleOf, recordAudit } from "@/lib/audit/write";
+import { personToken } from "@/lib/audit/render";
 import {
   canManagePeople,
   isStudioRole,
+  STUDIO_ROLE_LABEL,
   type InviteResult,
   type StudioMember,
   type StudioRole,
@@ -147,7 +150,7 @@ export async function inviteMember(
   }
 
   const invite = mintInviteToken();
-  await database.insert(users).values({
+  const [invited] = await database.insert(users).values({
     organizationId: actor.organizationId,
     kind: "studio",
     email: address,
@@ -159,6 +162,14 @@ export async function inviteMember(
     inviteExpiresAt: invite.expiresAt,
     // Set when they accept, not when they are asked — this column is the day they JOINED.
     joinedAt: null,
+  }).returning({ id: users.id });
+  await recordAudit(database, {
+    organizationId: actor.organizationId,
+    actorUserId: actor.userId,
+    action: "member.invited",
+    target: { kind: "user", id: invited.id },
+    summary: `הזמנה לצוות: ${personToken(invited.id)} · ${STUDIO_ROLE_LABEL[role]}`,
+    people: await peopleOf(database, [actor.userId, invited.id]),
   });
 
   revalidateSettings();
@@ -265,10 +276,25 @@ export async function setMemberRole(id: string, role: StudioRole): Promise<Studi
   if (!canManagePeople(actor.role)) throw new Error("only the owner can change roles");
   if (id === actor.userId) throw new Error("you cannot change your own role");
 
-  await db()
-    .update(users)
-    .set({ role })
-    .where(and(eq(users.id, id), eq(users.organizationId, actor.organizationId), eq(users.kind, "studio")));
+  await db().transaction(async (tx) => {
+    const [before] = await tx
+      .select({ role: users.role })
+      .from(users)
+      .where(and(eq(users.id, id), eq(users.organizationId, actor.organizationId), eq(users.kind, "studio")));
+    if (!before || before.role === role) return;
+    await tx
+      .update(users)
+      .set({ role })
+      .where(and(eq(users.id, id), eq(users.organizationId, actor.organizationId), eq(users.kind, "studio")));
+    await recordAudit(tx, {
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      action: "member.role_changed",
+      target: { kind: "user", id },
+      summary: `תפקיד: ${personToken(id)} · ${STUDIO_ROLE_LABEL[before.role]} ← ${STUDIO_ROLE_LABEL[role]}`,
+      people: await peopleOf(tx, [actor.userId, id]),
+    });
+  });
   revalidateSettings();
   return membersOf(actor.organizationId);
 }
@@ -288,18 +314,32 @@ export async function removeMember(id: string): Promise<StudioMember[]> {
   if (!canManagePeople(actor.role)) throw new Error("only the owner can remove people");
   if (id === actor.userId) throw new Error("you cannot remove yourself");
 
-  await db()
-    .delete(users)
-    .where(
-      and(
-        eq(users.id, id),
-        eq(users.organizationId, actor.organizationId),
-        eq(users.kind, "studio"),
-        // Belt and braces next to the self-check above: whatever happens to roles later, the row
-        // that owns this studio is not deletable through the people screen.
-        ne(users.role, "owner"),
-      ),
-    );
+  await db().transaction(async (tx) => {
+    const people = await peopleOf(tx, [actor.userId, id]);
+    const gone = await tx
+      .delete(users)
+      .where(
+        and(
+          eq(users.id, id),
+          eq(users.organizationId, actor.organizationId),
+          eq(users.kind, "studio"),
+          // Belt and braces next to the self-check above: whatever happens to roles later, the row
+          // that owns this studio is not deletable through the people screen.
+          ne(users.role, "owner"),
+        ),
+      )
+      .returning({ id: users.id });
+    if (gone.length === 0) return;
+    await recordAudit(tx, {
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      action: "member.removed",
+      target: { kind: "user", id },
+      summary: `הסרה מהצוות: ${personToken(id)}`,
+      // The removed person's name is not kept (they are erased): the line reads "former member".
+      people: { ...people, [id]: { name: null, kind: "member" } },
+    });
+  });
   revalidateSettings();
   return membersOf(actor.organizationId);
 }
