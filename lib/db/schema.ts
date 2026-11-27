@@ -229,6 +229,12 @@ export const users = pgTable(
     emailVerified: boolean("email_verified").notNull().default(false),
     /** A profile picture URL, when a provider supplied one. Better Auth's core user field. */
     image: text("image"),
+    /** Which version of the terms and the privacy policy this person accepted at sign-up, and when
+     *  (EVE-9; `LEGAL_VERSION`, lib/legal/status.ts). Both null for everyone who signed up while the
+     *  texts were drafts — nobody is asked to accept a draft — and for invited people, who do not pass
+     *  through the sign-up form. Written only by `signUp`, through `termsAcceptance`. */
+    termsVersion: text("terms_version"),
+    termsAcceptedAt: timestamp("terms_accepted_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
   },

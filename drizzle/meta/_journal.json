@@ -204,6 +204,13 @@
       "when": 1794345302769,
       "tag": "0028_doc_style",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1795799017485,
+      "tag": "0029_terms_acceptance",
+      "breakpoints": true
     }
   ]
 }
