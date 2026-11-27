@@ -31,7 +31,9 @@ import { fetchMyEvents } from "@/lib/client-portal/actions";
 import { fetchMarketplace } from "@/lib/marketplace/actions";
 import { fetchVenueDirectory, followVenue } from "@/lib/venues/actions";
 import { sweepAccounts } from "@/lib/account/erase";
-import { ACCOUNT_TABLES } from "@/lib/account/tables";
+import { ACCOUNT_TABLES, isSecretColumn } from "@/lib/account/tables";
+import { exportData } from "@/lib/account/export";
+import { GET as exportRoute } from "@/app/api/account/export/data/route";
 import { shareEventWithClient } from "@/lib/events/client-actions";
 import { saveAppointment } from "@/lib/appointments/actions";
 import { saveSketchTemplate } from "@/lib/studio/sketch-actions";
@@ -427,6 +429,40 @@ step("an unused venue goes, and when retention is over nothing is left", async (
     assert((await countOf(table, f.orgA)) === 0, `${table}: nothing of A`);
   }
   assert((await db().select().from(schema.organizations).where(eq(schema.organizations.id, f.orgA))).length === 0, "the organisation row too");
+});
+
+// ── the export ──────────────────────────────────────────────────────────────────────────────────
+
+step("the export carries the whole business and no secret", async (f) => {
+  const d = await exportData(f.orgA);
+  const aEvents = await db().select({ id: schema.events.id }).from(schema.events).where(eq(schema.events.organizationId, f.orgA));
+  assert((d.tables.events ?? []).length === aEvents.length, `every event of A (${d.tables.events?.length} / ${aEvents.length})`);
+  assert((d.tables.events ?? []).every((e) => e.organization_id === f.orgA), "and only A's");
+  for (const [table, rows] of Object.entries(d.tables)) {
+    assert(!table.startsWith("auth_"), `${table} is never exported`);
+    for (const row of rows) for (const col of Object.keys(row)) assert(!isSecretColumn(col), `${table}.${col} is a secret`);
+  }
+  assert((d.tables.users ?? []).length >= 2 && (d.tables.users ?? []).every((u) => !("password_hash" in u)), "the people, without credentials");
+  assert((d.tables.billing_documents ?? []).length > 0 && (d.tables.design_documents ?? []).length > 0, "documents and drawings");
+  assert(d.clientAccounts.some((c) => c.eventId === f.eventId), "the client accounts its events are shared with");
+  assert(d.meta.business === (await nameOf(f.orgA)), "the business's name");
+
+  await as(f.users.studioB, () => saveEvent(aNewEvent(f.venueId, "אירוע של ב באולם של א")));
+  const b = await exportData(f.orgB);
+  assert(b.venuesUsed.some((v) => v.id === f.venueId), "B's export carries the venue of A's its event stands in");
+  assert(!JSON.stringify(b.tables).includes(f.orgA), "and nothing else of A's");
+
+  const asMember = await as(f.memberA, () => exportRoute());
+  assert(asMember.status === 403, `a member is refused (${asMember.status})`);
+  const asOwner = await as(f.ownerA, () => exportRoute());
+  assert(asOwner.status === 200 && ((await asOwner.json()) as { meta: { business: string } }).meta.business === d.meta.business, "the owner gets it");
+  const log = await as(f.ownerA, () => fetchAuditLog());
+  assert(log.rows.some((r) => r.action === "export.downloaded"), "the download is in the log");
+
+  // Closed, the owner still takes it.
+  const name = await nameOf(f.orgA);
+  await as(f.ownerA, () => closeBusiness({ confirmName: name }));
+  assert((await as(f.ownerA, () => exportRoute())).status === 200, "the owner of a closed business still downloads it");
 });
 
 // ── the runner ──────────────────────────────────────────────────────────────────────────────────

@@ -35,7 +35,9 @@ for (const action of AUDIT_ACTIONS) {
 
 // ── Coverage: every action the log knows has a writer. ──────────────────────────────────────────
 // Each later task of the plan removes its own; PR A ends with none pending.
-const PENDING: string[] = ["export.downloaded"];
+const PENDING: string[] = [];
+// PR A writes every action it knows.
+if (PENDING.length) failures.push(`still pending: ${PENDING.join(", ")}`);
 
 function sources(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {

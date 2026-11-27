@@ -220,6 +220,8 @@
     "check:legal": "tsx lib/legal/documents.check.ts",
     "check:account": "tsx lib/account/rules.check.ts",
     "check:account-tables": "tsx lib/account/tables.check.ts",
+    "check:export-csv": "tsx lib/account/export-csv.check.ts",
+    "check:export-zip": "tsx lib/account/export-zip.check.ts",
     "check:audit": "tsx lib/audit/render.check.ts",
     "check:list-objects": "tsx lib/files/list-objects.check.ts",
     "legal:export": "tsx scripts/legal-export.ts"
@@ -229,6 +231,7 @@
     "@react-three/fiber": "^9.8.2",
     "better-auth": "1.7.10",
     "drizzle-orm": "^0.45.2",
+    "fflate": "0.8.2",
     "html-to-image": "^1.11.13",
     "lucide-react": "^1.24.0",
     "next": "16.3.8",
