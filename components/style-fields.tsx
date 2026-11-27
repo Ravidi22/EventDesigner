@@ -65,6 +65,7 @@ export function ColorField({
   // `change` — the colour settled — has no React prop of its own.
   const swatchRef = useRef<HTMLInputElement>(null);
   const commitRef = useRef(onCommit);
+  // eslint-disable-next-line react-hooks/refs -- the "latest value" ref the pointer-up listener reads; deliberate
   commitRef.current = onCommit;
   useEffect(() => {
     const el = swatchRef.current;

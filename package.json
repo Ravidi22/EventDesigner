@@ -162,6 +162,8 @@
     "check:headers": "tsx lib/security/headers.check.ts",
     "check:csp-report": "tsx lib/security/csp-report.check.ts",
     "check:health": "tsx lib/health/probe.check.ts",
+    "check:run-checks": "tsx scripts/run-checks.check.ts",
+    "checks": "tsx scripts/run-checks.ts",
     "check:password": "tsx lib/auth/password.ts",
     "check:email": "tsx lib/email/config.ts && tsx lib/email/send.ts && tsx lib/email/templates/index.ts",
     "check:access": "tsx lib/venues/access.ts",

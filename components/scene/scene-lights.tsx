@@ -337,7 +337,7 @@ export function SceneLights({
     // boundsKey stands in for the four numbers; roofedMm is accepted for the phase-C indoor rig.
   }, [sun, diag, cx, cz, boundsKey, shadows, invalidate, roofedMm]);
 
-  const sky = useMemo(skyMaterial, []);
+  const sky = useMemo(() => skyMaterial(), []);
   useEffect(() => () => sky.dispose(), [sky]);
   // Before the frame (layout): a mood switch repaints the dome in the same frame as the lights.
   useLayoutEffect(() => {
@@ -351,6 +351,7 @@ export function SceneLights({
   // Exposure per mood: an evening hall is bright where the candles are, not dimmer overall.
   const gl = useThree((st) => st.gl);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/immutability -- three.js renderer state is set in an effect; that is how R3F works
     gl.toneMappingExposure = rig.exposure;
     invalidate();
   }, [gl, rig.exposure, invalidate]);
@@ -440,6 +441,7 @@ export function EmitterLights({ emitters, mood, count }: { emitters: EmitterNode
     if (changed) invalidate();
   };
   const assignRef = useRef(assign);
+  // eslint-disable-next-line react-hooks/refs -- the "latest value" ref the frame callback reads; deliberate
   assignRef.current = assign;
 
   useCameraSettle((camera) => assignRef.current(camera));
@@ -484,6 +486,7 @@ function StudioEnvironment({ intensity }: { intensity: number }) {
   // the viewer's FrameGate compiles them (its layout effect runs after this one), or the first frame
   // recompiles the room.
   useLayoutEffect(() => {
+    // eslint-disable-next-line react-hooks/immutability -- three.js scene state is set in an effect; that is how R3F works
     scene.environment = env.texture;
     invalidate();
     return () => {
@@ -492,6 +495,7 @@ function StudioEnvironment({ intensity }: { intensity: number }) {
     };
   }, [env, scene, invalidate]);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/immutability -- three.js scene state is set in an effect; that is how R3F works
     scene.environmentIntensity = intensity;
     invalidate();
   }, [scene, intensity, invalidate]);
