@@ -3,17 +3,79 @@
 // every studio action refuses (lib/db/org.ts), every studio page goes to /closed, its outward faces
 // go dark (lib/account/closure.ts `notClosed`) — and the sweep erases it after the grace period
 // (lib/account/erase.ts). Until then the owner may reopen it.
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, count, desc, eq, inArray, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { authSessions, organizationClosures, organizations, users } from "@/lib/db/schema";
+import { auditLog, authSessions, billingDocuments, events, organizationClosures, organizations, products, users, venues } from "@/lib/db/schema";
 import { closedMember, currentActor } from "@/lib/db/org";
 import { revalidateShell } from "@/lib/db/revalidate";
 import { peopleOf, recordAudit } from "@/lib/audit/write";
+import { actorLabel } from "@/lib/audit/render";
+import { fileDriver } from "@/lib/files/driver";
 import { sendEmail } from "@/lib/email/send";
 import { sendLater } from "@/lib/email/send-later";
 import { businessClosedEmail } from "@/lib/email/templates";
 import { appOrigin } from "@/lib/app-url";
-import { eraseAfterOf, nameConfirms } from "./rules";
+import { retainedOf } from "./erase";
+import { eraseAfterOf, nameConfirms, retainUntilOf } from "./rules";
+
+/** What closing would erase and what it keeps — the close question counts it (spec §5.2). */
+export interface ClosePreview {
+  name: string;
+  events: number;
+  /** Every person signed in to the business, the owner included: their accounts go with it. */
+  members: number;
+  /** The catalog as the designer sees it (archived rows are erased too, but nobody counts them). */
+  products: number;
+  /** Every stored file — photos, the logo, the signature, sketch pictures. */
+  photos: number;
+  documents: number;
+  /** The last day the issued billing documents are kept ("2033-12-31"); null = none issued. */
+  retainUntil: string | null;
+  /** Venues another business's events stand in: kept, by name. */
+  venuesKept: string[];
+}
+
+/** The owner's count before closing. The same retained set the sweep keeps (./erase.ts retainedOf). */
+export async function fetchClosePreview(): Promise<ClosePreview> {
+  const actor = await currentActor();
+  if (actor.role !== "owner") throw new Error("only the owner closes the business");
+  const org = actor.organizationId;
+  const [[business], [eventCount], [memberCount], [productCount], [documentCount], keep, files] = await Promise.all([
+    db().select({ name: organizations.name }).from(organizations).where(eq(organizations.id, org)).limit(1),
+    db().select({ n: count() }).from(events).where(eq(events.organizationId, org)),
+    db().select({ n: count() }).from(users).where(and(eq(users.organizationId, org), ne(users.state, "pending"))),
+    db().select({ n: count() }).from(products).where(and(eq(products.organizationId, org), eq(products.archived, false))),
+    db().select({ n: count() }).from(billingDocuments).where(eq(billingDocuments.organizationId, org)),
+    retainedOf(db(), org),
+    fileDriver().list(`${org}/`),
+  ]);
+  const kept = keep.venueIds.length
+    ? await db().select({ name: venues.name }).from(venues).where(inArray(venues.id, keep.venueIds))
+    : [];
+  return {
+    name: business?.name ?? "",
+    events: eventCount.n,
+    members: memberCount.n,
+    products: productCount.n,
+    photos: files.length,
+    documents: documentCount.n,
+    retainUntil: retainUntilOf(keep.docDates),
+    venuesKept: kept.map((v) => v.name),
+  };
+}
+
+/** When the business was last downloaded, and by whom (the audit log's `export.downloaded`). Owner only. */
+export async function fetchLastExport(): Promise<{ at: string; by: string } | null> {
+  const actor = await currentActor();
+  if (actor.role !== "owner") throw new Error("only the owner downloads the business");
+  const [last] = await db()
+    .select({ at: auditLog.at, actorUserId: auditLog.actorUserId, people: auditLog.people })
+    .from(auditLog)
+    .where(and(eq(auditLog.organizationId, actor.organizationId), eq(auditLog.action, "export.downloaded")))
+    .orderBy(desc(auditLog.at))
+    .limit(1);
+  return last ? { at: last.at.toISOString(), by: actorLabel(last.actorUserId, last.people) } : null;
+}
 
 /** "8.1.2027" — the date the closed page and the mail print. */
 const shortDate = (d: Date) => d.toLocaleDateString("he-IL", { timeZone: "Asia/Jerusalem" });

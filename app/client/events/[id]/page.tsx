@@ -7,6 +7,8 @@ import { fetchClientSketch } from "@/lib/client-portal/actions";
 import { formatEventDate } from "@/lib/events/types";
 import { Wordmark } from "@/components/wordmark";
 import { NotificationBell } from "@/components/notification-bell";
+import { ClientAccountMenu } from "@/components/client-account-menu";
+import { hasPasswordLogin } from "@/lib/auth/logins";
 import { BackToEvents, ClientSketchView } from "./client-sketch";
 
 export const metadata: Metadata = { title: "הסקיצה שלי · Eve" };
@@ -17,9 +19,10 @@ export const metadata: Metadata = { title: "הסקיצה שלי · Eve" };
 // check; an event that is not shared with this person is a 404, not an error page that admits it
 // exists). The sketch itself is a client component: it is a canvas.
 export default async function ClientEventPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireClient();
+  const session = await requireClient();
   const { id } = await params;
   const sketch = await fetchClientSketch(id).catch(() => null);
+  const needsPassword = await hasPasswordLogin(session.userId);
   if (!sketch) notFound();
   const { event, outcome, proposal } = sketch;
   const studio = event.studio;
@@ -54,6 +57,7 @@ export default async function ClientEventPage({ params }: { params: Promise<{ id
             לראות בתלת-ממד
           </Link>
           <NotificationBell side="client" />
+          <ClientAccountMenu name={session.name} email={session.email} needsPassword={needsPassword} />
         </div>
       </header>
 

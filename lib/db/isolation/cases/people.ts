@@ -4,6 +4,7 @@ import { currentUser } from "@/lib/auth/actions";
 import { emailInvite, fetchCurrentMember, fetchMembers, inviteMember, regenerateInvite, removeMember, setMemberRole, updateMyName } from "@/lib/team/actions";
 import { fetchNotifications, markNotificationsRead } from "@/lib/notifications/actions";
 import { fetchAuditLog } from "@/lib/audit/actions";
+import { fetchClosePreview, fetchLastExport } from "@/lib/account/actions";
 import { disconnectGoogle, fetchGoogleBusy, fetchGoogleStatus, setGoogleDirections, startGoogleConnect, syncGoogleNow } from "@/lib/google/actions";
 import {
   deleteStageTemplate,
@@ -43,6 +44,17 @@ export const PEOPLE_CASES: Cases = {
   "lib/auth/actions.ts#acceptInvite": { reason: "accepts the invitation its TOKEN names — holding the token is the authorisation" },
   "lib/auth/actions.ts#signOut": { reason: "ends the caller's own session" },
   "lib/account/actions.ts#closeBusiness": { reason: "closes the caller's OWN business (owner only, its typed name); takes no id — db:verify:account walks it" },
+  // Take no id: the caller's own business's counts and last download. B's must hold nothing of A's.
+  // The preview is counts and the business's name, which an id scan cannot judge: it must name the
+  // CALLER's business, never A's ("סטודיו א …", lib/db/isolation/fixture.ts) — A's own call flips it.
+  "lib/account/actions.ts#fetchClosePreview": {
+    call: () => fetchClosePreview(),
+    expect: (r) => r instanceof Error || !String((r as { name?: unknown } | null)?.name ?? "").startsWith("סטודיו א "),
+  },
+  "lib/account/actions.ts#fetchLastExport": {
+    call: () => fetchLastExport(),
+    control: "takes no id at all — the caller's own audit log, and the fixture downloads nothing, so A's call is null too; fetchAuditLog's case holds the log's scope",
+  },
   "lib/account/actions.ts#reopenBusiness": { reason: "reopens the caller's OWN closed business; takes no id — db:verify:account walks it" },
   "lib/auth/actions.ts#deleteMyAccount": { reason: "deletes the caller's OWN account through Better Auth's delete-user (password or a fresh session); takes no id — db:verify:account walks it" },
   "lib/auth/actions.ts#changePassword": { reason: `${CREDENTIALS}; the caller's own, checked against the current password` },

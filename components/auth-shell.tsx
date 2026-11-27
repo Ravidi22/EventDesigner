@@ -28,6 +28,7 @@ export function AuthShell({
   children,
   footer,
   wide = false,
+  tagline = true,
 }: {
   title: string;
   lede: string;
@@ -35,6 +36,8 @@ export function AuthShell({
   footer: ReactNode;
   /** A form with fields side by side (sign-up), which needs the card a step wider to do it. */
   wide?: boolean;
+  /** The brand's sentence under the card — off where the screen is an ending (/closed). */
+  tagline?: boolean;
 }) {
   return (
     // The screen is exactly one viewport and the PAGE never scrolls, at any size. Low (`short:`),
@@ -61,9 +64,11 @@ export function AuthShell({
       </section>
 
       {/* The brand's one sentence, under the card rather than beside it. */}
-      <p className="relative z-10 hidden px-6 py-5 text-center text-sm font-medium text-ink sm:block short:hidden">
-        כל אירוע מתחיל כאן. סקיצה אחת, שהופכת לתכנית עיצוב שלמה.
-      </p>
+      {tagline && (
+        <p className="relative z-10 hidden px-6 py-5 text-center text-sm font-medium text-ink sm:block short:hidden">
+          כל אירוע מתחיל כאן. סקיצה אחת, שהופכת לתכנית עיצוב שלמה.
+        </p>
+      )}
     </main>
   );
 }

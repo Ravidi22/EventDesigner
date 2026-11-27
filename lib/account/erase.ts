@@ -115,7 +115,7 @@ interface Retained {
 }
 
 /** What stays of a business (spec §5.4 step 1). */
-async function retainedOf(database: Tx | ReturnType<typeof db>, organizationId: string): Promise<Retained> {
+export async function retainedOf(database: Tx | ReturnType<typeof db>, organizationId: string): Promise<Retained> {
   const docs = await database
     .select({ eventId: billingDocuments.eventId, date: billingDocuments.documentDate, design: billingDocuments.designDocumentId })
     .from(billingDocuments)

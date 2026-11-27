@@ -29,6 +29,7 @@ import { peopleOf, recordAudit } from "@/lib/audit/write";
 import { termsAcceptance } from "@/lib/legal/acceptance";
 import { LEGAL_STATUS, LEGAL_VERSION } from "@/lib/legal/status";
 import { callAuth } from "./auth-call";
+import { hasPasswordLogin } from "./logins";
 import { hashInviteToken } from "./invite-token";
 import { HOME_FOR, ORG_HOME, isOrgKind, type AccountKind, type OrgKind } from "./kinds";
 import { hashPassword, passwordProblem } from "./password";
@@ -552,11 +553,7 @@ export async function deleteMyAccount(input: { password?: string }): Promise<{ o
     return { error: "בעלים לא יכולים למחוק את החשבון — אפשר לסגור את העסק בהגדרות" };
   }
   const password = String(input?.password ?? "");
-  const [credential] = await db()
-    .select({ id: authAccounts.id })
-    .from(authAccounts)
-    .where(and(eq(authAccounts.userId, session.userId), eq(authAccounts.providerId, "credential")))
-    .limit(1);
+  const credential = await hasPasswordLogin(session.userId);
   if (credential && !password) return { error: "יש להזין את הסיסמה" };
 
   const result = await callAuth("/delete-user", credential ? { password } : {});

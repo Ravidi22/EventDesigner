@@ -4,6 +4,7 @@ import { fetchCurrentMember, fetchMembers } from "@/lib/team/actions";
 import { fetchGoogleStatus } from "@/lib/google/actions";
 import { fetchCounters } from "@/lib/billing/actions";
 import { emailEnabled } from "@/lib/email/config";
+import { hasPasswordLogin } from "@/lib/auth/logins";
 import { SettingsScreen } from "./settings-screen";
 
 // Business details (F-8.1), the studio's people (F-8.2) and venue sharing (F-8.3).
@@ -21,8 +22,8 @@ import { SettingsScreen } from "./settings-screen";
 // per-device pointer this browser holds, so the server has nothing to resolve them against.
 export default async function SettingsPage() {
   // The layout's guard races this file rather than gating it — see lib/auth/guard.ts.
-  await requireStudio();
-  const [settings, me, members, google, offsets, stageRules, counters] = await Promise.all([
+  const session = await requireStudio();
+  const [settings, me, members, google, offsets, stageRules, counters, needsPassword] = await Promise.all([
     fetchSettings(),
     fetchCurrentMember(),
     fetchMembers(),
@@ -38,6 +39,8 @@ export default async function SettingsPage() {
     fetchStageRules(),
     // The document series' next numbers, for the billing section — one small read, same reason.
     fetchCounters(),
+    // Whether the delete question asks for a password (a Google-only account has none).
+    hasPasswordLogin(session.userId),
   ]);
   return (
     <SettingsScreen
@@ -49,6 +52,7 @@ export default async function SettingsPage() {
       initialStageRules={stageRules}
       initialCounters={counters}
       emailEnabled={emailEnabled()}
+      needsPassword={needsPassword}
     />
   );
 }

@@ -1,12 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { CalendarDays, ChevronLeft, LogOut, MapPin, Users } from "lucide-react";
+import { CalendarDays, ChevronLeft, MapPin, Users } from "lucide-react";
 import { NotificationBell } from "@/components/notification-bell";
 import { Wordmark } from "@/components/wordmark";
-import { signOut } from "@/lib/auth/actions";
+import { ClientAccountMenu } from "@/components/client-account-menu";
 import { formatEventDate } from "@/lib/events/types";
 import type { ClientEvent } from "@/lib/client-portal/types";
 
@@ -21,42 +19,21 @@ export function ClientHome({
   name,
   email,
   events,
+  needsPassword,
 }: {
   name: string | null;
   email: string;
   events: ClientEvent[];
+  /** The login has a password — deleting it asks for it (lib/auth/logins.ts). */
+  needsPassword: boolean;
 }) {
-  const router = useRouter();
-  const [leaving, setLeaving] = useState(false);
-
-  const leave = async () => {
-    setLeaving(true);
-    await signOut();
-    router.replace("/login");
-    router.refresh();
-  };
-
   return (
     <div dir="rtl" className="flex min-h-dvh flex-col bg-bg">
       <header className="flex h-16 shrink-0 items-center gap-4 border-b border-border bg-surface px-6">
         <Wordmark tone="mono" className="text-[22px]" />
-        <span className="ms-auto min-w-0 leading-tight text-end">
-          <span className="block truncate text-sm font-semibold text-ink">{name || "החשבון שלי"}</span>
-          <span className="block truncate text-xs text-quiet" dir="ltr">
-            {email}
-          </span>
-        </span>
+        <span className="ms-auto" />
         <NotificationBell side="client" />
-        <button
-          type="button"
-          onClick={leave}
-          disabled={leaving}
-          aria-label="יציאה מהחשבון"
-          title="יציאה מהחשבון"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-bg hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40"
-        >
-          <LogOut className="h-[18px] w-[18px]" strokeWidth={1.4} />
-        </button>
+        <ClientAccountMenu name={name} email={email} needsPassword={needsPassword} />
       </header>
 
       <main className="mx-auto w-full max-w-2xl flex-1 px-6 py-12">

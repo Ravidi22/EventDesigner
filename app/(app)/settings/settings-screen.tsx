@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useIsSupplier, useIsVenue } from "@/components/org-kind-context";
 import { useMounted } from "@/lib/use-mounted";
-import { CalendarClock, CalendarSync, Database, Grid2x2, ListChecks, Palette, ReceiptText, Share2, Store, UserRound, Users } from "lucide-react";
+import { CalendarClock, CalendarSync, DoorClosed, Download, Grid2x2, ListChecks, Palette, ReceiptText, ScrollText, Share2, Store, UserRound, Users } from "lucide-react";
 import type { BusinessSettings } from "@/lib/settings/types";
 import type { CheckpointOffsets } from "@/lib/production/runway";
 import type { GoogleStatus } from "@/lib/google/actions";
@@ -21,7 +21,10 @@ import type { StageRules } from "@/lib/settings/actions";
 import { TeamSection } from "./team-section";
 import { SharingSection } from "./sharing-section";
 import { CalendarSection } from "./calendar-section";
-import { DataSection } from "./data-section";
+import { ExportSection } from "./export-section";
+import { AuditSection } from "./audit-section";
+import { CloseSection } from "./close-section";
+import { useAccountExport } from "@/components/account-export";
 
 // Settings, in six sections along the axis each one belongs to:
 //
@@ -31,7 +34,8 @@ import { DataSection } from "./data-section";
 //   במות               — the stage rules the studio checks against (railings; lib/design-document/stage.ts).
 //   צוות והרשאות       — who works in this business (lib/team/types.ts).
 //   מתחמים ושיתוף      — who may open a property (lib/venues/access.ts).
-//   נתונים             — the backup, while the store is still this browser.
+//   ייצוא נתונים / יומן פעולות / סגירת העסק — the owner's: the whole business in a zip, who did
+//                        what, and the way out (lib/account/, lib/audit/; EVE-22/51/52).
 //
 // The two people sections are separate on purpose: a studio member and a venue guest are not two
 // weights of the same thing. One is inside the business and sees its work; the other is another
@@ -52,7 +56,9 @@ const SECTIONS = [
   { id: "team", label: "צוות והרשאות", icon: Users },
   { id: "sharing", label: "מתחמים ושיתוף", icon: Share2 },
   { id: "calendar", label: "יומן Google", icon: CalendarSync },
-  { id: "data", label: "נתונים", icon: Database },
+  { id: "export", label: "ייצוא נתונים", icon: Download },
+  { id: "audit", label: "יומן פעולות", icon: ScrollText },
+  { id: "close", label: "סגירת העסק", icon: DoorClosed },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]["id"];
@@ -60,6 +66,10 @@ type SectionId = (typeof SECTIONS)[number]["id"];
 /** A designer's own machinery — the meeting flow, the production clock, the stage rules. A venue
  *  runs none of them, so its settings leave them out. */
 const DESIGNER_ONLY: ReadonlySet<SectionId> = new Set<SectionId>(["meeting", "checkpoints", "stages", "branding"]);
+
+/** The business as a whole — its data, its log, closing it. The owner's alone (the actions refuse
+ *  anyone else too). */
+const OWNER_ONLY: ReadonlySet<SectionId> = new Set<SectionId>(["export", "audit", "close"]);
 
 // The shared reads arrive from page.tsx and are handed to whichever section is open. Sections mount
 // one at a time (only the selected one renders below), so seeding them here is also what makes
@@ -73,6 +83,7 @@ export function SettingsScreen({
   initialStageRules,
   initialCounters,
   emailEnabled,
+  needsPassword,
 }: {
   initialSettings: BusinessSettings;
   initialCounters: SeriesCounter[];
@@ -83,6 +94,8 @@ export function SettingsScreen({
   initialStageRules: StageRules;
   /** Whether this deployment can send mail — the team section offers "send by email" only then. */
   emailEnabled: boolean;
+  /** The signed-in person signs in with a password — the delete question asks for it. */
+  needsPassword: boolean;
 }) {
   // The section lives in the hash rather than in a query param: it makes /settings#sharing
   // linkable from the venue plan editor without pulling this client screen into the
@@ -91,7 +104,12 @@ export function SettingsScreen({
   const venue = useIsVenue();
   // A supplier issues no quote and prints no crew sheet — its documents have nothing to brand.
   const supplier = useIsSupplier();
-  const sections = SECTIONS.filter((s) => (!venue || !DESIGNER_ONLY.has(s.id)) && (!supplier || s.id !== "branding"));
+  const owner = initialMe?.role === "owner";
+  const sections = SECTIONS.filter(
+    (s) => (!venue || !DESIGNER_ONLY.has(s.id)) && (!supplier || s.id !== "branding") && (owner || !OWNER_ONLY.has(s.id)),
+  );
+  // Held here, not in the export section: switching sections must not stop a download.
+  const exporter = useAccountExport();
   const fromHash = mounted ? window.location.hash.slice(1) : "";
   const [picked, setSection] = useState<SectionId | null>(null);
   const section: SectionId = picked ?? (sections.some((s) => s.id === fromHash) ? (fromHash as SectionId) : "business");
@@ -132,14 +150,23 @@ export function SettingsScreen({
         {section === "business" && <BusinessSection initialSettings={initialSettings} />}
         {section === "billing" && <BillingSection initialSettings={initialSettings} initialCounters={initialCounters} />}
         {section === "branding" && <BrandingSection initialSettings={initialSettings} />}
-        {section === "account" && <AccountSection initialMe={initialMe} />}
+        {section === "account" && (
+          <AccountSection
+            initialMe={initialMe}
+            needsPassword={needsPassword}
+            studioName={initialSettings.businessName}
+            onOpenClose={() => go("close")}
+          />
+        )}
         {section === "meeting" && <MeetingSection />}
         {section === "checkpoints" && <CheckpointsSection initialOffsets={initialOffsets} />}
         {section === "stages" && <StagesSection initialRules={initialStageRules} />}
         {section === "team" && <TeamSection initialMembers={initialMembers} initialMe={initialMe} emailEnabled={emailEnabled} />}
         {section === "sharing" && <SharingSection initialMembers={initialMembers} initialMe={initialMe} />}
         {section === "calendar" && <CalendarSection initialStatus={initialGoogle} />}
-        {section === "data" && <DataSection />}
+        {section === "export" && <ExportSection exporter={exporter} />}
+        {section === "audit" && <AuditSection />}
+        {section === "close" && <CloseSection exporter={exporter} />}
       </div>
     </div>
   );
