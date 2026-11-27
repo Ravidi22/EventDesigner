@@ -1,6 +1,7 @@
 // npm run bundle:report [-- --fail-on-checks] [-- --json <file>] — what the browser downloads, read
-// off the last `next build` (EVE-54). CI's build job runs it with --fail-on-checks, so a self-check
-// that leaks back into a module the browser loads fails the PR.
+// off the last `next build` (EVE-54). CI's build job runs it with --fail-on-checks: the sizes land in
+// the job's log, and the build fails on the old isMain guard or a `check:<name> —` message in a chunk
+// — a backstop; the guard at the source is `check:check-files`.
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { report } from "./bundle-size";

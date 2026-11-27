@@ -5,9 +5,11 @@ import { join, relative } from "node:path";
 import { gzipSync } from "node:zlib";
 
 /**
- * Signs that a self-check made it into a chunk. A self-check lives in a sibling `*.check.ts` that
- * nothing in the app imports; one that leaks back into a module the browser loads shows up as its
- * old guard, `isMain`, or as a `check:<name> — …` message. Kept narrow: app text says neither.
+ * Signs that a self-check made it into a chunk: the old inline guard (`isMain`) or a
+ * `check:<name> — …` message. Kept narrow: app text says neither. This is a BACKSTOP, not the guard —
+ * a minified check keeps no comments and few distinctive strings, so a `*.check.ts` imported by app
+ * code would mostly pass unseen here. `check:check-files` (scripts/check-files.ts) is what stops that,
+ * at the source.
  */
 export const CHECK_FINGERPRINTS: RegExp[] = [/\bisMain\b/, /check:[a-z][a-z0-9-]+ — /];
 

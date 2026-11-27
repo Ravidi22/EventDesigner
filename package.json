@@ -203,7 +203,7 @@
     "check:venue-table": "tsx lib/venues/venue-table.check.ts",
     "check:tables": "tsx lib/scene/tables.check.ts",
     "check:items": "tsx lib/scene/items.check.ts",
-    "check:scene-viewer": "tsx components/scene/smoke.ts",
+    "check:scene-viewer": "tsx components/scene/smoke.check.ts",
     "check:floor-kinds": "tsx lib/scene/floor-kinds.check.ts",
     "check:overhead": "tsx lib/scene/overhead.check.ts",
     "check:scene-stage": "tsx lib/scene/stage.check.ts",

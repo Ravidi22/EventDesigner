@@ -1,5 +1,5 @@
 // The curated camera's arithmetic, kept out of the React/three file (./scene-camera.tsx) so
-// `check:scene-viewer` (./smoke.ts) can hold it under Node: the head-turn about a fixed eye, the
+// `check:scene-viewer` (./smoke.check.ts) can hold it under Node: the head-turn about a fixed eye, the
 // field-of-view zoom, the ease back to centre, whether a fly is worth flying, and where a paused
 // tour picks up. Plan mm with z up (lib/scene/types.ts), the frame every viewpoint is stored in.
 // No three here, no DOM.
