@@ -1,15 +1,13 @@
 import Link from "next/link";
-import { FACT_LABELS, LEGAL_FACTS } from "@/lib/legal/facts";
+import { FACT_LABELS, LEGAL_FACTS, factHref } from "@/lib/legal/facts";
 import { parseInline } from "@/lib/legal/inline";
-
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const PHONE = /^[+\d][\d\s-]{6,}$/;
 
 /**
  * One legal paragraph's text with its marks drawn (lib/legal/inline.ts). A fact Ravid has supplied is
- * its value — an email or a phone becomes a link; one still owed is the design's placeholder pill
- * (Claude Design board א1: warn-tint, dashed edge, the brackets kept so it survives black-and-white
- * print). `check:legal` keeps "published" from ever drawing a pill.
+ * its value — the email and phone facts become links (`factHref`, by key); one still owed is the
+ * design's placeholder pill (Claude Design board א1: warn-tint, dashed edge, the brackets kept so it
+ * survives black-and-white print). The pill may wrap: a long label on a phone is wider than the column.
+ * `check:legal` keeps "published" from ever drawing a pill.
  */
 export function LegalText({ text }: { text: string }) {
   return (
@@ -31,24 +29,18 @@ export function LegalText({ text }: { text: string }) {
           return (
             <span
               key={i}
-              className="rounded-pill border border-dashed border-warn bg-warn-tint px-2 font-semibold whitespace-nowrap text-warn-ink [box-decoration-break:clone]"
+              className="rounded-pill border border-dashed border-warn bg-warn-tint px-2 font-semibold text-warn-ink [box-decoration-break:clone] [-webkit-box-decoration-break:clone]"
             >
               [{FACT_LABELS[t.key]}]
             </span>
           );
-        if (EMAIL.test(value))
-          return (
-            <a key={i} href={`mailto:${value}`} dir="ltr" className="font-semibold text-accent hover:text-accent-hover">
-              {value}
-            </a>
-          );
-        if (PHONE.test(value))
-          return (
-            <a key={i} href={`tel:${value.replace(/[\s-]/g, "")}`} dir="ltr" className="font-semibold text-accent hover:text-accent-hover">
-              {value}
-            </a>
-          );
-        return value;
+        const href = factHref(t.key, value);
+        if (!href) return value;
+        return (
+          <a key={i} href={href} dir="ltr" className="font-semibold text-accent hover:text-accent-hover">
+            {value}
+          </a>
+        );
       })}
     </>
   );

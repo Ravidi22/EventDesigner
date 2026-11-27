@@ -332,7 +332,7 @@ export function Menu({
                 >
                   {Icon && <Icon className={`h-3.5 w-3.5 shrink-0${item.iconClassName ? ` ${item.iconClassName}` : ""}`} strokeWidth={2} />}
                   <span className={item.hint ? "min-w-0 flex-1 truncate" : "truncate"}>{item.label}</span>
-                  {item.hint && <span className="shrink-0 text-xs text-quiet">{item.hint}</span>}
+                  {item.hint && <span className="shrink-0 text-xs text-muted">{item.hint}</span>}
                 </button>
               </Fragment>
             );

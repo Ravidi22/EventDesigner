@@ -55,7 +55,7 @@ export const ACCESSIBILITY: LegalDoc = {
     {
       id: "tested",
       title: "איך הנגישות נבדקה",
-      blocks: ["הנגישות נבדקה לאחרונה ב־{{auditDate}}, ב{{auditScope}}."],
+      blocks: ["הנגישות נבדקה לאחרונה ב־{{auditDate}}. מה נבדק: {{auditScope}}."],
     },
     {
       id: "physical",

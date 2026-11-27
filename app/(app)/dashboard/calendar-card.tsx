@@ -436,7 +436,7 @@ export function CalendarCard({
                     <span
                       className={
                         "nums inline-flex h-6 min-w-6 items-center justify-center rounded-pill px-1 text-xs font-semibold " +
-                        (isToday ? "bg-accent text-canvas" : inMonth ? "text-ink-soft" : "text-quiet")
+                        (isToday ? "bg-accent text-canvas" : inMonth ? "text-ink-soft" : "text-muted")
                       }
                     >
                       {d.getDate()}

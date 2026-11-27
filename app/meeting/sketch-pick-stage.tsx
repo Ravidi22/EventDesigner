@@ -326,7 +326,7 @@ export function SketchPickStage({ onDone }: { onDone: () => void }) {
                   />
                   <span className="min-w-0">
                     <span className={"block text-sm font-semibold " + (ticked[id] ? "text-ink" : "text-muted")}>{label}</span>
-                    <span className={"block text-xs " + (ticked[id] ? "text-muted" : "text-muted")}>{present[id] ? lines[id] || "—" : "אין בסקיצה הזו"}</span>
+                    <span className="block text-xs text-muted">{present[id] ? lines[id] || "—" : "אין בסקיצה הזו"}</span>
                   </span>
                 </label>
               ))}

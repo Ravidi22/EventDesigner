@@ -2,7 +2,7 @@
 // kept beside them so it never ships in the browser bundle (EVE-54).
 import { termsAcceptance } from "./acceptance";
 import { LEGAL_DOCS, blockTexts, docBySlug, factsUsed, publishBlockers } from "./documents";
-import { FACT_LABELS, LEGAL_FACTS, missingFacts, type FactKey } from "./facts";
+import { FACT_LABELS, LEGAL_FACTS, factHref, missingFacts, type FactKey } from "./facts";
 import { parseInline } from "./inline";
 import { LEGAL_STATUS, LEGAL_VERSION } from "./status";
 
@@ -34,6 +34,24 @@ try {
   threw = true;
 }
 assert(threw, "a link leaves the site only through a fact, never typed into the text");
+// A mark the parser does not match must not print literally on a published page (review, round 3).
+for (const bad of ["{{ legalName }}", "{{legal_name}}", "{{legalName}", "x }} y", "[x] (/terms)", String.raw`[x](/\evil.example)`]) {
+  let refused = false;
+  try {
+    parseInline(bad);
+  } catch {
+    refused = true;
+  }
+  assert(refused, `a malformed mark is refused: ${bad}`);
+}
+
+// Which facts become links — by WHAT the fact is, never by what its value looks like: a company
+// number or a date written 2026-12-01 is digits and dashes too.
+assert(factHref("privacyEmail", "privacy@eve.example") === "mailto:privacy@eve.example", "an email fact is a mailto link");
+assert(factHref("accessibilityPhone", "03-555 1234") === "tel:035551234", "the phone fact is a tel link");
+assert(factHref("companyNumber", "515123456") === null, "a company number is never a phone link");
+assert(factHref("effectiveDate", "2026-12-01") === null, "a date is never a phone link");
+assert(factHref("contactEmail", "not an email") === null, "an email fact that is not an address is plain text");
 
 // ── Facts: every value Ravid owes is null until he supplies it; each has a placeholder label. ─────
 for (const key of Object.keys(LEGAL_FACTS) as FactKey[]) {
@@ -45,6 +63,7 @@ assert(missingFacts(full).length === 0, "nothing missing when all are filled");
 
 // ── The three documents. ────────────────────────────────────────────────────────────────────────
 assert(LEGAL_DOCS.map((d) => d.slug).join() === "privacy,terms,accessibility", "three documents, in footer order");
+const sectionIds = (path: string) => LEGAL_DOCS.find((d) => d.path === path)?.sections.map((s) => s.id);
 for (const doc of LEGAL_DOCS) {
   assert(docBySlug(doc.slug) === doc, `${doc.slug} found by slug`);
   assert(doc.path === `/${doc.slug}`, `${doc.slug} lives at its slug`);
@@ -52,24 +71,21 @@ for (const doc of LEGAL_DOCS) {
   const ids = doc.sections.map((s) => s.id);
   assert(new Set(ids).size === ids.length, `${doc.slug}: section ids are unique`);
   for (const id of ids) assert(/^[a-z][a-z0-9-]*$/.test(id), `${doc.slug}: "${id}" is a usable #anchor`);
-  // Every paragraph parses: no unknown fact, no link off the site or to a page that does not exist.
-  for (const s of doc.sections) {
-    for (const b of s.blocks) {
-      const texts = blockTexts(b, { notes: true });
-      for (const text of texts) {
-        for (const tok of parseInline(text)) {
-          if (tok.kind === "link" && tok.href.startsWith("#")) {
-            assert(ids.includes(tok.href.slice(1)), `${doc.slug}: ${tok.href} is a section of this page`);
-          } else if (tok.kind === "link") {
-            const target = tok.href.split("#")[0];
-            assert(
-              LEGAL_DOCS.some((d) => d.path === target) || ["/", "/signup", "/login", "/settings"].includes(target),
-              `${doc.slug}: link to ${tok.href} goes somewhere real`,
-            );
-          }
-        }
+  // Every paragraph — the intro included — parses: no unknown fact, no link off the site, to a page
+  // that does not exist, or to a section (#anchor) that page does not have.
+  for (const b of [...doc.intro, ...doc.sections.flatMap((s) => s.blocks)]) {
+    for (const text of blockTexts(b, { notes: true })) {
+      for (const tok of parseInline(text)) {
+        if (tok.kind !== "link") continue;
+        const [page, anchor] = tok.href.split("#");
+        const ids = page === "" ? doc.sections.map((s) => s.id) : sectionIds(page);
+        assert(ids !== undefined || ["/", "/signup", "/login", "/settings"].includes(page), `${doc.slug}: link to ${tok.href} goes somewhere real`);
+        if (anchor !== undefined) assert(!!ids?.includes(anchor), `${doc.slug}: ${tok.href} names a section that exists`);
       }
     }
+    // What is drawn without the parser must carry no mark: a contact row's label, a reviewer note.
+    const raw = typeof b !== "string" && "contact" in b ? b.contact.rows.map((r) => r.label) : typeof b !== "string" && "note" in b ? [b.note] : [];
+    for (const text of raw) assert(!/\{\{|\}\}|\]\(/.test(text), `${doc.slug}: "${text}" is drawn raw, so it may hold no mark`);
   }
 }
 assert(factsUsed().has("privacyEmail") && factsUsed().has("accessibilityName"), "the texts name the contacts they need");

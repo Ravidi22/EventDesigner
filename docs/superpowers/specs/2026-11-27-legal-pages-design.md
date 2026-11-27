@@ -44,9 +44,11 @@ missing one as a visible placeholder, so the lawyer and Ravid can see what is st
 
 ## Storage
 
-`users.terms_version` (text) and `users.terms_accepted_at` (timestamptz), both nullable — migration
-0029. Written by `signUp` only when the line was shown and ticked; null for everyone who signed up
-before go-live. Whether existing accounts are asked once at go-live is Ravid's call at that time (listed
+A table of its own, `legal_acceptances` (user, version, time — one row per acceptance; migration 0029).
+Written by `signUp` only when the line was shown and ticked; no row for anyone who signed up before
+go-live. Not columns on `users` (the review caught it): Better Auth reads whole `users` rows, so a
+column there would have to reach production before this code does or every sign-in fails; a table of
+its own lets the code deploy first and is needed only from go-live. Whether existing accounts are asked once at go-live is Ravid's call at that time (listed
 in the README).
 
 ## Not in this round

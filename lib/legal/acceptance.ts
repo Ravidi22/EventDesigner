@@ -1,5 +1,5 @@
 // The sign-up acceptance rule (EVE-9). Pure — `signUp` (lib/auth/actions.ts) asks it and writes what it
-// answers onto the new user (`users.terms_version`, `users.terms_accepted_at`).
+// answers as a row of `legal_acceptances` (lib/db/schema.ts).
 import type { LegalStatus } from "./status";
 
 /** Claude Design board ב2's wording — the impersonal voice of the form's other errors. */

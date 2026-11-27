@@ -17,7 +17,7 @@ if (!out) {
 const inline = (text: string) =>
   parseInline(text)
     .map((t) =>
-      t.kind === "text" ? t.text : t.kind === "link" ? `${t.label} (${t.href})` : (LEGAL_FACTS[t.key] ?? `**[${FACT_LABELS[t.key]}]**`),
+      t.kind === "text" ? t.text : t.kind === "link" ? `${t.label} (${t.href})` : (LEGAL_FACTS[t.key]?.trim() || `**[${FACT_LABELS[t.key]}]**`),
     )
     .join("");
 

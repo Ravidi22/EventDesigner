@@ -217,7 +217,7 @@ export interface NoteTheme {
 // still the only thing in that cell worth reading, and grey made it recede further than the plain
 // purple line it replaced.
 //
-// `blocked` uses `text-alert-ink`, not `text-alert-ink`. StatusChip pairs alert with its own tint at
+// `blocked` uses `text-alert-ink`, not `text-alert`. The alert fill on its own tint is
 // 3.2:1, under AA, and this text is smaller than a status chip's rather than larger — so alert got
 // the ink variant warn already had. (warn-ink itself was missing AA too and was darkened in
 // globals.css; that one is a shared token, so it moved for every warn chip in the app, not here.)

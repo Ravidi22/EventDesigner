@@ -229,12 +229,6 @@ export const users = pgTable(
     emailVerified: boolean("email_verified").notNull().default(false),
     /** A profile picture URL, when a provider supplied one. Better Auth's core user field. */
     image: text("image"),
-    /** Which version of the terms and the privacy policy this person accepted at sign-up, and when
-     *  (EVE-9; `LEGAL_VERSION`, lib/legal/status.ts). Both null for everyone who signed up while the
-     *  texts were drafts — nobody is asked to accept a draft — and for invited people, who do not pass
-     *  through the sign-up form. Written only by `signUp`, through `termsAcceptance`. */
-    termsVersion: text("terms_version"),
-    termsAcceptedAt: timestamp("terms_accepted_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
   },
@@ -245,6 +239,28 @@ export const users = pgTable(
   ],
 );
 
+
+/** Who accepted which version of the terms and the privacy policy, and when (EVE-9; `LEGAL_VERSION`,
+ *  lib/legal/status.ts). Written by `signUp` through `termsAcceptance` — and only once the texts are
+ *  published: nobody is asked to accept a draft, so the table is empty until then.
+ *
+ *  ⚠ Its OWN table, never columns on `users`: Better Auth reads and returns whole `users` rows, so a
+ *  column added there must exist in the database before the code that declares it deploys, or every
+ *  sign-in fails. Kept apart, this code deploys safely before its migration and the table is needed
+ *  only from go-live. A row per acceptance, so accepting a later version adds a row and keeps the
+ *  earlier one. */
+export const legalAcceptances = pgTable(
+  "legal_acceptances",
+  {
+    id: id(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    version: text("version").notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [uniqueIndex("legal_acceptances_user_version_key").on(t.userId, t.version)],
+);
 
 // ── Better Auth (lib/auth/auth.ts) ─────────────────────────────────────────────────────────────
 // Who is signed in, and how they prove it. Better Auth owns these four tables; `users` above is

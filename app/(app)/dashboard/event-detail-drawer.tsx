@@ -465,7 +465,7 @@ export function EventDetailDrawer({
             )}
           </div>
 
-          <p className="nums text-center text-caption text-quiet">
+          <p className="nums text-center text-caption text-muted">
             נוצר ב־{new Date(event.createdAt).toLocaleDateString("he-IL", { day: "numeric", month: "short", year: "numeric" })}
           </p>
         </div>

@@ -22,7 +22,7 @@ import { installStandardCatalog } from "@/lib/catalog/standard/install";
 import { adoptVenueGrants, openFirstVenue } from "@/lib/venues/granted";
 import { adoptLinkInvites } from "@/lib/event-links/sync";
 import { revalidateSettings } from "@/lib/db/revalidate";
-import { authAccounts, eventClients, events, organizations, studioSettings, users } from "@/lib/db/schema";
+import { authAccounts, eventClients, events, legalAcceptances, organizations, studioSettings, users } from "@/lib/db/schema";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
 import { notify, studioRecipients } from "@/lib/notifications/write";
 import { termsAcceptance } from "@/lib/legal/acceptance";
@@ -159,9 +159,9 @@ export async function signUp(input: {
 
   // Better Auth wrote the person; what they ARE is ours to write. A studio account with no
   // organisation yet: the (app) layout sends it to /welcome until it has one.
+  await database.update(users).set({ kind: "studio", role: "owner", state: "active" }).where(eq(users.id, userId));
   // …and, once the legal texts are published, which version of them this person accepted, and when.
-  const terms = accepted ? { termsVersion: accepted.version, termsAcceptedAt: accepted.at } : {};
-  await database.update(users).set({ kind: "studio", role: "owner", state: "active", ...terms }).where(eq(users.id, userId));
+  if (accepted) await database.insert(legalAcceptances).values({ userId, version: accepted.version, acceptedAt: accepted.at });
 
   // With mail configured, the address must be confirmed before there is a session.
   if (!created.data.token) return { verifyEmail: true };

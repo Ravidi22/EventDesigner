@@ -409,7 +409,7 @@ function EntryLine({ appointment: a, behind, onOpen }: { appointment: Appointmen
           </span>
           {length && <span className="nums shrink-0 text-[11px] text-muted">{length}</span>}
         </div>
-        {meta && <span className={"truncate text-xs " + (behind ? "text-quiet" : "text-ink-soft")}>{meta}</span>}
+        {meta && <span className={"truncate text-xs " + (behind ? "text-muted" : "text-ink-soft")}>{meta}</span>}
       </button>
     </div>
   );

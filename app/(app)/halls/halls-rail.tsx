@@ -99,7 +99,7 @@ export function HallsRail({
             >
               <PenLine className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.75} aria-hidden />
               שרטוט קירות
-              <kbd className="ms-auto font-mono text-[11px] font-normal text-quiet">W</kbd>
+              <kbd className="ms-auto font-mono text-[11px] font-normal text-muted">W</kbd>
             </button>
             <button
               type="button"

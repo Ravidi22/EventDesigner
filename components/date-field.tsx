@@ -240,7 +240,7 @@ export function DateField({
                         ? "border border-accent-line text-ink"
                         : inMonth
                           ? "text-ink hover:bg-accent-tint"
-                          : "text-quiet hover:bg-accent-tint"
+                          : "text-muted hover:bg-accent-tint"
                   } ${isDisabled ? "cursor-not-allowed opacity-35 hover:bg-transparent" : ""}`}
                 >
                   {d.getDate()}

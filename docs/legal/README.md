@@ -12,7 +12,8 @@ and must not be published before a lawyer has read them.
   marked `noindex`, and **no page links to them** (not the footer, not sign-up).
 - Missing business facts are drawn as visible placeholders; questions for the lawyer are drawn as notes.
 - Sign-up does **not** show the "I agree" line and does not require it. The storage for it is built
-  (`users.terms_version`, `users.terms_accepted_at`, migration 0029) and stays empty.
+  (the `legal_acceptances` table, migration 0029) and stays empty. Deploying this code does NOT need
+  the migration first — nothing reads or writes the table while the texts are drafts.
 
 ## Where things live
 
@@ -55,7 +56,8 @@ and must not be published before a lawyer has read them.
 1. Fill `lib/legal/facts.ts`; apply the lawyer's changes to the texts and delete every `note`.
 2. In `lib/legal/status.ts` set `LEGAL_STATUS` to `"published"` and `LEGAL_VERSION` to the day's date.
 3. `npm run check:legal` — it fails while any fact or note is left.
-4. Apply migration 0029 to production (`npm run db:migrate:prod`) before or with the deploy.
+4. Apply migration 0029 to production (`npm run db:migrate:prod`) BEFORE that PR deploys — from then
+   on every sign-up writes a row to `legal_acceptances`.
 
 What the switch then does by itself: removes the notice and `noindex`, adds the three links to the
 landing page's footer and the acceptance line to sign-up, and makes `signUp` require it and store the

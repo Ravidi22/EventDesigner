@@ -349,7 +349,7 @@ function PipelineColumn({
       </div>
       <div className="scroll-slim flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto">
         {events.length === 0 ? (
-          <p className="rounded-md border border-dashed border-[#ddd6f0] px-3 py-6 text-center text-xs text-quiet">
+          <p className="rounded-md border border-dashed border-[#ddd6f0] px-3 py-6 text-center text-xs text-muted">
             אין אירועים בשלב זה
           </p>
         ) : (

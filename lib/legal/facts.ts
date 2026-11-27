@@ -53,6 +53,18 @@ export const LEGAL_FACTS: Record<FactKey, string | null> = {
 
 export const isFactKey = (key: string): key is FactKey => Object.hasOwn(FACT_LABELS, key);
 
+const EMAIL_FACTS: FactKey[] = ["contactEmail", "privacyEmail", "accessibilityEmail"];
+const PHONE_FACTS: FactKey[] = ["accessibilityPhone"];
+
+/** Where a supplied fact links to — decided by WHICH fact it is, never by what its value looks like
+ *  (a company number or a date typed 2026-12-01 is digits and dashes too). Null = plain text. */
+export function factHref(key: FactKey, value: string): string | null {
+  const v = value.trim();
+  if (EMAIL_FACTS.includes(key)) return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? `mailto:${v}` : null;
+  if (PHONE_FACTS.includes(key)) return /^\+?[\d\s-]{7,}$/.test(v) ? `tel:${v.replace(/[\s-]/g, "")}` : null;
+  return null;
+}
+
 /** The facts still owed — null or blank. */
 export function missingFacts(facts: Record<FactKey, string | null> = LEGAL_FACTS): FactKey[] {
   return (Object.keys(FACT_LABELS) as FactKey[]).filter((k) => !facts[k]?.trim());

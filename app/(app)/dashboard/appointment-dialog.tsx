@@ -484,7 +484,7 @@ function DayWell({
     <div className="flex flex-col gap-2 rounded-md border border-inset-border bg-inset px-3.5 py-3">
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold text-ink-soft">{title}</span>
-        <span className="nums text-[11px] text-quiet" dir="ltr">
+        <span className="nums text-[11px] text-muted" dir="ltr">
           08:00–20:00
         </span>
       </div>
@@ -511,7 +511,7 @@ function DayWell({
           />
         )}
       </div>
-      <div className="nums flex justify-between text-[10px] text-quiet" aria-hidden>
+      <div className="nums flex justify-between text-[10px] text-muted" aria-hidden>
         {["08", "10", "12", "14", "16", "18", "20"].map((h) => (
           <span key={h}>{h}</span>
         ))}

@@ -14,30 +14,63 @@ export interface TocEntry {
  *  its heading has passed under it. Matches the sections' `scroll-mt`. */
 const UNDER_HEADER = 92;
 
-/** The section being read — the last whose top has passed under the header. */
-function useCurrent(entries: TocEntry[]) {
+/** The section being read — the last whose top has passed under the header. Only while `media`
+ *  matches (the desktop list and the phone list are both rendered, one hidden), and read at most once a
+ *  frame. */
+function useCurrent(entries: TocEntry[], media: string) {
   const [current, setCurrent] = useState(entries[0]?.id ?? "");
   useEffect(() => {
+    const mq = window.matchMedia(media);
+    let frame = 0;
+    // The section last jumped to (a click or the address's #): at the foot of the page several short
+    // sections are on screen and none can reach the header, so the one asked for is the answer.
+    let picked = decodeURIComponent(window.location.hash.slice(1));
     const read = () => {
+      frame = 0;
       let at = entries[0]?.id ?? "";
       for (const e of entries) {
         const el = document.getElementById(e.id);
         if (el && el.getBoundingClientRect().top <= UNDER_HEADER + 8) at = e.id;
       }
-      // The last sections are too short to ever reach the header: at the foot of the page, the last
-      // one is where you are (a click on "יצירת קשר" marked "קטינים").
       const root = document.documentElement;
-      if (entries.length && window.scrollY + window.innerHeight >= root.scrollHeight - 4) at = entries[entries.length - 1].id;
+      if (entries.length && window.scrollY + window.innerHeight >= root.scrollHeight - 4) {
+        const top = document.getElementById(picked)?.getBoundingClientRect().top;
+        at = top !== undefined && top >= 0 && top < window.innerHeight ? picked : entries[entries.length - 1].id;
+      }
       setCurrent((c) => (c === at ? c : at));
     };
-    read();
-    window.addEventListener("scroll", read, { passive: true });
-    window.addEventListener("resize", read);
-    return () => {
-      window.removeEventListener("scroll", read);
-      window.removeEventListener("resize", read);
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(read);
     };
-  }, [entries]);
+    const onHash = () => {
+      picked = decodeURIComponent(window.location.hash.slice(1));
+      schedule();
+    };
+    const listen = () => {
+      if (!mq.matches) return;
+      read();
+      window.addEventListener("scroll", schedule, { passive: true });
+      window.addEventListener("resize", schedule);
+      window.addEventListener("hashchange", onHash);
+    };
+    const unlisten = () => {
+      cancelAnimationFrame(frame);
+      frame = 0;
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("hashchange", onHash);
+    };
+    const onMedia = () => {
+      unlisten();
+      listen();
+    };
+    listen();
+    mq.addEventListener("change", onMedia);
+    return () => {
+      mq.removeEventListener("change", onMedia);
+      unlisten();
+    };
+  }, [entries, media]);
   return current;
 }
 
@@ -50,7 +83,7 @@ const OTHERS: { slug: LegalSlug; title: string }[] = [
 /** The desktop table of contents (Claude Design board א1): on the start side, sticky under the header,
  *  the section being read in accent; the other two documents under it. Hidden under 900px. */
 export function LegalToc({ entries, slug }: { entries: TocEntry[]; slug: LegalSlug }) {
-  const current = useCurrent(entries);
+  const current = useCurrent(entries, "(min-width: 901px)");
   return (
     <nav aria-label="תוכן העניינים" className="sticky top-[92px] hidden flex-col gap-2 min-[901px]:flex">
       <p className="px-3 text-caption font-semibold text-ink-soft">תוכן העניינים</p>
@@ -82,7 +115,7 @@ export function LegalToc({ entries, slug }: { entries: TocEntry[]; slug: LegalSl
 
 /** The phone's table of contents (boards א3/א4): one row that opens the list in place. */
 export function LegalTocMobile({ entries }: { entries: TocEntry[] }) {
-  const current = useCurrent(entries);
+  const current = useCurrent(entries, "(max-width: 900px)");
   const [open, setOpen] = useState(false);
   return (
     <nav aria-label="תוכן העניינים" className="mt-5 rounded-md border border-border bg-surface min-[901px]:hidden">
