@@ -13,7 +13,6 @@
 //                     designer's quote, catalog prices, costs and orders.
 //
 // PURE: no I/O. Safe in a client component.
-import { isMain } from "../self-check";
 
 export type LinkState = "pending" | "active" | "declined" | "ended";
 
@@ -124,25 +123,6 @@ export function changedFacts(
   if (before.zoneIds.join() !== after.zoneIds.join()) out.push("zoneIds");
   if (before.guests !== after.guests) out.push("guests");
   return out;
-}
-
-// ponytail: self-check. Run: npm run check:event-links
-if (isMain(import.meta.url)) {
-  const assert = (ok: boolean, what: string) => {
-    if (!ok) {
-      console.error(`FAIL: ${what}`);
-      process.exit(1);
-    }
-    console.log(`  ok   ${what}`);
-  };
-  const a = { date: "2026-12-01", time: "19:30", venueId: "v", zoneIds: ["z1", "z2"], guests: 300 };
-  assert(changedFacts(a, { ...a }).length === 0, "nothing moved, nothing said");
-  assert(changedFacts(a, { ...a, guests: 320, date: "2026-12-02" }).join() === "date,guests", "each moved fact is named once");
-  assert(changedFacts(a, { ...a, zoneIds: ["z2", "z1"] }).join() === "zoneIds", "the zones' order is the venue's and counts");
-  const patch = followedPatch({ ...a, zonesLabel: "אולם · חופה" });
-  assert(Object.keys(patch).sort().join() === "date,guests,time,venueId,zoneIds,zonesLabel", "the follow writes the shared facts and nothing else");
-  assert(SHARED_FACTS.every((f) => f in patch), "every shared fact is in the patch");
-  console.log("event links self-check passed");
 }
 
 /** The designer's plain hall sketch, as the venue sees it (lib/event-links/hall-pass.ts): tables,

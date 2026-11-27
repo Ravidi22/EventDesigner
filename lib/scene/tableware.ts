@@ -20,7 +20,6 @@
 // One geometry for every seat in the room: a single instanced body however many guests.
 import type { Point } from "@/lib/studio/hall";
 import { pointInPolygon } from "@/lib/venues/faces";
-import { isMain } from "../self-check";
 import type { SceneCollector, InstanceRequest } from "./collect";
 import { headingDeg, turn } from "./frame";
 import { glassMaterial, glossMaterial, metalMaterial, clothMaterial } from "./materials";
@@ -57,7 +56,7 @@ export function settingParts(): Part[] {
 
 // The setting as the fit reads it, in its own frame at full size: two discs it must keep to itself
 // (the charger with the cutlery beside it; the two glasses) and the points that must stay on the top.
-const CORE = { c: { x: 0, y: 0 }, r: 205 };
+export const CORE = { c: { x: 0, y: 0 }, r: 205 };
 const GLASSES = { c: { x: 160, y: 190 }, r: 88 };
 const RIM: Point[] = [
   { x: 0, y: -CHARGER_R_MM },
@@ -139,7 +138,7 @@ const SLIDE_STEP_MM = 20;
 
 /** The setting at scale `s` in slot `q` — with its glasses, or `bare` without — its middle, the
  *  discs it keeps to itself and the room point of a frame point. */
-function placed(q: Slot, s: number, bare = false) {
+export function placed(q: Slot, s: number, bare = false) {
   const inset = CHARGER_R_MM * s + EDGE_GAP_MM;
   const centre = { x: q.edge.x - q.facing.y * q.shift + q.facing.x * inset, y: q.edge.y + q.facing.x * q.shift + q.facing.y * inset };
   const room = (p: Point): Point => {
@@ -154,7 +153,7 @@ function placed(q: Slot, s: number, bare = false) {
 const discsMeet = (a: Disc, b: Disc) => Math.hypot(a.c.x - b.c.x, a.c.y - b.c.y) < a.r + b.r;
 
 /** A disc against a keep-out box (or disc): the nearest point of the box to the disc's middle. */
-function hitsKeepout(d: Disc, k: Keepout): boolean {
+export function hitsKeepout(d: Disc, k: Keepout): boolean {
   if (k.round) return Math.hypot(d.c.x - k.c.x, d.c.y - k.c.y) < d.r + k.hw;
   const local = turn({ x: d.c.x - k.c.x, y: d.c.y - k.c.y }, -k.rotationDeg);
   const nx = Math.max(-k.hw, Math.min(k.hw, local.x));
@@ -307,100 +306,4 @@ export function placeSettings(seats: readonly SettingSeat[], tops: readonly Poin
     n++;
   }
   return n;
-}
-
-// ponytail: self-check. Run: npx tsx lib/scene/tableware.ts
-if (isMain(import.meta.url)) {
-  const assert = (ok: boolean, msg: string) => {
-    if (!ok) {
-      console.error("FAIL", msg);
-      process.exit(1);
-    }
-  };
-  const rect = (w: number, d: number): Point[] => [
-    { x: -w / 2, y: -d / 2 },
-    { x: w / 2, y: -d / 2 },
-    { x: w / 2, y: d / 2 },
-    { x: -w / 2, y: d / 2 },
-  ];
-  const disc = (r: number, n = 48): Point[] => Array.from({ length: n }, (_, i) => ({ x: r * Math.cos((2 * Math.PI * i) / n), y: r * Math.sin((2 * Math.PI * i) / n) }));
-  const overlaps = (ps: (SettingPlace | null)[]) => {
-    const live = ps.filter((p): p is SettingPlace => !!p);
-    let worst = Infinity;
-    for (let i = 0; i < live.length; i++)
-      for (let j = i + 1; j < live.length; j++) worst = Math.min(worst, Math.hypot(live[i].x - live[j].x, live[i].y - live[j].y) - CORE.r * (live[i].scale + live[j].scale));
-    return worst;
-  };
-
-  // A long table, chairs 60cm apart down both sides: full-size settings, one a hand in from each edge.
-  const long = rect(2400, 1000);
-  const sides: SettingSeat[] = [];
-  for (let k = 0; k < 4; k++) {
-    const x = -900 + k * 600;
-    sides.push({ at: { x, y: -760 }, facing: { x: 0, y: 1 } }, { at: { x, y: 760 }, facing: { x: 0, y: -1 } });
-  }
-  const lay = laySettings(sides, [long], []);
-  assert(lay.every((p) => !!p && p.scale === 1), "a long table seats every setting at full size");
-  assert(Math.abs(lay[0]!.y - (-500 + EDGE_GAP_MM + CHARGER_R_MM)) < 1e-6, "…its charger a hand in from the edge the diner sits at");
-  assert(Math.abs(lay[0]!.rotationDeg - 0) < 1e-6 && Math.abs(Math.abs(lay[1]!.rotationDeg) - 180) < 1e-6, "…turned to face its diner");
-  assert(overlaps(lay) >= 0, "…and no two meet");
-
-  // A round of 90 seating 14: the chairs crowd the rim, so the settings shrink — and never meet.
-  const round = disc(450);
-  const ring: SettingSeat[] = Array.from({ length: 14 }, (_, i) => {
-    const a = (2 * Math.PI * i) / 14;
-    return { at: { x: 700 * Math.cos(a), y: 700 * Math.sin(a) }, facing: { x: -Math.cos(a), y: -Math.sin(a) } };
-  });
-  const crowded = laySettings(ring, [round], []);
-  assert(overlaps(crowded) >= -1e-6, `a crowded round's settings never meet (${overlaps(crowded).toFixed(1)})`);
-  assert(crowded.some((p) => p && p.scale < 1), "…they are drawn smaller to fit");
-
-  // A stadium table's round end: the end seats and the corner seats meet unless the fit parts them.
-  const stadium: Point[] = [];
-  for (let i = 0; i <= 12; i++) stadium.push({ x: 900 + 500 * Math.sin((Math.PI * i) / 12), y: -500 * Math.cos((Math.PI * i) / 12) });
-  for (let i = 0; i <= 12; i++) stadium.push({ x: -900 - 500 * Math.sin((Math.PI * i) / 12), y: 500 * Math.cos((Math.PI * i) / 12) });
-  const endSeats: SettingSeat[] = [
-    { at: { x: 600, y: -760 }, facing: { x: 0, y: 1 } },
-    { at: { x: 1150, y: -560 }, facing: { x: -0.6, y: 0.8 } },
-    { at: { x: 1660, y: 0 }, facing: { x: -1, y: 0 } },
-    { at: { x: 1150, y: 560 }, facing: { x: -0.6, y: -0.8 } },
-    { at: { x: 600, y: 760 }, facing: { x: 0, y: -1 } },
-  ];
-  const ends = laySettings(endSeats, [stadium], []);
-  assert(overlaps(ends) >= -1e-6, "a stadium's round end: no two settings meet");
-  assert(ends.filter(Boolean).length >= 4, "…and the end still has its settings");
-
-  // A centrepiece in the middle keeps the glasses off it: smaller settings on a 1m top…
-  const narrow = rect(1800, 1000);
-  const across: SettingSeat[] = [
-    { at: { x: 160, y: -660 }, facing: { x: 0, y: 1 } },
-    { at: { x: -160, y: 660 }, facing: { x: 0, y: -1 } },
-  ];
-  const vase: Keepout = { c: { x: 0, y: 0 }, hw: 170, hd: 170, rotationDeg: 0, round: true };
-  const clear = laySettings(across, [narrow], [vase]);
-  assert(clear.every((p) => !!p && !p.bare && p.scale < 1), `a vase in the middle: both settings, drawn smaller, glasses kept (${JSON.stringify(clear)})`);
-  for (const p of clear) {
-    const q = placed({ edge: { x: p!.x, y: Math.sign(p!.y) * 500 }, facing: { x: 0, y: -Math.sign(p!.y) }, rotationDeg: p!.rotationDeg, shift: 0 }, p!.scale);
-    assert(!q.discs.some((d) => hitsKeepout(d, vase)), "…their glasses clear the vase");
-  }
-  // …and on a 75cm top with a wide bowl the glasses give way before the plates do.
-  const bowl: Keepout = { c: { x: 0, y: 0 }, hw: 300, hd: 60, rotationDeg: 0 };
-  const tight = laySettings([{ at: { x: 0, y: -535 }, facing: { x: 0, y: 1 } }], [rect(1800, 750)], [bowl]);
-  assert(!!tight[0] && tight[0].bare, `a bowl too close for the glasses: the setting goes without them (${JSON.stringify(tight)})`);
-
-  // Two chairs on one spot: never two settings stacked — parted along the edge, or one left out.
-  const twice = laySettings([{ at: { x: 0, y: -760 }, facing: { x: 0, y: 1 } }, { at: { x: 10, y: -760 }, facing: { x: 0, y: 1 } }], [long], []);
-  assert(twice.some(Boolean) && overlaps(twice) >= -1e-6, "two seats on one spot: never two settings on top of each other");
-  // An 180×90 seating eight — three a side and one at each end: the end settings meet the side
-  // ones at the corners, so the side ones step back along their edge and every one stays.
-  const eight: SettingSeat[] = [];
-  for (const x of [-600, 0, 600]) eight.push({ at: { x, y: -710 }, facing: { x: 0, y: 1 } }, { at: { x, y: 710 }, facing: { x: 0, y: -1 } });
-  eight.push({ at: { x: 1160, y: 0 }, facing: { x: -1, y: 0 } }, { at: { x: -1160, y: 0 }, facing: { x: 1, y: 0 } });
-  const corner = laySettings(eight, [rect(1800, 900)], []);
-  assert(corner.every(Boolean) && overlaps(corner) >= -1e-6, `an 180×90 seating eight: every setting stays, none meet (${JSON.stringify(corner.map((p) => p && [Math.round(p.x), Math.round(p.y), +p.scale.toFixed(2), p.bare]))} ${overlaps(corner).toFixed(1)})`);
-  assert(Math.abs(corner[4]!.x) < 600, `…the corner settings stepped back from the corner (${Math.round(corner[4]!.x)})`);
-
-  // A chair facing away from the top gets nothing.
-  assert(laySettings([{ at: { x: 0, y: -760 }, facing: { x: 0, y: -1 } }], [long], [])[0] === null, "a seat that faces no table gets no setting");
-  console.log("tableware ok");
 }

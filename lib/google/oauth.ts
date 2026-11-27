@@ -8,7 +8,6 @@
 // app/api/google/callback/route.ts, which is deliberately the only route handler this feature adds.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { GOOGLE_SCOPES, requireGoogleConfig, type GoogleConfig } from "./config";
-import { isMain } from "@/lib/self-check";
 
 const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
@@ -16,7 +15,7 @@ const USERINFO_ENDPOINT = "https://www.googleapis.com/oauth2/v3/userinfo";
 
 /** How long a started connection has to finish. Long enough to read a consent screen carefully and
  *  pick between two Google accounts; short enough that a stale link in a browser history is dead. */
-const STATE_TTL_MS = 15 * 60 * 1000;
+export const STATE_TTL_MS = 15 * 60 * 1000;
 
 export interface GoogleTokens {
   accessToken: string;
@@ -208,57 +207,4 @@ function expiryFrom(expiresIn: number | undefined): number {
  *  line in settings rather than a retry that can never succeed. */
 export function isRevoked(error: unknown): boolean {
   return error instanceof Error && error.message.includes("invalid_grant");
-}
-
-if (isMain(import.meta.url)) {
-  const assert = (c: boolean, m: string) => {
-    if (!c) throw new Error("FAIL: " + m);
-  };
-
-  const config: GoogleConfig = {
-    clientId: "id",
-    clientSecret: "secret",
-    redirectUri: "https://studio.example/api/google/callback",
-    tokenKey: Buffer.alloc(32, 3),
-  };
-  const otherKey: GoogleConfig = { ...config, tokenKey: Buffer.alloc(32, 9) };
-  const user = "22222222-2222-4222-8222-222222222222";
-
-  const state = signState(user, config);
-  assert(readState(state, config) === user, "a state round-trips to the user who started the flow");
-  assert(readState(state, otherKey) === null, "a state signed with another key is refused");
-  assert(readState(state + "x", config) === null, "a tampered signature is refused");
-  assert(readState("nonsense", config) === null, "a malformed state is refused");
-  assert(readState("", config) === null, "an empty state is refused");
-
-  // The attack this actually stops: a state minted for the attacker must not validate as the
-  // victim. The callback compares the returned id against the session's, so two different users
-  // must never produce interchangeable states.
-  assert(readState(signState("attacker", config), config) === "attacker", "the state names its own minter");
-  assert(readState(signState("attacker", config), config) !== user, "and never someone else");
-
-  assert(signState(user, config) !== signState(user, config), "a nonce per call — two states are never equal");
-
-  const past = Date.now() - STATE_TTL_MS - 1000;
-  assert(readState(signState(user, config, past), config) === null, "an expired state is refused");
-  assert(readState(signState(user, config, past), config, past + 1000) === user, "and was valid at the time");
-
-  // A forged payload with a far-future expiry must fail on the SIGNATURE, not squeak through
-  // because the expiry looked fine — this is why the signature is checked first.
-  const forged = Buffer.from(JSON.stringify({ u: user, e: Date.now() + 1e9, n: "x" }), "utf8").toString("base64url");
-  assert(readState(`${forged}.notasignature`, config) === null, "an unsigned payload is refused however good it looks");
-
-  const url = new URL(authorizationUrl(state, config));
-  assert(url.searchParams.get("access_type") === "offline", "offline access, or there is no refresh token at all");
-  assert(url.searchParams.get("prompt") === "consent", "forced consent, or a reconnect returns no refresh token");
-  assert(url.searchParams.get("state") === state, "the state travels");
-  assert(url.searchParams.get("redirect_uri") === config.redirectUri, "the redirect is the configured one, never a host header");
-  assert(url.searchParams.get("scope")?.includes("calendar.app.created") === true, "the narrow write scope is asked for");
-  assert(url.searchParams.get("response_type") === "code", "authorization-code flow");
-
-  assert(isRevoked(new Error("google token refresh failed: invalid_grant")), "a revoked connection is recognised");
-  assert(!isRevoked(new Error("google token refresh failed: 503")), "a server error is not a revocation");
-  assert(!isRevoked("invalid_grant"), "a non-Error is not a revocation");
-
-  console.log("google oauth self-check passed");
 }

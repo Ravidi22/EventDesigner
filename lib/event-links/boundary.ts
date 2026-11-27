@@ -7,7 +7,6 @@
 // cost — outside a comment.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isMain } from "../self-check";
 
 /** Tables that hold money or the studio's purchasing — never imported here. */
 export const FORBIDDEN_TABLES = [
@@ -47,14 +46,4 @@ export function scanLinks(dir: string): Violation[] {
     });
   }
   return out;
-}
-
-// ponytail: self-check. Run: npm run check:event-links
-if (isMain(import.meta.url)) {
-  const dir = new URL(".", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
-  const found = scanLinks(dir);
-  for (const v of found) console.error(`FAIL: lib/event-links/${v.file}:${v.line} ${v.why}`);
-  if (found.length) process.exit(1);
-  console.log("  ok   no money table or price column in lib/event-links/");
-  console.log("event links boundary self-check passed");
 }
