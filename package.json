@@ -198,6 +198,7 @@
     "check:scene-focus": "tsx lib/scene/focus.check.ts",
     "db:verify:scene": "tsx lib/scene/verify.ts",
     "db:verify:isolation": "tsx lib/db/verify-isolation.ts",
+    "db:verify:account": "tsx lib/account/verify.ts",
     "check:envelope": "tsx lib/scene/envelope.check.ts",
     "check:billiard": "tsx lib/catalog/game-tables.check.ts",
     "check:venue-table": "tsx lib/venues/venue-table.check.ts",
