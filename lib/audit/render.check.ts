@@ -35,7 +35,7 @@ for (const action of AUDIT_ACTIONS) {
 
 // ── Coverage: every action the log knows has a writer. ──────────────────────────────────────────
 // Each later task of the plan removes its own; PR A ends with none pending.
-const PENDING: string[] = ["business.closed", "business.reopened", "export.downloaded"];
+const PENDING: string[] = ["export.downloaded"];
 
 function sources(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {

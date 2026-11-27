@@ -14,6 +14,7 @@
 // (lib/catalog/standard/): a library seeds a catalog, it does not own it afterwards. The copy
 // remembers where it came from (`sourceProductId`) so the drawer can say the supplier changed the
 // price — and that is all the source ever does to it.
+import { notClosed } from "@/lib/account/closure";
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentActor } from "@/lib/db/org";
@@ -36,7 +37,7 @@ function assertId(value: unknown, field: string): asserts value is string {
 /** The rows the marketplace is made of. Published, live, a supplier's — the three conditions are
  *  written once, here, and every read below goes through them. */
 const published = () =>
-  and(eq(organizations.kind, "supplier"), eq(products.visibility, "public"), eq(products.archived, false));
+  and(eq(organizations.kind, "supplier"), eq(products.visibility, "public"), eq(products.archived, false), notClosed(organizations.id));
 
 /** The supplier's public profile: the name the organisation was opened under, and the phone, logo,
  *  Instagram and address from their settings — their letterhead. Nothing else of theirs. */

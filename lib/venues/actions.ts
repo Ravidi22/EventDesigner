@@ -24,6 +24,7 @@ import { organizations, users, venues, venueGrants, zones, venueStructures, even
 import { reachesAllVenues } from "@/lib/team/types";
 import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import { peopleOf, recordAudit } from "@/lib/audit/write";
+import { closureOf, notClosed } from "@/lib/account/closure";
 import { personToken } from "@/lib/audit/render";
 import {
   atLeast,
@@ -195,6 +196,8 @@ export async function fetchVenueDirectory(): Promise<VenueDirectoryEntry[]> {
     .select({ id: venues.id, name: venues.name, logoUrl: venues.logoUrl, ownerName: organizations.name })
     .from(venues)
     .leftJoin(organizations, eq(organizations.id, venues.organizationId))
+    // A closed business's venues take no new followers or events (EVE-22, DECIDE-14).
+    .where(notClosed(venues.organizationId))
     .orderBy(asc(venues.name));
   return rows
     .filter((r) => !mine.has(r.id))
@@ -207,6 +210,7 @@ export async function fetchVenueDirectory(): Promise<VenueDirectoryEntry[]> {
  *  (venue, email) key and does nothing. */
 export async function followVenue(venueId: string): Promise<{ venues: Venue[]; id: string }> {
   const { actor, ownerOrgId } = await requireVenueAccess(venueId, "viewer");
+  if (ownerOrgId !== actor.organizationId && (await closureOf(ownerOrgId))) throw new Error("המתחם שייך לעסק שנסגר");
   if (ownerOrgId !== actor.organizationId && actor.userId) {
     const [me] = await db().select({ email: users.email, name: users.name }).from(users).where(eq(users.id, actor.userId)).limit(1);
     if (me) {

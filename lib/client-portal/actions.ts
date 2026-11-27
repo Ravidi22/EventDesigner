@@ -16,6 +16,7 @@
 // (see the schema note); the designer's design_documents row is not touched by anything here.
 // Every save is re-derived through the delta filter (lib/design-document/delta.ts), so a field a
 // client may not change cannot reach the row whatever the browser sent.
+import { notClosed } from "@/lib/account/closure";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentSession, type Session } from "@/lib/auth/session";
@@ -74,7 +75,7 @@ export async function fetchMyEvents(): Promise<ClientEvent[]> {
     .innerJoin(events, eq(events.id, eventClients.eventId))
     .leftJoin(venues, eq(venues.id, events.venueId))
     .leftJoin(organizations, eq(organizations.id, events.organizationId))
-    .where(and(eq(eventClients.userId, session.userId), eq(events.archived, false)))
+    .where(and(eq(eventClients.userId, session.userId), eq(events.archived, false), notClosed(events.organizationId)))
     .orderBy(asc(events.eventDate));
 
   return rows.map((r) => ({
@@ -125,7 +126,7 @@ async function sharedEvent(eventId: string): Promise<Shared> {
     .innerJoin(events, eq(events.id, eventClients.eventId))
     .leftJoin(venues, eq(venues.id, events.venueId))
     .leftJoin(organizations, eq(organizations.id, events.organizationId))
-    .where(and(eq(eventClients.userId, session.userId), eq(eventClients.eventId, eventId), eq(events.archived, false)))
+    .where(and(eq(eventClients.userId, session.userId), eq(eventClients.eventId, eventId), eq(events.archived, false), notClosed(events.organizationId)))
     .limit(1);
   if (!row) throw new Error("this event is not shared with you");
   return {

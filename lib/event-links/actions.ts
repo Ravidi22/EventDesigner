@@ -5,6 +5,7 @@
 // on before it reads anything: the venue through its own booking (venue_org_id on the link and the
 // event's organisation), the designer through studio_org_id. Only then does it call the trusting
 // reads in ./reads.ts. A caller on neither side gets the same refusal whether the link exists or not.
+import { closureOf } from "@/lib/account/closure";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentActor } from "@/lib/db/org";
@@ -147,6 +148,7 @@ export async function acceptLinkInvite(linkId: string, studioEventId: string | n
   const actor = await requireStudioActor(true);
   const link = await ownLink(actor.organizationId, linkId);
   if (link.state !== "pending") return { error: "ההזמנה כבר לא ממתינה" };
+  if (await closureOf(link.venueOrgId)) return { error: "האולם סגר את החשבון" };
 
   let eventId = studioEventId;
   if (eventId) {

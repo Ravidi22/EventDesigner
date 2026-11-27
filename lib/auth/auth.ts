@@ -21,7 +21,6 @@
 //
 // ⚠ SERVER ONLY. Built lazily (auth()), because building it opens the database handle and an import
 // must never do that (see lib/db/index.ts).
-import { after } from "next/server";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { nextCookies } from "better-auth/next-js";
@@ -32,6 +31,7 @@ import { authAccounts, authRateLimits, authSessions, authVerifications, users } 
 import { appOrigin } from "@/lib/app-url";
 import { emailEnabled } from "@/lib/email/config";
 import { sendEmail } from "@/lib/email/send";
+import { sendLater } from "@/lib/email/send-later";
 import { resetPasswordEmail, verifyEmailEmail } from "@/lib/email/templates";
 import { googleConfig } from "@/lib/google/config";
 import { hashPassword, verifyPassword } from "./password";
@@ -49,19 +49,6 @@ export const AUTH_BASE_PATH = "/api/auth";
 /** The origin the app answers on: APP_URL in any real deployment, localhost when developing. */
 export function authOrigin(): string {
   return appOrigin() ?? "http://localhost:3000";
-}
-
-/**
- * Mail goes out AFTER the response, never awaited inside it: a reset request for an address that
- * exists must take the same time as one for an address that does not, or the delay itself says
- * which addresses have accounts. Outside a request (a script) there is no after(); send inline.
- */
-function sendLater(task: () => Promise<unknown>): void {
-  try {
-    after(task);
-  } catch {
-    void task();
-  }
 }
 
 type Database = ReturnType<typeof db>;

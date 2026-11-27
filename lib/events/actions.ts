@@ -10,6 +10,7 @@
 //
 // WHAT IS *NOT* HERE: which event you currently have open. Like the active venue, that is a
 // per-device pointer — it belongs in this browser and stays in lib/events/storage.ts.
+import { closureOf } from "@/lib/account/closure";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { afterResponse } from "@/lib/after";
 import { db } from "@/lib/db";
@@ -106,15 +107,25 @@ async function assertPlacement(
   organizationId: string,
   venueId: string | undefined,
   zoneIds: string[],
+  eventId: string,
 ): Promise<void> {
   if (!venueId) {
     if (zoneIds.length) throw new Error("zones were given without a venue");
     return;
   }
   const database = db();
-  void organizationId;
-  const [venue] = await database.select({ id: venues.id }).from(venues).where(eq(venues.id, venueId)).limit(1);
+  const [venue] = await database.select({ id: venues.id, owner: venues.organizationId }).from(venues).where(eq(venues.id, venueId)).limit(1);
   if (!venue) throw new Error("venue not found");
+  // A closed business's venue keeps the events already standing in it and takes no new one
+  // (EVE-22, DECIDE-14) — otherwise it might never stop being used and never be erased.
+  if (venue.owner !== organizationId && (await closureOf(venue.owner))) {
+    const [already] = await database
+      .select({ id: events.id })
+      .from(events)
+      .where(and(eq(events.id, eventId), eq(events.organizationId, organizationId), eq(events.venueId, venueId)))
+      .limit(1);
+    if (!already) throw new Error("המתחם שייך לעסק שנסגר — אי אפשר להוסיף אליו אירועים חדשים");
+  }
 
   if (!zoneIds.length) return;
   const unique = [...new Set(zoneIds)];
@@ -214,7 +225,7 @@ export async function saveEvent(event: EventSummary): Promise<EventSummary[]> {
   assertEvent(event);
   const organizationId = await currentOrg();
   const zoneIds = event.zoneIds ?? [];
-  await assertPlacement(organizationId, event.venueId, zoneIds);
+  await assertPlacement(organizationId, event.venueId, zoneIds, event.id);
 
   const row = toEventRow(event, organizationId);
   await db().transaction(async (tx) => {

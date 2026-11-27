@@ -42,6 +42,8 @@ export const PEOPLE_CASES: Cases = {
   "lib/auth/actions.ts#inviteInfo": { reason: "reads one invitation by its TOKEN — holding the token is the authorisation (/join is public by design)" },
   "lib/auth/actions.ts#acceptInvite": { reason: "accepts the invitation its TOKEN names — holding the token is the authorisation" },
   "lib/auth/actions.ts#signOut": { reason: "ends the caller's own session" },
+  "lib/account/actions.ts#closeBusiness": { reason: "closes the caller's OWN business (owner only, its typed name); takes no id — db:verify:account walks it" },
+  "lib/account/actions.ts#reopenBusiness": { reason: "reopens the caller's OWN closed business; takes no id — db:verify:account walks it" },
   "lib/auth/actions.ts#deleteMyAccount": { reason: "deletes the caller's OWN account through Better Auth's delete-user (password or a fresh session); takes no id — db:verify:account walks it" },
   "lib/auth/actions.ts#changePassword": { reason: `${CREDENTIALS}; the caller's own, checked against the current password` },
   "lib/auth/actions.ts#requestPasswordReset": { reason: `${CREDENTIALS}; answers the same whether or not the address exists` },

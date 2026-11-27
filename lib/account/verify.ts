@@ -20,6 +20,16 @@ import { removeMember, setMemberRole } from "@/lib/team/actions";
 import { fetchAuditLog } from "@/lib/audit/actions";
 import { AUTH_BASE_PATH, auth, authOrigin } from "@/lib/auth/auth";
 import { hashPassword } from "@/lib/auth/password";
+import { closeBusiness, reopenBusiness } from "@/lib/account/actions";
+import { BusinessClosedError } from "@/lib/db/org";
+import { fetchEvents, saveEvent } from "@/lib/events/actions";
+import type { EventSummary } from "@/lib/events/types";
+import { saveDocument } from "@/lib/studio/actions";
+import { mintSceneLink } from "@/lib/scene/actions";
+import { sceneByToken } from "@/lib/scene/share-read";
+import { fetchMyEvents } from "@/lib/client-portal/actions";
+import { fetchMarketplace } from "@/lib/marketplace/actions";
+import { fetchVenueDirectory, followVenue } from "@/lib/venues/actions";
 
 const steps: { name: string; run: (f: Fixture) => Promise<void> }[] = [];
 
@@ -156,6 +166,79 @@ step("a role change writes one audit row the owner reads", async (f) => {
     () => true,
   );
   assert(refused, "a member cannot read the log");
+});
+
+// ── closing ─────────────────────────────────────────────────────────────────────────────────────
+
+const nameOf = async (orgId: string) =>
+  (await db().select({ name: schema.organizations.name }).from(schema.organizations).where(eq(schema.organizations.id, orgId)))[0].name;
+
+/** What a refused call threw, or null when it went through. */
+const refusalOf = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e);
+
+const aNewEvent = (venueId: string, name: string): EventSummary =>
+  ({ id: randomUUID(), clientName: name, phone: "", date: "2027-08-01", zoneIds: [], zonesLabel: "", guests: 10, step: 0, createdAt: Date.now(), venueId }) as EventSummary;
+
+step("closing locks the business", async (f) => {
+  // Before: B has an event standing in A's venue, B's hall business finds A's venue in the directory,
+  // A has a live 3D link.
+  const bEvent = aNewEvent(f.venueId, "אירוע של ב באולם של א");
+  await as(f.users.studioB, () => saveEvent(bEvent));
+  assert((await as(f.users.venueB, () => fetchVenueDirectory())).some((v) => v.id === f.venueId), "before: A's venue is in the directory");
+  const { path } = await as(f.ownerA, () => mintSceneLink(f.eventId));
+  const token = path.split("/").pop()!;
+  assert((await sceneByToken(token)) !== null, "before: the link opens");
+  await signInWithPassword(f.memberA);
+
+  const nameA = await nameOf(f.orgA);
+  const closed = await as(f.ownerA, () => closeBusiness({ confirmName: `  ${nameA} ` }));
+  assert("eraseAfter" in closed, `closed (${JSON.stringify(closed)})`);
+  const days = (Date.parse(closed.eraseAfter) - Date.now()) / 86400000;
+  assert(days > 29.9 && days <= 30, `erase in 30 days (${days})`);
+
+  const sessions = await db().select().from(schema.authSessions).where(eq(schema.authSessions.userId, f.memberA));
+  assert(sessions.length === 0, "the member was signed out");
+  // What a member's open tab would send: the drawing as it stands.
+  const [drawing] = await db().select({ content: schema.designDocuments.content }).from(schema.designDocuments).where(eq(schema.designDocuments.eventId, f.eventId)).limit(1);
+  const saved = await refusalOf(as(f.memberA, () => saveDocument(f.eventId, drawing.content)));
+  assert(saved instanceof BusinessClosedError, `a member's autosave is refused (got: ${String(saved)})`);
+  const read = await refusalOf(as(f.ownerA, () => fetchEvents()));
+  assert(read instanceof BusinessClosedError, "the owner's studio actions are refused too");
+
+  assert((await sceneByToken(token)) === null, "the 3D link no longer opens");
+  const mine = await as(f.clientC, () => fetchMyEvents());
+  assert(!mine.some((e) => e.id === f.eventId), "the client's portal no longer lists A's event");
+
+  assert(!(await as(f.users.venueB, () => fetchVenueDirectory())).some((v) => v.id === f.venueId), "A's venue left the directory");
+  assert((await refusalOf(as(f.users.venueB, () => followVenue(f.spareVenueId)))) instanceof Error, "nobody new can follow A's venue");
+  const placed = await refusalOf(as(f.users.studioB, () => saveEvent(aNewEvent(f.venueId, "אירוע חדש באולם של א"))));
+  assert(placed instanceof Error, "B cannot put a NEW event in A's venue");
+  const kept = await refusalOf(as(f.users.studioB, () => saveEvent({ ...bEvent, guests: 12 })));
+  assert(kept === null, `B's existing event in A's venue still saves (got: ${String(kept)})`);
+});
+
+step("a closed supplier leaves the marketplace", async (f) => {
+  assert((await as(f.users.studioB, () => fetchMarketplace())).some((p) => p.product.id === f.publicProductS), "before: listed");
+  const closed = await as(f.supplierUserS, async () => closeBusiness({ confirmName: await nameOf(f.orgS) }));
+  assert("eraseAfter" in closed, "the supplier closed");
+  assert(!(await as(f.users.studioB, () => fetchMarketplace())).some((p) => p.product.id === f.publicProductS), "after: gone");
+});
+
+step("the wrong name does not close, and a closed business reopens", async (f) => {
+  const wrong = await as(f.ownerA, () => closeBusiness({ confirmName: "לא השם" }));
+  assert("error" in wrong, "the wrong name is refused");
+  assert((await refusalOf(as(f.memberA, () => fetchEvents()))) === null, "still open");
+
+  const byMember = await as(f.memberA, async () => closeBusiness({ confirmName: await nameOf(f.orgA) }));
+  assert("error" in byMember, "a member cannot close the business");
+
+  await as(f.ownerA, async () => closeBusiness({ confirmName: await nameOf(f.orgA) }));
+  assert((await refusalOf(as(f.memberA, () => fetchEvents()))) instanceof BusinessClosedError, "closed");
+  const reopened = await as(f.ownerA, () => reopenBusiness());
+  assert("ok" in reopened, `reopened (${JSON.stringify(reopened)})`);
+  assert((await refusalOf(as(f.memberA, () => fetchEvents()))) === null, "open again for the members");
+  const log = await as(f.ownerA, () => fetchAuditLog());
+  assert(log.rows.some((r) => r.action === "business.closed") && log.rows.some((r) => r.action === "business.reopened"), "both in the log");
 });
 
 // ── the runner ──────────────────────────────────────────────────────────────────────────────────
