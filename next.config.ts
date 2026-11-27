@@ -1,5 +1,6 @@
 import { networkInterfaces } from "node:os";
 import type { NextConfig } from "next";
+import { headerEnvFromProcess, securityHeaders } from "./lib/security/headers";
 
 /** This machine's own addresses, for `allowedDevOrigins` below. */
 const ownAddresses = Object.values(networkInterfaces())
@@ -54,6 +55,14 @@ const nextConfig: NextConfig = {
   // to this path silently becomes a GET (Next's own note on why it uses 307/308 at all).
   async redirects() {
     return [{ source: "/gantt", destination: "/production", permanent: true }];
+  },
+
+  // Security headers on every response — HSTS, nosniff, referrer and permissions policies, no
+  // framing, and the Content-Security-Policy (three directives enforced, the whole policy report-only
+  // until a week of real use says it breaks nothing). The why of each value is in
+  // lib/security/headers.ts; the storage hosts in the policy follow the env vars, not a vendor name.
+  async headers() {
+    return [{ source: "/(.*)", headers: securityHeaders(headerEnvFromProcess()) }];
   },
 };
 
