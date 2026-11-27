@@ -14,6 +14,7 @@
 // like one file and turn out to be six.
 //
 // ⚠ SERVER ONLY. It reads credentials.
+import { parseListObjects } from "./list-objects";
 import { presign } from "./sigv4";
 
 /** What a browser needs to store one file, and where it will be readable afterwards. */
@@ -34,6 +35,8 @@ export interface FileDriver {
   upload(key: string, contentType: string): Promise<UploadTicket>;
   publicUrl(key: string): string;
   remove(key: string): Promise<void>;
+  /** Every stored key under `prefix` — the erase's "every file of this business" (EVE-22). */
+  list(prefix: string): Promise<string[]>;
 }
 
 /** How long a presigned upload URL lives. Long enough for a slow phone on a hall's wifi to finish a
@@ -151,6 +154,32 @@ function r2Driver(config: R2Config): FileDriver {
         throw new Error(`could not delete ${key} (${response.status})`);
       }
     },
+    // ListObjectsV2, a page at a time (1000 keys each), until the bucket says there is no more.
+    // ⚠ Not yet run against a real bucket: R2 waits on the environment choice (EVE-1).
+    async list(prefix) {
+      const keys: string[] = [];
+      let next: string | null = null;
+      do {
+        const params: [string, string][] = [["list-type", "2"], ["prefix", prefix]];
+        if (next) params.push(["continuation-token", next]);
+        const url = presign({
+          method: "GET",
+          endpoint,
+          key: "",
+          params,
+          accessKeyId: config.accessKeyId,
+          secretAccessKey: config.secretAccessKey,
+          region: "auto",
+          expiresIn: 60,
+        });
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) throw new Error(`could not list ${prefix} (${response.status})`);
+        const page = parseListObjects(await response.text());
+        keys.push(...page.keys);
+        next = page.next;
+      } while (next);
+      return keys;
+    },
   };
 }
 
@@ -180,6 +209,10 @@ function localDriver(): FileDriver {
     async remove(key) {
       const { removeLocalFile } = await import("./driver-local");
       await removeLocalFile(key);
+    },
+    async list(prefix) {
+      const { listLocalFiles } = await import("./driver-local");
+      return listLocalFiles(prefix);
     },
   };
 }

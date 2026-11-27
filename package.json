@@ -199,6 +199,7 @@
     "db:verify:scene": "tsx lib/scene/verify.ts",
     "db:verify:isolation": "tsx lib/db/verify-isolation.ts",
     "db:verify:account": "tsx lib/account/verify.ts",
+    "accounts:erase-due": "tsx scripts/accounts-erase-due.ts",
     "check:envelope": "tsx lib/scene/envelope.check.ts",
     "check:billiard": "tsx lib/catalog/game-tables.check.ts",
     "check:venue-table": "tsx lib/venues/venue-table.check.ts",
@@ -220,6 +221,7 @@
     "check:account": "tsx lib/account/rules.check.ts",
     "check:account-tables": "tsx lib/account/tables.check.ts",
     "check:audit": "tsx lib/audit/render.check.ts",
+    "check:list-objects": "tsx lib/files/list-objects.check.ts",
     "legal:export": "tsx scripts/legal-export.ts"
   },
   "dependencies": {

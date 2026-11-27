@@ -23,7 +23,7 @@ import { COURSE_LABEL, servedDishes, type Dish, type MenuPackage } from "@/lib/m
 import { confirmEvent, markEventLost, reopenEvent } from "@/lib/events/actions";
 import { formatEventDate } from "@/lib/events/types";
 import { cancelDesignerLink, inviteDesigner } from "@/lib/event-links/actions";
-import { LINK_STATE_LABEL } from "@/lib/event-links/types";
+import { LINK_STATE_LABEL, DESIGNER_GONE } from "@/lib/event-links/types";
 import { formatPrice } from "@/lib/catalog/format";
 import { Drawer } from "@/components/drawer";
 import { Button } from "@/components/button";
@@ -373,7 +373,11 @@ export function BookingDrawer({
               </div>
             ) : (
               <div className="space-y-2">
-                {link && <p className="text-xs text-muted">{LINK_STATE_LABEL[link.state]} · {link.studioName ?? link.invitedEmail}</p>}
+                {link && (
+                  <p className="text-xs text-muted">
+                    {link.designerGone ? DESIGNER_GONE : LINK_STATE_LABEL[link.state]} · {link.studioName ?? link.invitedEmail}
+                  </p>
+                )}
                 <p className="text-ink-soft">מזמינים את המעצב לפי האימייל שלו. אחרי שיאשר — הוא יראה את פרטי האירוע (בלי מחירים), ואתם את סקיצת האולם שלו.</p>
                 <div className="flex items-end gap-2">
                   <TextField value={email} onChange={setEmail} type="email" dir="ltr" placeholder="designer@studio.co.il" wrapperClassName="min-w-0 flex-1" />

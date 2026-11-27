@@ -10,7 +10,7 @@
 // on. Refuses any database that is not this machine's or CI's — it creates and deletes organisations.
 import { refusal } from "@/lib/db/isolation/env";
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { actAsUserForScript } from "@/lib/auth/session";
@@ -30,6 +30,15 @@ import { sceneByToken } from "@/lib/scene/share-read";
 import { fetchMyEvents } from "@/lib/client-portal/actions";
 import { fetchMarketplace } from "@/lib/marketplace/actions";
 import { fetchVenueDirectory, followVenue } from "@/lib/venues/actions";
+import { sweepAccounts } from "@/lib/account/erase";
+import { ACCOUNT_TABLES } from "@/lib/account/tables";
+import { shareEventWithClient } from "@/lib/events/client-actions";
+import { saveAppointment } from "@/lib/appointments/actions";
+import { saveSketchTemplate } from "@/lib/studio/sketch-actions";
+import { fileDriver } from "@/lib/files/driver";
+import { listLocalFiles, writeLocalFile } from "@/lib/files/driver-local";
+import type { Appointment } from "@/lib/appointments/types";
+import { emptyPlan } from "@/lib/venues/types";
 
 const steps: { name: string; run: (f: Fixture) => Promise<void> }[] = [];
 
@@ -239,6 +248,185 @@ step("the wrong name does not close, and a closed business reopens", async (f) =
   assert((await refusalOf(as(f.memberA, () => fetchEvents()))) === null, "open again for the members");
   const log = await as(f.ownerA, () => fetchAuditLog());
   assert(log.rows.some((r) => r.action === "business.closed") && log.rows.some((r) => r.action === "business.reopened"), "both in the log");
+});
+
+// ── the erase ───────────────────────────────────────────────────────────────────────────────────
+
+const DAY = 86400000;
+const later = (days: number) => new Date(Date.now() + days * DAY);
+
+/** Every row of these businesses in every table that has organization_id, keyed "table id". */
+async function rowsOfOrgs(orgIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const list = orgIds.map((o) => `'${o}'`).join(",");
+  for (const [table, rule] of Object.entries(ACCOUNT_TABLES)) {
+    if (rule.reach !== "org") continue;
+    const rows = (await db().execute(sql.raw(`select * from "${table}" where organization_id in (${list})`))) as unknown as Record<string, unknown>[];
+    for (const row of rows) out.set(`${table} ${String(row.id ?? JSON.stringify(row))}`, JSON.stringify(row));
+  }
+  return out;
+}
+
+async function countOf(table: string, orgId: string): Promise<number> {
+  const rows = (await db().execute(sql.raw(`select count(*)::int as n from "${table}" where organization_id = '${orgId}'`))) as unknown as { n: number }[];
+  return rows[0].n;
+}
+
+/** Everything §8 asks of the other side, set up before A closes. */
+async function setUpTheOtherSide(f: Fixture) {
+  const bEvent = aNewEvent(f.venueId, "אירוע של ב באולם של א");
+  await as(f.users.studioB, () => saveEvent(bEvent));
+  const [drawing] = await db().select({ content: schema.designDocuments.content }).from(schema.designDocuments).where(eq(schema.designDocuments.eventId, f.eventId)).limit(1);
+  const sketches = await as(f.users.studioB, () => saveSketchTemplate({ name: "סקיצה של ב", venueId: f.spareVenueId, content: drawing.content }));
+  const sketchId = (sketches as { id: string }[])[0].id;
+  const meetingId = randomUUID();
+  await as(f.users.studioB, () => saveAppointment({ ...f.appointment, id: meetingId, eventId: undefined, venueId: f.spareVenueId } as Appointment));
+  const supplierId = randomUUID();
+  await db().insert(schema.suppliers).values({ id: supplierId, organizationId: f.orgB, name: "ספק של ב", linkedOrgId: f.orgA });
+  const bVenue = randomUUID();
+  await db().insert(schema.venues).values({ id: bVenue, organizationId: f.orgB, name: "אולם של ב", plan: emptyPlan() });
+  await as(f.ownerA, () => followVenue(bVenue));
+  const shared = await as(f.ownerA, () => shareEventWithClient(f.eventId, { name: "לקוחה ממתינה", email: `pending-${randomUUID()}@example.test` }));
+  const pendingClient = (shared as { userId?: string }).userId!;
+  return { bEvent, sketchId, meetingId, supplierId, bVenue, pendingClient };
+}
+
+async function closeAndSweep(owner: string, orgId: string, days = 31) {
+  const name = await nameOf(orgId);
+  const closed = await as(owner, () => closeBusiness({ confirmName: name }));
+  assert("eraseAfter" in closed, `closed ${orgId}`);
+  return sweepAccounts({ now: later(days), dryRun: false });
+}
+
+step("the sweep erases a due business and keeps exactly what is retained", async (f) => {
+  const other = await setUpTheOtherSide(f);
+  const bBefore = await rowsOfOrgs([f.orgB, f.orgB2, f.orgB3]);
+  const docsBefore = await db().select().from(schema.billingDocuments).where(eq(schema.billingDocuments.organizationId, f.orgA));
+  const docEvents = [...new Set(docsBefore.map((d) => d.eventId))];
+  const keptDesigns = [...new Set(docsBefore.map((d) => d.designDocumentId).filter(Boolean))] as string[];
+  const [settings] = await db().select().from(schema.studioSettings).where(eq(schema.studioSettings.organizationId, f.orgA));
+  const [event] = await db().select().from(schema.events).where(eq(schema.events.id, f.eventId));
+
+  const report = await closeAndSweep(f.ownerA, f.orgA);
+  assert(report.erased.includes(f.orgA), `A was erased (${JSON.stringify(report)})`);
+
+  // Exactly the retained set.
+  const allowed: Record<string, number> = {
+    organization_closures: 1,
+    billing_documents: docsBefore.length,
+    events: docEvents.length,
+    design_documents: keptDesigns.length,
+    venues: 1,
+  };
+  for (const [table, rule] of Object.entries(ACCOUNT_TABLES)) {
+    if (rule.reach !== "org" || table === "venue_structures" || table === "zones") continue;
+    const n = await countOf(table, f.orgA);
+    assert(n === (allowed[table] ?? 0), `${table}: ${n} rows of A left (expected ${allowed[table] ?? 0})`);
+  }
+  const [org] = await db().select().from(schema.organizations).where(eq(schema.organizations.id, f.orgA));
+  assert(org, "the organisation row stays as the tombstone");
+  const [kept] = await db().select().from(schema.venues).where(eq(schema.venues.organizationId, f.orgA));
+  assert(kept.id === f.venueId, "the venue B stands in is the one kept");
+  assert((await db().select().from(schema.venueGrants).where(eq(schema.venueGrants.venueId, f.venueId))).length === 0, "nobody may edit it");
+
+  const [closure] = await db().select().from(schema.organizationClosures).where(eq(schema.organizationClosures.organizationId, f.orgA));
+  assert(closure.erasedAt && closure.retainUntil, "erased, with a retention date");
+  assert(closure.issuer?.businessName === settings.businessName && closure.issuer?.businessNumber === settings.businessNumber, "the issuer was snapshotted");
+  assert(Object.keys(closure.printed ?? {}).length === docEvents.length, "the printed facts of every retained event");
+
+  const docsAfter = await db().select().from(schema.billingDocuments).where(eq(schema.billingDocuments.organizationId, f.orgA));
+  for (const d of docsBefore) {
+    const a = docsAfter.find((x) => x.id === d.id)!;
+    const { issuedBy: _1, ...x } = d;
+    const { issuedBy: _2, ...y } = a;
+    assert(JSON.stringify(x) === JSON.stringify(y), `document ${d.series} ${d.number} unchanged`);
+  }
+  const [skeleton] = await db().select().from(schema.events).where(eq(schema.events.id, f.eventId));
+  assert(skeleton.clientName === event.clientName && skeleton.eventDate === event.eventDate && skeleton.eventType === event.eventType, "the skeleton keeps what is printed");
+  assert(skeleton.phone === "" && skeleton.venueId === null && skeleton.contactName === null, "and nothing else");
+
+  assert((await db().select().from(schema.users).where(eq(schema.users.organizationId, f.orgA))).length === 0, "no member of A is left");
+  assert((await db().select().from(schema.users).where(eq(schema.users.id, other.pendingClient))).length === 0, "A's unanswered client invitation went");
+  assert((await db().select().from(schema.users).where(eq(schema.users.id, f.clientC))).length === 1, "an accepted client keeps their login");
+  assert((await db().select().from(schema.eventClients).where(eq(schema.eventClients.userId, f.clientC))).length === 0, "with nothing of A's shared");
+  assert((await listLocalFiles(`${f.orgA}/`)).length === 0, "A's files are gone");
+  assert((await db().select().from(schema.venueGrants).where(eq(schema.venueGrants.venueId, other.bVenue))).length === 0, "A's grant on B's venue went");
+
+  // B: unchanged but for the links to what is gone.
+  const bAfter = await rowsOfOrgs([f.orgB, f.orgB2, f.orgB3]);
+  const expected = new Map([
+    [`sketch_templates ${other.sketchId}`, "venue_id"],
+    [`appointments ${other.meetingId}`, "venue_id"],
+    [`suppliers ${other.supplierId}`, "linked_org_id"],
+  ]);
+  for (const [key, before] of bBefore) {
+    const after = bAfter.get(key);
+    assert(after !== undefined, `B's ${key} is still there`);
+    if (after === before) continue;
+    const column = expected.get(key);
+    assert(column !== undefined, `B's ${key} changed: ${before} → ${after}`);
+    const b = JSON.parse(before);
+    assert(JSON.stringify({ ...b, [column]: null }) === after, `only ${key}.${column} went null`);
+  }
+  for (const key of expected.keys()) assert(bAfter.get(key) !== bBefore.get(key), `${key} lost its link`);
+  const [bEventAfter] = await db().select().from(schema.events).where(eq(schema.events.id, other.bEvent.id));
+  assert(bEventAfter.venueId === f.venueId, "B's event still stands in A's venue");
+});
+
+step("a dry run says what would go and changes nothing", async (f) => {
+  const name = await nameOf(f.orgA);
+  await as(f.ownerA, () => closeBusiness({ confirmName: name }));
+  const before = await rowsOfOrgs([f.orgA]);
+  const report = await sweepAccounts({ now: later(31), dryRun: true });
+  const plan = report.plan?.[f.orgA];
+  assert(plan && (plan.delete.events ?? 0) > 0 && (plan.keep.billing_documents ?? 0) > 0, `a plan for A (${JSON.stringify(plan)})`);
+  assert(report.erased.length === 0, "nothing reported erased");
+  const after = await rowsOfOrgs([f.orgA]);
+  assert([...before].every(([k, v]) => after.get(k) === v) && after.size === before.size, "not a row changed");
+});
+
+step("a venue business's erase tells the linked designer", async (f) => {
+  await closeAndSweep(f.venueUserV, f.orgV);
+  const bells = await notificationsOf(f.ownerA, "link.venue_closed");
+  assert(bells.length === 1 && bells[0].eventId === f.linkedEventId, `the designer's bell names their event (${JSON.stringify(bells)})`);
+  assert((await db().select().from(schema.events).where(eq(schema.events.id, f.linkedEventId))).length === 1, "the designer's event stays");
+  assert((await db().select().from(schema.eventLinks).where(eq(schema.eventLinks.studioEventId, f.linkedEventId))).length === 0, "unlinked");
+});
+
+step("the sweep twice: nothing more, and files left behind are finished", async (f) => {
+  const stuck = `${f.orgA}/product/${randomUUID()}.webp`;
+  await writeLocalFile(stuck, Buffer.from("x"));
+  const real = fileDriver();
+  const failing = { list: real.list, remove: async (key: string) => (key === stuck ? Promise.reject(new Error("locked")) : real.remove(key)) };
+  const name = await nameOf(f.orgA);
+  await as(f.ownerA, () => closeBusiness({ confirmName: name }));
+  const first = await sweepAccounts({ now: later(31), dryRun: false, files: failing });
+  assert(first.erased.includes(f.orgA) && first.filesPending.includes(f.orgA), `the first sweep left a file (${JSON.stringify(first)})`);
+  const rowsBefore = await rowsOfOrgs([f.orgA]);
+  const second = await sweepAccounts({ now: later(31), dryRun: false });
+  assert(second.erased.length === 0, "nothing erased twice");
+  const rowsAfter = await rowsOfOrgs([f.orgA]);
+  const changed = [...rowsBefore].filter(([k, v]) => rowsAfter.get(k) !== v && !k.startsWith("organization_closures"));
+  assert(changed.length === 0, `no row changed (${changed.map(([k]) => k).join(", ")})`);
+  assert((await listLocalFiles(`${f.orgA}/`)).length === 0, "the stuck file is gone");
+  const [closure] = await db().select().from(schema.organizationClosures).where(eq(schema.organizationClosures.organizationId, f.orgA));
+  assert(closure.filesErasedAt, "and the files are stamped done");
+});
+
+step("an unused venue goes, and when retention is over nothing is left", async (f) => {
+  const other = await setUpTheOtherSide(f);
+  await closeAndSweep(f.ownerA, f.orgA);
+  await as(f.users.studioB, () => saveEvent({ ...other.bEvent, venueId: undefined, zoneIds: [] }));
+  const moved = await sweepAccounts({ now: later(31), dryRun: false });
+  assert(moved.venuesGone.includes(f.venueId), `the venue went once no event stood in it (${JSON.stringify(moved)})`);
+  const [closure] = await db().select().from(schema.organizationClosures).where(eq(schema.organizationClosures.organizationId, f.orgA));
+  const over = new Date(`${closure.retainUntil}T00:00:00Z`).getTime() + 2 * DAY;
+  const end = await sweepAccounts({ now: new Date(over), dryRun: false });
+  assert(end.retentionOver.includes(f.orgA) && end.gone.includes(f.orgA), `retention over, gone (${JSON.stringify(end)})`);
+  for (const table of ["billing_documents", "events", "design_documents", "organization_closures"]) {
+    assert((await countOf(table, f.orgA)) === 0, `${table}: nothing of A`);
+  }
+  assert((await db().select().from(schema.organizations).where(eq(schema.organizations.id, f.orgA))).length === 0, "the organisation row too");
 });
 
 // ── the runner ──────────────────────────────────────────────────────────────────────────────────

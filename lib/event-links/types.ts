@@ -47,7 +47,12 @@ export interface VenueSideLink {
   studioName?: string;
   /** The designer's event, for the hall-sketch view. Set only while active. */
   studioEventId?: string;
+  /** The designer's business closed its account (EVE-22): the link reads as ended, and why. */
+  designerGone?: boolean;
 }
+
+/** What the booking says when the linked designer's business closed. */
+export const DESIGNER_GONE = "המעצב/ת סגר/ה את החשבון";
 
 /** What a designer sees of a link: an invitation to accept, or the venue behind an event. */
 export interface StudioSideLink {

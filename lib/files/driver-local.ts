@@ -11,8 +11,8 @@
 // ⚠ SERVER ONLY, and every path that reaches it must have passed `isSafeKey` FIRST. That check is
 // what stands between a key and a path on disk; this module re-asserts it rather than trusting its
 // caller, because "the caller validates" is a rule that survives exactly until the second caller.
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, resolve, sep } from "node:path";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { dirname, relative, resolve, sep } from "node:path";
 import { isSafeKey } from "./keys";
 
 /** Where the bytes go. Relative to the project root, and gitignored — it is a bucket stand-in, not
@@ -54,6 +54,18 @@ export async function removeLocalFile(key: string): Promise<void> {
   // `force` so deleting something already gone is success, which is what the R2 driver does with a
   // 404 — the two backends have to agree about what "removed" means.
   await rm(pathFor(key), { force: true });
+}
+
+/** Every key under a prefix (a business's `<organizationId>/`), as forward-slash keys. A prefix that
+ *  has no folder yet has nothing in it. */
+export async function listLocalFiles(prefix: string): Promise<string[]> {
+  const top = resolve(ROOT, prefix);
+  if (top !== ROOT && !top.startsWith(ROOT + sep)) throw new Error("bad prefix");
+  const entries = await readdir(top, { recursive: true, withFileTypes: true }).catch(() => []);
+  return entries
+    .filter((e) => e.isFile())
+    .map((e) => relative(ROOT, resolve(e.parentPath, e.name)).split(sep).join("/"))
+    .filter((key) => key.startsWith(prefix));
 }
 
 export { ROOT as LOCAL_UPLOAD_ROOT };
