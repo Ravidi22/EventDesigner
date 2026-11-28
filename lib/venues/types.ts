@@ -61,6 +61,9 @@ export interface Venue {
   owned?: boolean;
   /** Whose it is, when it is somebody else's. */
   ownerName?: string;
+  /** Its owner closed their business (EVE-22): it keeps the events already in it, read-only, and
+   *  takes no new one — the pickers offer it only to an event that already stands in it. */
+  ownerClosed?: boolean;
 }
 
 /** A property on the platform not on this business's list yet (fetchVenueDirectory). */

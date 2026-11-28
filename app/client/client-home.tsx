@@ -63,41 +63,57 @@ function EventList({ events }: { events: ClientEvent[] }) {
     <>
       <h1 className="font-display text-h1 text-ink text-balance">האירוע שלכם</h1>
       <div className="mt-6 flex flex-col gap-4">
-        {events.map((e) => (
-          <Link
-            key={e.id}
-            href={`/client/events/${e.id}`}
-            className="group block rounded-lg border border-border bg-surface p-6 transition-shadow hover:shadow-floating focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-          >
-            <p className="font-label text-[10px] font-medium uppercase tracking-[3px] text-quiet" dir="ltr">
-              {e.studioName}
-            </p>
-            <h2 className="mt-2 font-display text-h2 text-ink">
-              {e.venueName ?? "המתחם טרם נבחר"}
-            </h2>
-            <dl className="mt-4 flex flex-col gap-2.5 text-sm text-ink-soft">
-              <Row icon={CalendarDays} label="תאריך">
-                {formatEventDate(e.date)}
-                {e.time ? ` · ${e.time}` : ""}
-              </Row>
-              {e.where && (
-                <Row icon={MapPin} label="איפה">
-                  {e.where}
-                </Row>
-              )}
-              {e.guests > 0 && (
-                <Row icon={Users} label="אורחים">
-                  <span className="nums">{e.guests}</span>
-                </Row>
-              )}
-            </dl>
-            <p className="mt-5 flex items-center justify-between gap-3 border-t border-border pt-4 text-sm font-semibold text-accent">
-              לסקיצה של האירוע — לצפייה ולהצעת שינויים
-              <ChevronLeft className="h-4 w-4 shrink-0 transition-transform group-hover:-translate-x-0.5" strokeWidth={1.75} />
-            </p>
-          </Link>
-        ))}
+        {events.map((e) =>
+          // A closed studio's event stays on the list, saying so (EVE-22) — it opens nothing any more.
+          e.studioClosed ? (
+            <div key={e.id} className="block rounded-lg border border-border bg-surface p-6">
+              <EventFacts event={e} />
+              <p className="mt-5 border-t border-border pt-4 text-sm text-ink-soft">
+                הסטודיו סגר את החשבון ב־Eve, והסקיצה כבר לא זמינה כאן. שאלות על האירוע — לסטודיו.
+              </p>
+            </div>
+          ) : (
+            <Link
+              key={e.id}
+              href={`/client/events/${e.id}`}
+              className="group block rounded-lg border border-border bg-surface p-6 transition-shadow hover:shadow-floating focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              <EventFacts event={e} />
+              <p className="mt-5 flex items-center justify-between gap-3 border-t border-border pt-4 text-sm font-semibold text-accent">
+                לסקיצה של האירוע — לצפייה ולהצעת שינויים
+                <ChevronLeft className="h-4 w-4 shrink-0 transition-transform group-hover:-translate-x-0.5" strokeWidth={1.75} />
+              </p>
+            </Link>
+          ),
+        )}
       </div>
+    </>
+  );
+}
+
+function EventFacts({ event: e }: { event: ClientEvent }) {
+  return (
+    <>
+      <p className="font-label text-[10px] font-medium uppercase tracking-[3px] text-quiet" dir="ltr">
+        {e.studioName}
+      </p>
+      <h2 className="mt-2 font-display text-h2 text-ink">{e.venueName ?? "המתחם טרם נבחר"}</h2>
+      <dl className="mt-4 flex flex-col gap-2.5 text-sm text-ink-soft">
+        <Row icon={CalendarDays} label="תאריך">
+          {formatEventDate(e.date)}
+          {e.time ? ` · ${e.time}` : ""}
+        </Row>
+        {e.where && (
+          <Row icon={MapPin} label="איפה">
+            {e.where}
+          </Row>
+        )}
+        {e.guests > 0 && (
+          <Row icon={Users} label="אורחים">
+            <span className="nums">{e.guests}</span>
+          </Row>
+        )}
+      </dl>
     </>
   );
 }

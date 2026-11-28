@@ -9,6 +9,7 @@ import {
   nameConfirms,
   retainUntilOf,
   retentionOver,
+  eraseRunRefusal,
   skeletonPatch,
 } from "./rules";
 
@@ -59,5 +60,16 @@ assert(patch.contact_name === null, "a nullable text is blanked to null");
 assert(patch.venue_id === null, "the venue link is cut (the venue may go)");
 assert(!("id" in patch) && !("client_name" in patch), "kept columns are not in the patch");
 assert(!("guests" in patch) && !("archived" in patch), "numbers and switches are not personal and stay");
+
+// A name copied off the screen carries the isolate marks the label wraps it in (FSI … PDI).
+assert(nameConfirms(`\u2068סטודיו (בדיקה)\u2069`, "סטודיו (בדיקה)"), "a pasted name with its isolate marks confirms");
+assert(nameConfirms(`\u200fסטודיו\u200e`, "סטודיו"), "and so do stray direction marks");
+assert(!nameConfirms(`\u2068\u2069`, "סטודיו"), "marks alone are still blank");
+
+// The erase script against production: only with the bucket's driver, and never with a made-up clock.
+assert(eraseRunRefusal({ prod: true, driver: "local", nowGiven: false }) !== null, "production with the local folder is refused");
+assert(eraseRunRefusal({ prod: true, driver: "r2", nowGiven: true }) !== null, "production with --now is refused");
+assert(eraseRunRefusal({ prod: true, driver: "r2", nowGiven: false }) === null, "production with the bucket runs");
+assert(eraseRunRefusal({ prod: false, driver: "local", nowGiven: true }) === null, "a local run may use --now and the folder");
 
 console.log("check:account — ok");

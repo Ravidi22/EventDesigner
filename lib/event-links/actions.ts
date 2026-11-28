@@ -58,7 +58,9 @@ export async function inviteDesigner(venueEventId: string, email: string): Promi
   if (!EMAIL_RE.test(address)) return { error: "כתובת אימייל לא תקינה" };
 
   const existing = await linkRowOf(venueEventId);
-  if (existing?.state === "active") return { error: "האירוע כבר מקושר למעצב — יש לבטל את הקישור קודם" };
+  // A link to a designer whose business closed reads as ended (reads.ts) — the hall may link another.
+  const designerGone = !!existing?.studioOrgId && !!(await closureOf(existing.studioOrgId));
+  if (existing?.state === "active" && !designerGone) return { error: "האירוע כבר מקושר למעצב — יש לבטל את הקישור קודם" };
 
   const [designer] = await db()
     .select({ orgId: users.organizationId, orgKind: organizations.kind })
@@ -119,6 +121,7 @@ export async function fetchDesignerSketch(venueEventId: string): Promise<HallSke
   await ownBooking(actor.organizationId, venueEventId);
   const link = await linkRowOf(venueEventId);
   if (!link || link.state !== "active" || !link.studioEventId || !link.studioOrgId) return null;
+  if (await closureOf(link.studioOrgId)) return null;
   return designerHallSketch(link.studioOrgId, link.studioEventId);
 }
 

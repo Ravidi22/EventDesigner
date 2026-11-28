@@ -11,7 +11,7 @@
 import { and, eq, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { eventClients, events, users } from "@/lib/db/schema";
-import { forgetPerson, peopleOf, recordAudit, type Database } from "@/lib/audit/write";
+import { forgetPerson, forgetPersonEverywhere, peopleOf, recordAudit, type Database } from "@/lib/audit/write";
 import { personToken } from "@/lib/audit/render";
 import { disconnect } from "@/lib/google/sync";
 import { notify, studioRecipients } from "@/lib/notifications/write";
@@ -67,8 +67,10 @@ export async function beforePersonErased(database: Database, person: PersonRow, 
     }
     return;
   }
-  // A client: every studio whose event they were on hears it once per event. Their records about
-  // the client are the studio's own and are not touched.
+  // A client: their name leaves every studio's log (they are a token there, like a member), and
+  // every studio whose event they were on hears it once per event. The studio's own records about
+  // the client — the event's name and phone, its documents — are its own and are not touched.
+  await forgetPersonEverywhere(database, person.id);
   const shared = await database
     .select({ eventId: events.id, organizationId: events.organizationId, eventLabel: events.clientName })
     .from(eventClients)

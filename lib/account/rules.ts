@@ -69,7 +69,9 @@ export function retentionOver(retainUntil: string | null, now: Date): boolean {
   return now.toISOString().slice(0, 10) > retainUntil;
 }
 
-const squeeze = (s: string) => s.trim().replace(/\s+/g, " ");
+// Direction marks and isolates (LRM, RLM, LRE…RLO, LRI…PDI) are invisible: a name copied off a
+// label that isolates it carries them, and they say nothing about the name.
+const squeeze = (s: string) => s.replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "").trim().replace(/\s+/g, " ");
 
 /** The owner types the business's name to close it. Surrounding and doubled spaces are forgiven;
  *  anything else — a letter, niqqud, case — must match. A blank name never confirms. */
@@ -109,4 +111,14 @@ export function skeletonPatch(columns: readonly ColumnInfo[]): Record<string, nu
     patch[col.name] = col.notNull ? "" : null;
   }
   return patch;
+}
+
+/** Why the erase script must not run against production as asked — null when it may. The local
+ *  folder there would list nothing and stamp the files done while every object stays in the bucket;
+ *  a made-up clock (--now) would erase businesses still inside their grace period. */
+export function eraseRunRefusal(input: { prod: boolean; driver: "local" | "r2"; nowGiven: boolean }): string | null {
+  if (!input.prod) return null;
+  if (input.driver !== "r2") return "production needs the R2 file driver (its variables are not set here): the local folder would list nothing and leave every file in the bucket";
+  if (input.nowGiven) return "--now is for local runs only: in production it would erase businesses still inside their 30 days";
+  return null;
 }

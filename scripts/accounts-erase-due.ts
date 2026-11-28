@@ -28,9 +28,17 @@ async function main() {
     console.error(`DATABASE_URL points at ${host}. This sweep deletes businesses: local only, or --prod-ok with DATABASE_URL set to PROD_DIRECT_URL.`);
     process.exit(2);
   }
-  console.log(`database: ${prod ? "PRODUCTION" : host}`);
-
   const { sweepAccounts } = await import("@/lib/account/erase");
+  const { eraseRunRefusal } = await import("@/lib/account/rules");
+  const { fileDriver } = await import("@/lib/files/driver");
+  const driver = fileDriver().name;
+  const refused = eraseRunRefusal({ prod, driver, nowGiven: process.argv.includes("--now") });
+  if (refused) {
+    console.error(refused);
+    process.exit(2);
+  }
+  console.log(`database: ${prod ? "PRODUCTION" : host} · files: ${driver}`);
+
   const now = arg("--now") ? new Date(arg("--now")!) : new Date();
   if (Number.isNaN(now.getTime())) throw new Error("--now is not a date");
   const dryRun = !process.argv.includes("--yes");

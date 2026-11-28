@@ -24,6 +24,7 @@ import {
   eventClients,
   eventZones,
   events,
+  organizationClosures,
   organizations,
   sketchProposals,
   venues,
@@ -68,6 +69,7 @@ export async function fetchMyEvents(): Promise<ClientEvent[]> {
       guests: events.guests,
       venueName: venues.name,
       studioName: organizations.name,
+      closedAt: organizationClosures.closedAt,
     })
     .from(eventClients)
     // The join IS the permission check. An event with no row in event_clients for this user simply
@@ -75,7 +77,10 @@ export async function fetchMyEvents(): Promise<ClientEvent[]> {
     .innerJoin(events, eq(events.id, eventClients.eventId))
     .leftJoin(venues, eq(venues.id, events.venueId))
     .leftJoin(organizations, eq(organizations.id, events.organizationId))
-    .where(and(eq(eventClients.userId, session.userId), eq(events.archived, false), notClosed(events.organizationId)))
+    // A closed studio's event stays on the list, saying so (spec §5.3) — it is not a link any more:
+    // every other read of it (the sketch, the 3D) answers as for an unknown event.
+    .leftJoin(organizationClosures, eq(organizationClosures.organizationId, events.organizationId))
+    .where(and(eq(eventClients.userId, session.userId), eq(events.archived, false)))
     .orderBy(asc(events.eventDate));
 
   return rows.map((r) => ({
@@ -86,6 +91,7 @@ export async function fetchMyEvents(): Promise<ClientEvent[]> {
     guests: r.guests,
     venueName: r.venueName ?? undefined,
     studioName: r.studioName ?? "",
+    ...(r.closedAt ? { studioClosed: true } : {}),
   }));
 }
 

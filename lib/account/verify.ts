@@ -29,7 +29,9 @@ import { mintSceneLink } from "@/lib/scene/actions";
 import { sceneByToken } from "@/lib/scene/share-read";
 import { fetchMyEvents } from "@/lib/client-portal/actions";
 import { fetchMarketplace } from "@/lib/marketplace/actions";
-import { fetchVenueDirectory, followVenue } from "@/lib/venues/actions";
+import { fetchVenueDirectory, fetchVenues, followVenue, renameVenue } from "@/lib/venues/actions";
+import { closeFinalCount } from "@/lib/hosting/actions";
+import { fetchDesignerSketch, inviteDesigner } from "@/lib/event-links/actions";
 import { sweepAccounts } from "@/lib/account/erase";
 import { ACCOUNT_TABLES, isSecretColumn } from "@/lib/account/tables";
 import { exportData } from "@/lib/account/export";
@@ -96,6 +98,12 @@ async function notificationsOf(userId: string, kind: string) {
     .where(and(eq(schema.notifications.userId, userId), eq(schema.notifications.kind, kind as never)));
 }
 
+/** Audit rows that still carry this person's NAME (a wiped one keeps the key with a null name). */
+async function namedInAudit(userId: string): Promise<number> {
+  const rows = (await db().execute(sql`select count(*)::int as n from audit_log where people -> ${userId} ->> 'name' is not null`)) as unknown as { n: number }[];
+  return rows[0].n;
+}
+
 // ── the people ──────────────────────────────────────────────────────────────────────────────────
 
 step("a designer deletes their own account", async (f) => {
@@ -124,6 +132,7 @@ step("the owner cannot delete their account", async (f) => {
 
 step("a client deletes their login", async (f) => {
   const [before] = await db().select().from(schema.events).where(eq(schema.events.id, f.eventId));
+  assert((await namedInAudit(f.clientC)) > 0, "before: a studio's log names the client (the share)");
   const { cookie, password } = await signInWithPassword(f.clientC);
   const res = await authPost("/delete-user", { password }, cookie);
   assert(res.status === 200, `deleted (${res.status} ${await res.text()})`);
@@ -132,6 +141,7 @@ step("a client deletes their login", async (f) => {
   const [after] = await db().select().from(schema.events).where(eq(schema.events.id, f.eventId));
   assert(after.clientName === before.clientName && after.phone === before.phone, "the studio's event is untouched");
   assert((await notificationsOf(f.ownerA, "client.left")).length >= 1, "the studio's bell rang");
+  assert((await namedInAudit(f.clientC)) === 0, "the client's name is gone from every studio's log");
 });
 
 step("a member who issued a billing document can be removed", async (f) => {
@@ -201,12 +211,14 @@ step("closing locks the business", async (f) => {
   assert((await sceneByToken(token)) !== null, "before: the link opens");
   await signInWithPassword(f.memberA);
 
+  assert((await namedInAudit(f.pendingMemberA)) > 0, "before: the log names the pending invitation");
   const nameA = await nameOf(f.orgA);
   const closed = await as(f.ownerA, () => closeBusiness({ confirmName: `  ${nameA} ` }));
   assert("eraseAfter" in closed, `closed (${JSON.stringify(closed)})`);
   const days = (Date.parse(closed.eraseAfter) - Date.now()) / 86400000;
   assert(days > 29.9 && days <= 30, `erase in 30 days (${days})`);
 
+  assert((await namedInAudit(f.pendingMemberA)) === 0, "the deleted invitation's name left the log");
   const sessions = await db().select().from(schema.authSessions).where(eq(schema.authSessions.userId, f.memberA));
   assert(sessions.length === 0, "the member was signed out");
   // What a member's open tab would send: the drawing as it stands.
@@ -218,7 +230,8 @@ step("closing locks the business", async (f) => {
 
   assert((await sceneByToken(token)) === null, "the 3D link no longer opens");
   const mine = await as(f.clientC, () => fetchMyEvents());
-  assert(!mine.some((e) => e.id === f.eventId), "the client's portal no longer lists A's event");
+  const listed = mine.find((e) => e.id === f.eventId);
+  assert(listed?.studioClosed === true, `the client's portal says the studio closed (${JSON.stringify(listed)})`);
 
   assert(!(await as(f.users.venueB, () => fetchVenueDirectory())).some((v) => v.id === f.venueId), "A's venue left the directory");
   assert((await refusalOf(as(f.users.venueB, () => followVenue(f.spareVenueId)))) instanceof Error, "nobody new can follow A's venue");
@@ -250,6 +263,53 @@ step("the wrong name does not close, and a closed business reopens", async (f) =
   assert((await refusalOf(as(f.memberA, () => fetchEvents()))) === null, "open again for the members");
   const log = await as(f.ownerA, () => fetchAuditLog());
   assert(log.rows.some((r) => r.action === "business.closed") && log.rows.some((r) => r.action === "business.reopened"), "both in the log");
+});
+
+step("a closed designer's link stops following, and the hall may link another", async (f) => {
+  const guestsOf = async () =>
+    (await db().select({ guests: schema.events.guests }).from(schema.events).where(eq(schema.events.id, f.linkedEventId)))[0].guests;
+  const before = await guestsOf();
+  await as(f.ownerA, async () => closeBusiness({ confirmName: await nameOf(f.orgA) }));
+  await as(f.venueUserV, () => closeFinalCount(f.bookingEventId, before + 37));
+  assert((await guestsOf()) === before, "the closed designer's event did not follow the booking");
+  assert((await as(f.venueUserV, () => fetchDesignerSketch(f.bookingEventId))) === null, "the hall no longer reads the closed designer's sketch");
+  const again = await as(f.venueUserV, () => inviteDesigner(f.bookingEventId, `another-${randomUUID()}@example.test`));
+  assert(!("error" in again), `the hall may invite another designer (${JSON.stringify(again)})`);
+});
+
+step("an erased business cannot be reopened, and its closure stays", async (f) => {
+  await as(f.ownerA, async () => closeBusiness({ confirmName: await nameOf(f.orgA) }));
+  // The sweep committed while the owner's reopen was on its way: the closure is erased by now.
+  await db().update(schema.organizationClosures).set({ erasedAt: new Date() }).where(eq(schema.organizationClosures.organizationId, f.orgA));
+  const answer = await as(f.ownerA, () => reopenBusiness());
+  assert("error" in answer, `refused (${JSON.stringify(answer)})`);
+  const left = await db().select().from(schema.organizationClosures).where(eq(schema.organizationClosures.organizationId, f.orgA));
+  assert(left.length === 1, "the erased business's closure is kept");
+});
+
+step("a closed business's venue: its guests only read it, and the pickers mark it", async (f) => {
+  await db().insert(schema.venueGrants).values({
+    id: randomUUID(),
+    venueId: f.venueId,
+    grantorOrgId: f.orgA,
+    granteeOrgId: f.orgB,
+    granteeEmail: `guest-${randomUUID()}@example.test`,
+    granteeName: "סטודיו ב",
+    kind: "guest",
+    role: "manager",
+    state: "active",
+  } as never);
+  await as(f.users.studioB, () => saveEvent(aNewEvent(f.venueId, "אירוע של ב באולם של א")));
+  const [{ name }] = await db().select({ name: schema.venues.name }).from(schema.venues).where(eq(schema.venues.id, f.venueId));
+  await as(f.users.studioB, () => renameVenue(f.venueId, name));
+  await as(f.ownerA, async () => closeBusiness({ confirmName: await nameOf(f.orgA) }));
+  const renamed = await refusalOf(as(f.users.studioB, () => renameVenue(f.venueId, `${name} ב`)));
+  assert(renamed instanceof Error, "a guest manager can no longer change the closed business's venue");
+  const listed = (await as(f.users.studioB, () => fetchVenues())).find((v) => v.id === f.venueId);
+  assert(
+    listed?.access === "viewer" && listed.ownerClosed === true,
+    `B still reads it, marked closed (${JSON.stringify(listed && { access: listed.access, ownerClosed: listed.ownerClosed })})`,
+  );
 });
 
 // ── the erase ───────────────────────────────────────────────────────────────────────────────────
@@ -415,6 +475,31 @@ step("the sweep twice: nothing more, and files left behind are finished", async 
   assert(closure.filesErasedAt, "and the files are stamped done");
 });
 
+step("the erase ends the erased designer's links for good", async (f) => {
+  await closeAndSweep(f.ownerA, f.orgA);
+  const [link] = await db().select().from(schema.eventLinks).where(eq(schema.eventLinks.id, f.linkId));
+  assert(
+    link?.state === "ended" && link.studioEventId === null,
+    `the link is ended and lets go of the event (${JSON.stringify(link && { state: link.state, studioEventId: link.studioEventId })})`,
+  );
+});
+
+step("a business whose files cannot be listed does not stop the sweep", async (f) => {
+  const real = fileDriver();
+  const broken = {
+    list: (prefix: string) => (prefix.startsWith(f.orgA) ? Promise.reject(new Error("list failed")) : real.list(prefix)),
+    remove: real.remove,
+  };
+  await as(f.ownerA, async () => closeBusiness({ confirmName: await nameOf(f.orgA) }));
+  await as(f.supplierUserS, async () => closeBusiness({ confirmName: await nameOf(f.orgS) }));
+  const report = await sweepAccounts({ now: later(31), dryRun: false, files: broken });
+  assert(report.erased.includes(f.orgA) && report.erased.includes(f.orgS), `both erased (${JSON.stringify(report)})`);
+  assert(report.filesPending.includes(f.orgA), "A's files wait for the next run");
+  // S had nothing to keep, so it may be gone altogether — either way its files were finished.
+  const [s] = await db().select().from(schema.organizationClosures).where(eq(schema.organizationClosures.organizationId, f.orgS));
+  assert(!report.filesPending.includes(f.orgS) && (report.gone.includes(f.orgS) || s?.filesErasedAt), "S's files were finished all the same");
+});
+
 step("an unused venue goes, and when retention is over nothing is left", async (f) => {
   const other = await setUpTheOtherSide(f);
   await closeAndSweep(f.ownerA, f.orgA);
@@ -423,12 +508,15 @@ step("an unused venue goes, and when retention is over nothing is left", async (
   assert(moved.venuesGone.includes(f.venueId), `the venue went once no event stood in it (${JSON.stringify(moved)})`);
   const [closure] = await db().select().from(schema.organizationClosures).where(eq(schema.organizationClosures.organizationId, f.orgA));
   const over = new Date(`${closure.retainUntil}T00:00:00Z`).getTime() + 2 * DAY;
+  // A file a failed venue delete left behind, with no record of it anywhere.
+  await writeLocalFile(`${f.orgA}/underlay/${randomUUID()}.webp`, Buffer.from("x"));
   const end = await sweepAccounts({ now: new Date(over), dryRun: false });
   assert(end.retentionOver.includes(f.orgA) && end.gone.includes(f.orgA), `retention over, gone (${JSON.stringify(end)})`);
   for (const table of ["billing_documents", "events", "design_documents", "organization_closures"]) {
     assert((await countOf(table, f.orgA)) === 0, `${table}: nothing of A`);
   }
   assert((await db().select().from(schema.organizations).where(eq(schema.organizations.id, f.orgA))).length === 0, "the organisation row too");
+  assert((await listLocalFiles(`${f.orgA}/`)).length === 0, "and nothing of A is left in storage");
 });
 
 // ── the export ──────────────────────────────────────────────────────────────────────────────────

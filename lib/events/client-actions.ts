@@ -20,7 +20,7 @@ import { emailConfig } from "@/lib/email/config";
 import { sendEmail } from "@/lib/email/send";
 import { clientInvitationEmail } from "@/lib/email/templates";
 import { notify } from "@/lib/notifications/write";
-import { peopleOf, recordAudit } from "@/lib/audit/write";
+import { forgetPersonEverywhere, peopleOf, recordAudit } from "@/lib/audit/write";
 import { personToken } from "@/lib/audit/render";
 import type { ClientRole } from "@/lib/client-portal/types";
 
@@ -271,7 +271,11 @@ export async function unshareEventClient(eventId: string, userId: string): Promi
     .where(eq(eventClients.userId, userId))
     .limit(1);
   if (!stillShared) {
-    await database.delete(users).where(and(eq(users.id, userId), eq(users.kind, "client"), eq(users.state, "pending")));
+    const gone = await database
+      .delete(users)
+      .where(and(eq(users.id, userId), eq(users.kind, "client"), eq(users.state, "pending")))
+      .returning({ id: users.id });
+    if (gone.length) await forgetPersonEverywhere(database, userId);
   }
   return clientsOf(event.id);
 }

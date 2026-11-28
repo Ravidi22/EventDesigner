@@ -406,7 +406,11 @@ export function EventForm({
                 value={venueId}
                 onChange={changeVenue}
                 aria-label="מתחם"
-                options={[{ value: "", label: "טרם נבחר" }, ...venues.map((v) => ({ value: v.id, label: v.name }))]}
+                options={[
+                  { value: "", label: "טרם נבחר" },
+                  // A closed business's venue takes no new event (EVE-22): offered only to the event already in it.
+                  ...venues.filter((v) => !v.ownerClosed || v.id === event?.venueId).map((v) => ({ value: v.id, label: v.name })),
+                ]}
                 className="w-full"
               />
             </div>

@@ -92,7 +92,13 @@ export async function sweepAccounts(input: { now: Date; dryRun: boolean; files?:
     .from(organizationClosures)
     .where(and(isNotNull(organizationClosures.erasedAt), isNull(organizationClosures.filesErasedAt)));
   for (const { id } of pending) {
-    if (!(await eraseFiles(id, files))) report.filesPending.push(id);
+    // One business's storage failing (a list that throws) leaves its files for the next run and
+    // never stops the sweep for the others.
+    const done = await eraseFiles(id, files).catch((e) => {
+      console.error("files of", id, e);
+      return false;
+    });
+    if (!done) report.filesPending.push(id);
   }
 
   // 5. Nothing left.
@@ -100,7 +106,13 @@ export async function sweepAccounts(input: { now: Date; dryRun: boolean; files?:
     .select({ id: organizationClosures.organizationId })
     .from(organizationClosures)
     .where(and(isNotNull(organizationClosures.erasedAt), isNotNull(organizationClosures.filesErasedAt)));
-  for (const { id } of erased) if (await goneIfNothingLeft(id, files)) report.gone.push(id);
+  for (const { id } of erased) {
+    const gone = await goneIfNothingLeft(id, files).catch((e) => {
+      console.error("could not finish", id, e);
+      return false;
+    });
+    if (gone) report.gone.push(id);
+  }
 
   return report;
 }
@@ -259,6 +271,10 @@ async function eraseBusiness(organizationId: string, now: Date, planOnly = false
     // inbox nobody reads. Cut them here (the anti-goal's one allowance: a link to what is gone).
     await tx.update(suppliers).set({ linkedOrgId: null }).where(eq(suppliers.linkedOrgId, organizationId));
     await tx.update(orders).set({ supplierOrgId: null }).where(eq(orders.supplierOrgId, organizationId));
+    // A hall's link to an erased designer ends for good and lets go of the designer's event — a
+    // retained skeleton must never follow the booking again (its documents print it as issued), and
+    // the hall may link another designer.
+    await tx.update(eventLinks).set({ state: "ended", studioEventId: null }).where(eq(eventLinks.studioOrgId, organizationId));
 
     if (planOnly) throw Object.assign(new DryRun(), { plan });
 
@@ -384,6 +400,10 @@ async function goneIfNothingLeft(organizationId: string, files: Files): Promise<
   const [venue] = await db().select({ id: venues.id }).from(venues).where(eq(venues.organizationId, organizationId)).limit(1);
   if (doc || venue) return false;
   await removeIssuerFiles(organizationId, files);
+  // Whatever is still under the prefix — a kept venue's file or an issuer's logo whose delete failed
+  // earlier, with no row left to name it — goes now; the business stays until it has.
+  const { failed } = await removePrefix(files, `${organizationId}/`, new Set());
+  if (failed > 0) return false;
   await db().transaction(async (tx) => {
     // A skeleton event cannot be left without its documents (they went with retention), but say so.
     await tx.delete(events).where(eq(events.organizationId, organizationId));

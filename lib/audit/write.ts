@@ -39,6 +39,14 @@ export async function peopleOf(database: Database, ids: readonly (string | null 
 
 /** Erase a person from the business's log: their name goes from every row's `people`; the rows stay,
  *  and every line they appear in reads "former member" (or "former client"). */
+/** A client belongs to no business and may be named in many businesses' logs: wipe the name in all. */
+export async function forgetPersonEverywhere(database: Database, userId: string): Promise<void> {
+  await database
+    .update(auditLog)
+    .set({ people: sql`jsonb_set(${auditLog.people}, ARRAY[${userId}, 'name'], 'null'::jsonb)` })
+    .where(sql`${auditLog.people} ? ${userId}`);
+}
+
 export async function forgetPerson(database: Database, organizationId: string, userId: string): Promise<void> {
   await database
     .update(auditLog)

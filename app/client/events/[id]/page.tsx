@@ -8,6 +8,7 @@ import { formatEventDate } from "@/lib/events/types";
 import { Wordmark } from "@/components/wordmark";
 import { NotificationBell } from "@/components/notification-bell";
 import { ClientAccountMenu } from "@/components/client-account-menu";
+import { StudioClosed, closedStudioEvent } from "../../studio-closed";
 import { hasPasswordLogin } from "@/lib/auth/logins";
 import { BackToEvents, ClientSketchView } from "./client-sketch";
 
@@ -23,7 +24,12 @@ export default async function ClientEventPage({ params }: { params: Promise<{ id
   const { id } = await params;
   const sketch = await fetchClientSketch(id).catch(() => null);
   const needsPassword = await hasPasswordLogin(session.userId);
-  if (!sketch) notFound();
+  if (!sketch) {
+    // A studio that closed its business answers as for an unknown event; say why (EVE-22).
+    const gone = await closedStudioEvent(id);
+    if (gone) return <StudioClosed studioName={gone.studioName} />;
+    notFound();
+  }
   const { event, outcome, proposal } = sketch;
   const studio = event.studio;
 

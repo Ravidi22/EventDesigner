@@ -72,7 +72,7 @@ function today(): string {
  * caller's organisation by a manager. `ownerOrgId` is what every WRITE below scopes by: a guest
  * editor's save lands under the property's own organisation, never under the guest's.
  */
-async function venueRoleFor(actor: Actor, venueId: string): Promise<{ role: VenueRole; ownerOrgId: string } | null> {
+async function venueRoleFor(actor: Actor, venueId: string): Promise<{ role: VenueRole; ownerOrgId: string; ownerClosed: boolean } | null> {
   const database = db();
 
   const [venue] = await database
@@ -121,7 +121,10 @@ async function venueRoleFor(actor: Actor, venueId: string): Promise<{ role: Venu
       if (!orgGrant || atLeast(role, orgGrant)) orgGrant = role;
     }
   }
-  return { role: resolveVenueRole({ ownsVenue, reachesAll, memberGrant, orgGrant }), ownerOrgId: venue.organizationId };
+  // Somebody else's closed business: read-only to every guest (EVE-22, spec §5.3). Its own people
+  // never get here — the closure stops them at currentActor().
+  const ownerClosed = !ownsVenue && !!(await closureOf(venue.organizationId));
+  return { role: resolveVenueRole({ ownsVenue, reachesAll, memberGrant, orgGrant, ownerClosed }), ownerOrgId: venue.organizationId, ownerClosed };
 }
 
 /**
@@ -182,7 +185,13 @@ export async function fetchVenues(): Promise<Venue[]> {
     rows.map(async ({ venue, ownerName }) => {
       const found = await venueRoleFor(actor, venue.id);
       const owned = venue.organizationId === actor.organizationId;
-      return { ...toVenue(venue), access: found?.role ?? "viewer", owned, ownerName: owned ? undefined : (ownerName ?? undefined) };
+      return {
+        ...toVenue(venue),
+        access: found?.role ?? "viewer",
+        owned,
+        ownerName: owned ? undefined : (ownerName ?? undefined),
+        ...(found?.ownerClosed ? { ownerClosed: true } : {}),
+      };
     }),
   );
 }

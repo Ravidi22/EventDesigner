@@ -17,6 +17,9 @@ export interface ClientEvent {
   venueName?: string;
   /** Which studio is designing it. A client can, in principle, have events with two. */
   studioName: string;
+  /** The studio closed its business (EVE-22): the event stays on the list, saying so, and opens no
+   *  sketch or 3D any more. */
+  studioClosed?: boolean;
 }
 
 /** event_clients.role: an editor proposes changes to the sketch, a viewer only looks. */

@@ -3,12 +3,12 @@
 // every studio action refuses (lib/db/org.ts), every studio page goes to /closed, its outward faces
 // go dark (lib/account/closure.ts `notClosed`) — and the sweep erases it after the grace period
 // (lib/account/erase.ts). Until then the owner may reopen it.
-import { and, count, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { auditLog, authSessions, billingDocuments, events, organizationClosures, organizations, products, users, venues } from "@/lib/db/schema";
 import { closedMember, currentActor } from "@/lib/db/org";
 import { revalidateShell } from "@/lib/db/revalidate";
-import { peopleOf, recordAudit } from "@/lib/audit/write";
+import { forgetPerson, peopleOf, recordAudit } from "@/lib/audit/write";
 import { actorLabel } from "@/lib/audit/render";
 import { fileDriver } from "@/lib/files/driver";
 import { sendEmail } from "@/lib/email/send";
@@ -99,7 +99,12 @@ export async function closeBusiness(input: { confirmName: string }): Promise<{ e
       .where(and(eq(users.organizationId, actor.organizationId), ne(users.id, ownerId)));
     if (others.length) await tx.delete(authSessions).where(inArray(authSessions.userId, others.map((u) => u.id)));
     // An invitation accepted now would make a member of a closed business (DECIDE-3).
-    await tx.delete(users).where(and(eq(users.organizationId, actor.organizationId), eq(users.state, "pending")));
+    const invited = await tx
+      .delete(users)
+      .where(and(eq(users.organizationId, actor.organizationId), eq(users.state, "pending")))
+      .returning({ id: users.id });
+    // Their names leave the log with their rows (the "member.invited" lines stay, as former people).
+    for (const p of invited) await forgetPerson(tx, actor.organizationId, p.id);
     await recordAudit(tx, {
       organizationId: actor.organizationId,
       actorUserId: ownerId,
@@ -126,12 +131,13 @@ export async function reopenBusiness(): Promise<{ ok: true } | { error: string }
   if (member.role !== "owner" || !member.userId) return { error: "רק הבעלים יכולים לפתוח את העסק מחדש" };
   const ownerId = member.userId;
   const reopened = await db().transaction(async (tx) => {
+    // Never an erased business's closure: it is the tombstone the retained documents print from. The
+    // sweep may have committed while this reopen waited on the row.
     const gone = await tx
       .delete(organizationClosures)
-      .where(eq(organizationClosures.organizationId, member.organizationId))
-      .returning({ erasedAt: organizationClosures.erasedAt });
-    // An erased business has no members left to ask, but say no all the same.
-    if (gone.length === 0 || gone[0].erasedAt) return false;
+      .where(and(eq(organizationClosures.organizationId, member.organizationId), isNull(organizationClosures.erasedAt)))
+      .returning({ organizationId: organizationClosures.organizationId });
+    if (gone.length === 0) return false;
     await recordAudit(tx, {
       organizationId: member.organizationId,
       actorUserId: ownerId,
