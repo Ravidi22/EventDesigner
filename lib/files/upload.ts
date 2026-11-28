@@ -12,6 +12,7 @@
 import { requestUpload } from "./actions";
 import { ALLOWED_TYPES, MAX_BYTES, type FileKind } from "./keys";
 import { prepareImage } from "./shrink";
+import { uploadOriginal } from "./shrink-rules";
 
 export interface UploadedFile {
   /** Store this. */
@@ -43,7 +44,12 @@ export async function uploadFile(file: File, kind: FileKind): Promise<UploadedFi
 
   // Drawn again at the size its kind needs, with no metadata — a phone photo's GPS location never
   // leaves the device, and a 12 MB original is not every viewer's download (EVE-25, ./shrink.ts).
-  const ready = await prepareImage(file, kind);
+  const redrawn = await prepareImage(file, kind);
+  // Never something worse than what was picked (./shrink-rules.ts uploadOriginal), and the server's
+  // limits checked again on what actually goes up.
+  const ready = uploadOriginal(file.type, file.size, redrawn.size) ? file : redrawn;
+  const late = fileProblem(ready);
+  if (late) throw new Error(late);
 
   const ticket = await requestUpload({ kind, contentType: ready.type, size: ready.size });
 

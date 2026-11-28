@@ -35,6 +35,27 @@ try {
     ].join("\n"),
   );
   writeFileSync(join(tmp, "lib", "x", "plain.ts"), "export async function notServer() {}");
+  // Every other way to export an action (PR #2 review): a list, a rename, a default, let/var.
+  writeFileSync(
+    join(tmp, "lib", "x", "more.ts"),
+    [
+      "// a comment first",
+      "'use server'",
+      "async function listed() {}",
+      "async function inner() {}",
+      "export { listed, inner as renamed };",
+      "export default async function () {}",
+      "export let late = async () => {};",
+      "export type { NotAnAction } from './actions';",
+      "export interface Shape { a: number }",
+    ].join(String.fromCharCode(10)),
+  );
+  const more = serverActions(tmp).filter((k) => k.startsWith("lib/x/more.ts#"));
+  assert(
+    JSON.stringify(more) === JSON.stringify(["lib/x/more.ts#default", "lib/x/more.ts#late", "lib/x/more.ts#listed", "lib/x/more.ts#renamed"]),
+    `export lists, renames, a default and let are found (${more.join(", ")})`,
+  );
+  rmSync(join(tmp, "lib", "x", "more.ts"));
   const found = serverActions(tmp);
   assert(
     JSON.stringify(found) === JSON.stringify(["lib/x/actions.ts#arrow", "lib/x/actions.ts#covered", "lib/x/actions.ts#sneaky"]),

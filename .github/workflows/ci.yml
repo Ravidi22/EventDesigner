@@ -1,6 +1,10 @@
 # CI (EVE-19): typecheck, lint, every self-check, the production build and the cross-tenant isolation
-# test (EVE-23), on every push and on pull requests to master. Master takes changes only through a PR
-# whose five jobs are green.
+# test (EVE-23), once per pull request (whatever its base — stacked PRs target each other's branches)
+# and on every push to master. Master takes changes only through a PR whose five jobs are green.
+#
+# A push to a PR's branch used to run everything TWICE: `push` on every branch plus `pull_request`,
+# in two concurrency groups (PR #2 review). Third-party actions are pinned to a commit, not a moving
+# tag — the tag each SHA was read from is beside it.
 #
 # No secrets: nothing here reaches Neon, Vercel or R2. The build gets dummy values for the two
 # variables it needs just to construct the auth module — it never connects to anything.
@@ -8,8 +12,8 @@ name: CI
 
 on:
   push:
-  pull_request:
     branches: [master]
+  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -26,8 +30,8 @@ jobs:
   typecheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -37,8 +41,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -48,8 +52,8 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -77,8 +81,8 @@ jobs:
     env:
       DATABASE_URL: postgres://eve:eve@localhost:5432/eve
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -92,8 +96,8 @@ jobs:
       DATABASE_URL: postgres://ci:ci@127.0.0.1:5432/ci
       BETTER_AUTH_SECRET: ci-build-only-not-a-secret-0123456789abcdef
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm

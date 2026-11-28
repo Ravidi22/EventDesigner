@@ -20,8 +20,19 @@ import { judge, newRefs } from "./isolation/judge";
 
 const TIMEOUT_MS = 15000;
 
-function withTimeout<T>(p: Promise<T>): Promise<T> {
-  return Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error("timed out")), TIMEOUT_MS))]);
+/** The call, or the END OF THE RUN: a promise that lost the race keeps running, and once the next case
+ *  has set another user it would resolve its session as THEM — a false leak, or a real one hidden. One
+ *  hung action already makes the run unreliable, so it stops and names the case (PR #2 review). The
+ *  timer is cleared when the call settles, so a passing run never waits on it. */
+function withTimeout<T>(p: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const hung = new Promise<never>(() => {
+    timer = setTimeout(() => {
+      console.error(`\nTIMED OUT after ${TIMEOUT_MS / 1000}s: ${label}. The run stops — a call still running could act as the next case's user.`);
+      process.exit(1);
+    }, TIMEOUT_MS);
+  });
+  return Promise.race([p, hung]).finally(() => clearTimeout(timer));
 }
 
 async function main() {
@@ -82,10 +93,10 @@ async function withFixture(run: (f: Fixture) => Promise<number>): Promise<number
   }
 }
 
-async function call(f: Fixture, userId: string, run: (a: Fixture) => Promise<unknown>): Promise<unknown> {
+async function call(f: Fixture, userId: string, key: string, run: (a: Fixture) => Promise<unknown>): Promise<unknown> {
   actAsUserForScript(userId);
   try {
-    return await withTimeout(run(f));
+    return await withTimeout(run(f), key);
   } catch (e) {
     return e instanceof Error ? e : new Error(String(e));
   } finally {
@@ -115,7 +126,7 @@ async function controlPass(actions: string[], f: Fixture): Promise<number> {
       continue;
     }
     const before = await snapshot(f);
-    const result = await call(f, counterpart(f, c.as ?? "studioB"), c.call);
+    const result = await call(f, counterpart(f, c.as ?? "studioB"), key, c.call);
     const after = await snapshot(f);
     const returned = !judge(result, [...f.aIds, ...f.aText]).refused;
     const flipped = (c.expect && !c.expect(result, f)) || (c.verify && !(await c.verify(f)));
@@ -147,7 +158,7 @@ async function outsiderPass(actions: string[], f: Fixture): Promise<number> {
       called++;
       const actor = c.as ?? "studioB";
       const before = await snapshot(f);
-      const result = await call(f, f.users[actor], c.call);
+      const result = await call(f, f.users[actor], key, c.call);
       const after = await snapshot(f);
       const allowed = new Set([...f.shared, ...(c.allow?.(f) ?? [])]);
       // A's ids and A's private text (its people's emails, the marker on its private names).
