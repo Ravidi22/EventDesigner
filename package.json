@@ -183,7 +183,7 @@
     "check:calendar": "tsx lib/calendar/hebrew.check.ts",
     "check:appointments": "tsx lib/appointments/types.check.ts",
     "check:marketplace": "tsx lib/marketplace/boundary.check.ts",
-    "check:google": "tsx lib/google/types.check.ts && tsx lib/google/config.check.ts && tsx lib/google/secret-box.check.ts && tsx lib/google/mapping.check.ts && tsx lib/google/oauth.check.ts && tsx lib/google/api.check.ts",
+    "check:google": "tsx lib/google/types.check.ts && tsx lib/google/config.check.ts && tsx lib/google/secret-box.check.ts && tsx lib/google/mapping.check.ts && tsx lib/google/oauth.check.ts && tsx lib/google/api.check.ts && tsx lib/google/sync.check.ts",
     "gen:calendar": "tsx lib/calendar/generate.mts",
     "check:delta": "tsx lib/design-document/delta.check.ts",
     "db:verify:client": "tsx lib/client-portal/verify.ts",

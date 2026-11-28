@@ -19,7 +19,7 @@ import { issuePaymentRequest } from "@/lib/billing/actions";
 import { inviteMember, removeMember, setMemberRole } from "@/lib/team/actions";
 import { fetchAuditLog } from "@/lib/audit/actions";
 import { AUTH_BASE_PATH, auth, authOrigin } from "@/lib/auth/auth";
-import { POST as publicAuthRoute } from "@/app/api/auth/[...all]/route";
+import { GET as publicAuthGet, POST as publicAuthRoute } from "@/app/api/auth/[...all]/route";
 import { hashPassword } from "@/lib/auth/password";
 import { closeBusiness, reopenBusiness } from "@/lib/account/actions";
 import { BusinessClosedError } from "@/lib/db/org";
@@ -119,6 +119,39 @@ async function withAuditRefused<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/** Run `fn` with the database refusing to delete this one person, the way a lock timeout or a dropped
+ *  connection would fail the delete itself — after everything that runs BEFORE it has run. */
+async function withPersonDeleteRefused<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  assert(/^[0-9a-f-]{36}$/.test(userId), "a person id");
+  await db().execute(sql.raw(`create or replace function verify_refuse_delete() returns trigger language plpgsql as $$ begin raise exception 'delete refused (db:verify:account)'; end $$`));
+  await db().execute(sql.raw(`create trigger verify_refuse_delete before delete on users for each row when (old.id = '${userId}') execute function verify_refuse_delete()`));
+  try {
+    return await fn();
+  } finally {
+    await db().execute(sql.raw(`drop trigger if exists verify_refuse_delete on users`));
+    await db().execute(sql.raw(`drop function if exists verify_refuse_delete()`));
+  }
+}
+
+/** A Google calendar connection for this person, as the settings screen's connect leaves one. */
+async function connectGoogle(organizationId: string, userId: string): Promise<void> {
+  await db().insert(schema.googleConnections).values({
+    userId,
+    organizationId,
+    googleEmail: `g-${randomUUID()}@example.test`,
+    refreshToken: "sealed-token",
+    calendarId: `cal-${randomUUID()}`,
+  } as never);
+}
+
+async function googleConnectionsOf(userId: string): Promise<number> {
+  return (await db().select({ id: schema.googleConnections.id }).from(schema.googleConnections).where(eq(schema.googleConnections.userId, userId))).length;
+}
+
+async function stillThere(userId: string): Promise<boolean> {
+  return (await db().select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, userId))).length === 1;
+}
+
 /** True when the promise rejected. */
 const refused = (p: Promise<unknown>) => p.then(() => false, () => true);
 
@@ -126,12 +159,14 @@ const refused = (p: Promise<unknown>) => p.then(() => false, () => true);
 
 step("a designer deletes their own account", async (f) => {
   await as(f.ownerA, () => setMemberRole(f.memberA, "crew"));
+  await connectGoogle(f.orgA, f.memberA);
   const { cookie, password } = await signInWithPassword(f.memberA);
   const res = await authPost("/delete-user", { password }, cookie);
   assert(res.status === 200, `deleted (${res.status} ${await res.text()})`);
 
   const left = await db().select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, f.memberA));
   assert(left.length === 0, "the member's row is gone");
+  assert((await googleConnectionsOf(f.memberA)) === 0, "…and their Google connection with it");
   assert((await notificationsOf(f.ownerA, "member.left")).length === 1, "the owner's bell rang once");
   const log = await as(f.ownerA, () => fetchAuditLog());
   const self = log.rows.find((r) => r.action === "member.self_deleted");
@@ -231,6 +266,68 @@ step("a browser cannot delete an account through Better Auth's public route", as
   assert(left.length === 1, "the member is still there");
 });
 
+step("a self-delete the database refuses keeps the Google connection and rings no bell", async (f) => {
+  // The delete hook revoked the member's Google token, deleted the connection and rang the owners'
+  // bell BEFORE Better Auth deleted the person; a delete that then failed left a member with no
+  // calendar sync and an owner told they had left (PR #5 re-review).
+  await connectGoogle(f.orgA, f.memberA);
+  const { cookie, password } = await signInWithPassword(f.memberA);
+  const res = await withPersonDeleteRefused(f.memberA, () => authPost("/delete-user", { password }, cookie));
+  assert(res.status !== 200, `the delete failed (${res.status})`);
+  assert(await stillThere(f.memberA), "the member is still there");
+  assert((await googleConnectionsOf(f.memberA)) === 1, "…and so is their Google connection");
+  assert((await notificationsOf(f.ownerA, "member.left")).length === 0, "…and no owner was told they left");
+});
+
+step("a removal the database refuses keeps the member's Google connection", async (f) => {
+  // eraseMember revoked the token and deleted the connection — on a connection of its own, while its
+  // transaction was still open — before the member's row was deleted; when that delete failed the
+  // transaction rolled back, the member stayed, and their calendar sync was gone (PR #5 re-review).
+  await connectGoogle(f.orgA, f.memberA);
+  const failed = await withPersonDeleteRefused(f.memberA, () => refused(as(f.ownerA, () => removeMember(f.memberA))));
+  assert(failed, "the removal failed");
+  assert(await stillThere(f.memberA), "the member is still there");
+  assert((await googleConnectionsOf(f.memberA)) === 1, "…and so is their Google connection");
+});
+
+step("the public route serves a browser the links Better Auth mails, and nothing else", async (f) => {
+  // An ALLOW-list (lib/auth/public-routes.ts, PR #5 re-review): what a browser is sent to must still
+  // reach Better Auth — a reset link that 404'd would lock people out — and what it is not, must not.
+  const browser = (method: "GET" | "POST", path: string, body?: unknown) =>
+    (method === "GET" ? publicAuthGet : publicAuthRoute)(
+      new Request(`${authOrigin()}${AUTH_BASE_PATH}${path}`, {
+        method,
+        redirect: "manual",
+        headers: new Headers({ "content-type": "application/json", origin: authOrigin() }),
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
+  const [member] = await db().select({ email: schema.users.email }).from(schema.users).where(eq(schema.users.id, f.memberA));
+
+  // A real reset link: the token stored through Better Auth's own adapter, exactly as
+  // /request-password-reset stores the one it mails (it keeps only a hash, so the mailed one cannot
+  // be read back).
+  const token = `t${randomUUID().replace(/-/g, "")}`;
+  const context = await auth().$context;
+  await context.internalAdapter.createVerificationValue({
+    value: f.memberA,
+    identifier: `reset-password:${token}`,
+    expiresAt: new Date(Date.now() + 10 * 60_000),
+  });
+  const link = await browser("GET", `/reset-password/${token}?callbackURL=%2Freset`);
+  assert(link.status === 302 && (link.headers.get("location") ?? "").includes(`/reset?token=${token}`), `the emailed reset link reaches Better Auth and lands on /reset (${link.status} ${link.headers.get("location")})`);
+
+  const verify = await browser("GET", "/verify-email?token=not-a-token");
+  assert(verify.status !== 404, `the confirmation link reaches Better Auth (${verify.status})`);
+  const error = await browser("GET", "/error?error=invalid_token");
+  assert(error.status === 200, `Better Auth's error page is served (${error.status})`);
+
+  const resend = await browser("POST", "/send-verification-email", { email: member.email });
+  assert(resend.status === 404, `a browser cannot make Better Auth mail anyone (${resend.status})`);
+  const session = await browser("GET", "/get-session");
+  assert(session.status === 404, `…nor read what nothing in a browser reads (${session.status})`);
+});
+
 step("the owner cannot delete their account", async (f) => {
   const { cookie, password } = await signInWithPassword(f.ownerA);
   const res = await authPost("/delete-user", { password }, cookie);
@@ -261,11 +358,13 @@ step("a member who issued a billing document can be removed", async (f) => {
   const docId = (issued as { id: string }).id;
   const [before] = await db().select().from(schema.billingDocuments).where(eq(schema.billingDocuments.id, docId));
   assert(before?.issuedBy === f.memberA, "the document names its issuer");
+  await connectGoogle(f.orgA, f.memberA);
 
   await as(f.ownerA, () => removeMember(f.memberA));
 
   const left = await db().select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, f.memberA));
   assert(left.length === 0, "the member's row is gone");
+  assert((await googleConnectionsOf(f.memberA)) === 0, "…and their Google connection with it");
   const [after] = await db().select().from(schema.billingDocuments).where(eq(schema.billingDocuments.id, docId));
   assert(after, "the document is still there");
   assert(after.issuedBy === null, "issued_by is null");
@@ -597,16 +696,7 @@ step("a business that is not due keeps its Google connections; an erased one los
   // The sweep reads the due list once; a business reopened while another was being erased reached
   // eraseBusiness with no closure — and its members' connections were revoked and deleted BEFORE the
   // locked re-check said "not due" (PR #5 review).
-  const connect = async (userId: string) => {
-    await db().insert(schema.googleConnections).values({
-      userId,
-      organizationId: f.orgA,
-      googleEmail: `g-${randomUUID()}@example.test`,
-      refreshToken: "sealed-token",
-      calendarId: `cal-${randomUUID()}`,
-    } as never);
-  };
-  await connect(f.memberA);
+  await connectGoogle(f.orgA, f.memberA);
   const connectionsOfA = async () =>
     (await db().select({ id: schema.googleConnections.id }).from(schema.googleConnections).where(eq(schema.googleConnections.organizationId, f.orgA))).length;
   assert((await eraseBusiness(f.orgA, later(31))) === false, "an open business is not erased");

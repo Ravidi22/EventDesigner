@@ -472,28 +472,42 @@ export async function disconnect(userId: string, organizationId: string): Promis
 
 type Database = ReturnType<typeof db> | Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0];
 
-/** A business's refresh tokens, opened — read by the erase INSIDE its transaction, once it holds the
- *  closure and knows the business is due, while the rows still exist; revoked by revokeRefreshTokens
- *  after it commits (lib/account/erase.ts; PR #5 review). Nothing when Google is not configured. */
-export async function refreshTokensOf(database: Database, organizationId: string): Promise<string[]> {
+/** A business's refresh tokens — or one person's in it — opened, while the rows still exist. Read
+ *  INSIDE the transaction that deletes them, once it knows the delete is going ahead (the erase holds
+ *  the closure and knows the business is due; a member's removal has read the person), and revoked by
+ *  revokeRefreshTokens only after it commits: a delete that fails must leave the connection working
+ *  (lib/account/erase.ts, lib/account/member.ts; PR #5 review and re-review). Nothing when Google is
+ *  not configured. */
+export async function refreshTokensOf(database: Database, organizationId: string, userId?: string): Promise<string[]> {
   const config = googleConfig();
   if (!config) return [];
   const rows = await database
     .select({ refreshToken: googleConnections.refreshToken })
     .from(googleConnections)
-    .where(eq(googleConnections.organizationId, organizationId));
+    .where(
+      and(
+        eq(googleConnections.organizationId, organizationId),
+        userId ? eq(googleConnections.userId, userId) : undefined,
+      ),
+    );
   return rows.map((r) => open(r.refreshToken, config.tokenKey)).filter((t): t is string => !!t);
 }
 
+/** How long one revoke may wait on Google before it is given up. */
+export const REVOKE_TIMEOUT_MS = 10_000;
+
 /** Revoke refresh tokens at Google. Best effort: revocation is a courtesy to the person's account, not
- *  a precondition for forgetting the connection here — a network failure must not stop that. */
-export async function revokeRefreshTokens(tokens: readonly string[]): Promise<void> {
+ *  a precondition for forgetting the connection here — a network failure must not stop that, and
+ *  neither may a Google that never answers: each try is cut off after `timeoutMs`, or one hung call
+ *  would stall the whole erase sweep (PR #5 re-review). */
+export async function revokeRefreshTokens(tokens: readonly string[], timeoutMs = REVOKE_TIMEOUT_MS): Promise<void> {
   for (const token of tokens) {
     await fetch("https://oauth2.googleapis.com/revoke", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ token }),
       cache: "no-store",
+      signal: AbortSignal.timeout(timeoutMs),
     }).catch(() => undefined);
   }
 }

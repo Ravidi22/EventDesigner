@@ -35,7 +35,7 @@ import { sendLater } from "@/lib/email/send-later";
 import { resetPasswordEmail, verifyEmailEmail } from "@/lib/email/templates";
 import { googleConfig } from "@/lib/google/config";
 import { hashPassword, verifyPassword } from "./password";
-import { beforePersonErased, personRow } from "@/lib/account/member";
+import { beforePersonErased, personRow, type AfterErased } from "@/lib/account/member";
 
 /** The longest a "remembered" session lives; an unremembered one is a day (Better Auth's
  *  dontRememberMe) and its cookie dies with the browser — the same two numbers as before. */
@@ -57,6 +57,10 @@ type Database = ReturnType<typeof db>;
 export function buildAuth(database: Database = db()) {
   const google = googleConfig();
   const origin = authOrigin();
+  // A self-delete's after-work (lib/account/member.ts AfterErased), from beforeDelete to afterDelete —
+  // Better Auth calls afterDelete only once the person is deleted. One per person; a delete that
+  // failed leaves its entry until that person's next try overwrites it.
+  const afterErased = new Map<string, AfterErased>();
   return betterAuth({
     appName: "Eve",
     baseURL: origin,
@@ -99,7 +103,14 @@ export function buildAuth(database: Database = db()) {
           if (person.kind === "studio" && person.role === "owner") {
             throw new APIError("FORBIDDEN", { message: "an owner closes the business instead" });
           }
-          await beforePersonErased(database, person, "self");
+          afterErased.set(user.id, await beforePersonErased(database, person, "self"));
+        },
+        // Their Google token is revoked and the bells ring only now: a delete that failed must not
+        // have done either (PR #5 re-review).
+        afterDelete: async (user) => {
+          const after = afterErased.get(user.id);
+          afterErased.delete(user.id);
+          await after?.().catch((e) => console.error("after a self-delete", e));
         },
       },
     },
