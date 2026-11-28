@@ -10,7 +10,6 @@
 // it guards against is a future edit.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { isMain } from "../self-check";
 
 export const SCANNED = ["app", "components", "lib"];
 export const ALLOWED = "components/scene";
@@ -54,14 +53,4 @@ export function scanThreeImports(root: string): Violation[] {
     }
   }
   return out;
-}
-
-if (isMain(import.meta.url)) {
-  const violations = scanThreeImports(process.cwd());
-  if (violations.length) {
-    for (const v of violations) console.error(`${v.file}:${v.line}  ${v.text}`);
-    console.error(`\n${violations.length} three.js import(s) outside ${ALLOWED}/`);
-    process.exit(1);
-  }
-  console.log(`scene boundary ok: three.js imported only under ${ALLOWED}/`);
 }

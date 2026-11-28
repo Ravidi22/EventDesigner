@@ -6,7 +6,6 @@
 // folder names an event, a venue, a quote, an expense, a drawing or a person.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isMain } from "../self-check";
 
 /** Table identifiers no marketplace query may touch. Identifiers, not words: matching "event" in
  *  a comment would make this fail on prose and get switched off. */
@@ -56,22 +55,4 @@ export function scanMarketplace(dir: string): Violation[] {
     }
   }
   return out;
-}
-
-// ponytail: self-check. Run: npm run check:marketplace
-if (isMain(import.meta.url)) {
-  const assert = (ok: boolean, what: string) => {
-    if (!ok) {
-      console.error(`FAIL: ${what}`);
-      process.exit(1);
-    }
-    console.log(`  ok   ${what}`);
-  };
-  const forbidden = new RegExp(`\\b(${FORBIDDEN_TABLES.join("|")})\\b`);
-  assert(forbidden.test('import { events, products } from "@/lib/db/schema";'), "an import of events is caught");
-  assert(!forbidden.test('import { organizations, products } from "@/lib/db/schema";'), "organizations and products are allowed");
-  const violations = scanMarketplace(join(process.cwd(), "lib", "marketplace"));
-  for (const v of violations) console.error(`FAIL: ${v.file}:${v.line} — ${v.why}`);
-  assert(violations.length === 0, "the marketplace reads only published supplier rows and their profile");
-  console.log("marketplace boundary self-check passed");
 }

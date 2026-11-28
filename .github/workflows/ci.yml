@@ -103,3 +103,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # The client chunks' size in the log; fails on the old isMain guard or a check message in a chunk
+      # (EVE-54 — a backstop: the source guard is check:check-files in the checks job).
+      - run: npm run bundle:report -- --fail-on-checks

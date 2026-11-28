@@ -17,7 +17,6 @@
 // `npm run check:scene-share`. Static, like check:costs and check:marketplace.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { isMain } from "../self-check";
 
 export const TRUSTING_READS = ["lib/client-portal/reads.ts", "lib/scene/reads.ts", "lib/scene/share-read.ts"];
 
@@ -77,7 +76,8 @@ export function scanShare(root: string): string[] {
   // 3. The scene and the public page stay off the business.
   for (const top of SHARE_SURFACES) {
     for (const file of walk(join(root, top))) {
-      if (rel(root, file) === "lib/scene/share-boundary.ts") continue; // its own rules and canary
+      // Its own rules, and its check beside it — which holds the canary that spells a forbidden import.
+      if (rel(root, file) === "lib/scene/share-boundary.ts" || rel(root, file) === "lib/scene/share-boundary.check.ts") continue;
       const lines = readFileSync(file, "utf8").split(/\r?\n/);
       lines.forEach((line, i) => {
         for (const f of FORBIDDEN_IMPORTS) if (f.pattern.test(line)) problems.push(`${rel(root, file)}:${i + 1} ${f.why}`);
@@ -85,20 +85,4 @@ export function scanShare(root: string): string[] {
     }
   }
   return problems;
-}
-
-if (isMain(import.meta.url)) {
-  const problems = scanShare(process.cwd());
-  if (problems.length) {
-    for (const p of problems) console.error(p);
-    console.error(`\n${problems.length} scene-share problem(s)`);
-    process.exit(1);
-  }
-  // A canary: the rules must actually catch what they are written for.
-  const sample = 'import { fetchQuote } from "@/lib/quotes/actions";';
-  if (!FORBIDDEN_IMPORTS.some((f) => f.pattern.test(sample))) {
-    console.error("the forbidden-import rule no longer catches a quotes import");
-    process.exit(1);
-  }
-  console.log(`scene share ok: ${TRUSTING_READS.length} trusting reads are plain modules, no client component imports them, the share surfaces stay off the business`);
 }

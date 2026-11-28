@@ -9,7 +9,6 @@
 // files cannot be named by another even if a key leaks: the prefix is written by the server from
 // the session, never taken from the caller. A driver that trusted a caller-supplied key would hand
 // the whole bucket to anyone who could guess an id.
-import { isMain } from "../self-check";
 
 /**
  * The stored key inside one of our own URLs, or null for anything else.
@@ -115,53 +114,4 @@ export function isSafeKey(value: unknown): value is string {
 /** The organisation a well-formed key belongs to. Null when the key is not one of ours. */
 export function orgOfKey(key: string): string | null {
   return isSafeKey(key) ? key.split("/")[0] : null;
-}
-
-// ponytail: self-check. Run: npm run check:files
-if (isMain(import.meta.url)) {
-  const assert = (ok: boolean, what: string) => {
-    if (!ok) {
-      console.error(`FAIL: ${what}`);
-      process.exit(1);
-    }
-    console.log(`  ok   ${what}`);
-  };
-
-  const org = "00000000-0000-0000-0000-000000000001";
-
-  const key = buildKey(org, "gallery", "image/jpeg");
-  assert(key.startsWith(`${org}/gallery/`) && key.endsWith(".jpg"), "a key is org / kind / uuid.ext");
-  assert(isSafeKey(key), "…and the key we build is a key we accept");
-  assert(buildKey(org, "underlay", "image/png").endsWith(".png"), "the extension comes from the TYPE");
-
-  // The whole point of minting the name: none of this can reach a path.
-  assert(!isSafeKey(`${org}/gallery/../../etc/passwd`), "rejects traversal");
-  assert(!isSafeKey(`../${org}/gallery/a.jpg`), "rejects a leading ..");
-  assert(!isSafeKey(`/${org}/gallery/a.jpg`), "rejects an absolute path");
-  assert(!isSafeKey(`${org}/gallery/..`), "rejects a bare .. as the filename");
-  assert(!isSafeKey(`${org}/gallery/a.jpg/b.jpg`), "rejects extra segments");
-  assert(!isSafeKey(`${org}/gallery/a.jpg\0.png`), "rejects a null byte");
-  assert(!isSafeKey(`${org}/notakind/a.jpg`), "rejects an unknown kind");
-  assert(!isSafeKey(`not-an-org/gallery/a.jpg`), "rejects a prefix that is not an org id");
-  assert(!isSafeKey(""), "rejects empty");
-  assert(!isSafeKey(`${org}/gallery/${"a".repeat(300)}.jpg`), "rejects an absurd length");
-
-  assert(orgOfKey(key) === org, "orgOfKey reads the tenant prefix back");
-  assert(orgOfKey("nonsense") === null, "…and refuses a key that is not ours");
-
-  // The allowlist. An SVG is a script; a PDF is the cancelled import path (ADR-3).
-  assert(isAllowedType("image/jpeg") && isAllowedType("image/webp"), "photographs are allowed");
-  assert(!isAllowedType("image/svg+xml"), "SVG is NOT allowed — it executes where it is served");
-  assert(!isAllowedType("application/pdf"), "PDF is not allowed — ADR-3 stays cancelled");
-  assert(!isAllowedType("text/html") && !isAllowedType(""), "nothing else is allowed");
-
-  let threw = false;
-  try {
-    buildKey(org, "gallery", "image/svg+xml");
-  } catch {
-    threw = true;
-  }
-  assert(threw, "buildKey refuses a type the allowlist does not carry");
-
-  console.log("files/keys self-check passed");
 }

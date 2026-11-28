@@ -12,7 +12,6 @@
 // connect, both get the whole diary in their own calendar. That is the intent — a shared diary that
 // reaches each person's phone — and it is why the link table below is keyed by CONNECTION as well
 // as by appointment: one appointment becomes a different Google event in each member's calendar.
-import { isMain } from "@/lib/self-check";
 
 /** A connection as the settings screen needs to describe it. Deliberately carries no tokens: this
  *  crosses to a client component, and a refresh token in an RSC payload is a refresh token in the
@@ -106,16 +105,4 @@ export const BUSY_WINDOW_FORWARD_MONTHS = 3;
  *  are rendered into the same day cell. */
 export function busyKey(googleEventId: string, calendarId: string): string {
   return `g:${calendarId}:${googleEventId}`;
-}
-
-if (isMain(import.meta.url)) {
-  const assert = (c: boolean, m: string) => {
-    if (!c) throw new Error("FAIL: " + m);
-  };
-
-  assert(busyKey("abc", "primary").startsWith("g:"), "a google key is namespaced away from a uuid");
-  assert(busyKey("a", "c1") !== busyKey("a", "c2"), "the same event id on two calendars is two keys");
-  assert(STUDIO_TIMEZONE === "Asia/Jerusalem", "the studio clock is Israel's");
-
-  console.log("google types self-check passed");
 }

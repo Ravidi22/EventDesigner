@@ -1,6 +1,6 @@
 // The curated camera: where a client may stand, how the camera travels between those places, and
 // when a guided tour is where. Spec §5. Pure — the viewer (components/scene/scene-camera.tsx) asks
-// these and animates; `npm run check:viewpoints` (./viewpoints-check.ts) holds them.
+// these and animates; `npm run check:viewpoints` (./viewpoints.check.ts) holds them.
 //
 // A client never gets a free camera (Ravid, 2026-10-23: "curated only"). They get the designer's
 // saved viewpoints, or — until the designer has saved any — the DEFAULTS below, generated from the

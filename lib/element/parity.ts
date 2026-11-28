@@ -11,10 +11,8 @@
 // The parity SHEET (scripts/parity-sheet.ts) is the half for the eye: the same rows drawn side by
 // side, current and new, as one HTML page. Run: npm run check:element-parity
 import { MAP_SHAPES, usesDiameter, type Product, type ShapePart } from "@/lib/catalog/types";
-import { STANDARD_ITEMS, standardProduct } from "@/lib/catalog/standard/items";
 import { footprintOutlines, resizeSpecOf, sizedFootprint, type Footprint } from "@/lib/studio/footprint";
 import { outlinePathD } from "@/lib/studio/geometry";
-import { isMain } from "../self-check";
 import { definitionOf, elementSizeOf } from "./adapter";
 import { elementGeometry, flat, sameFootprint } from "./geometry";
 
@@ -38,7 +36,7 @@ export function disagreements(product: Product, sizeMm?: { widthMm: number; dept
   return out;
 }
 
-const SIZES: ({ widthMm: number; depthMm: number } | undefined)[] = [undefined, { widthMm: 1800, depthMm: 900 }, { widthMm: 700, depthMm: 1100 }];
+export const SIZES: ({ widthMm: number; depthMm: number } | undefined)[] = [undefined, { widthMm: 1800, depthMm: 900 }, { widthMm: 700, depthMm: 1100 }];
 
 const HAND = [
   { x: 0, y: 0 },
@@ -128,16 +126,4 @@ export function parityFailures(products: readonly Product[]): string[] {
     }
   }
   return out;
-}
-
-if (isMain(import.meta.url)) {
-  const library = STANDARD_ITEMS.map((i) => standardProduct(i, `id-${i.key}`));
-  const rows = [...library, ...matrix()];
-  const failures = parityFailures(rows);
-  for (const f of failures) console.error("  FAIL " + f);
-  if (failures.length) {
-    console.error(`element parity: ${failures.length} disagreement(s) over ${rows.length} rows`);
-    process.exit(1);
-  }
-  console.log(`element parity: ${rows.length} rows (${library.length} of the base library, ${rows.length - library.length} of the matrix) × ${SIZES.length} sizes agree to the path string`);
 }
