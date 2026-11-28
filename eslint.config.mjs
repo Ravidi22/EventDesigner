@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Claude Code's own folder: skill scripts, and the agents' worktrees — each a whole other checkout
+    // of this repo that `eslint .` in the main checkout would otherwise lint again.
+    ".claude/**",
   ]),
   {
     rules: {

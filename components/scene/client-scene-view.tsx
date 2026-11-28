@@ -50,6 +50,7 @@ export function ClientSceneView({ scene: given }: { scene: ClientScene }) {
   // A deep link to one viewpoint: read once, on the client.
   useEffect(() => {
     const want = new URLSearchParams(window.location.search).get("vp");
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the URL is only readable after mount; once, on mount
     if (want && viewpoints.some((v) => v.id === want)) setActiveId(want);
     // Only on mount: a later change of the list must not yank the camera back.
     // eslint-disable-next-line react-hooks/exhaustive-deps

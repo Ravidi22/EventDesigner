@@ -783,6 +783,7 @@ export function StudioScreen({
     // What to do next is said by the standing pill over the canvas (the HintRow's cloth pill).
     setArmedId(null);
     setRodDraw(null);
+    // eslint-disable-next-line react-hooks/purity -- runs in a handler, never during render: the id only makes a re-arm a new tool
     setClothDraw({ ...draw, id: Date.now() });
   };
   /** The drawing ended: the new sail or drape placed on its rail, or the redrawn one's rail replaced
@@ -792,6 +793,7 @@ export function StudioScreen({
    *  keeps the tool for the next rod. */
   const finishRodTool = (points: Point[], keep?: boolean) => {
     const tool = rodTool;
+    // eslint-disable-next-line react-hooks/purity -- runs in a handler, never during render
     setRodTool(tool && keep ? { ...tool, id: Date.now() } : null);
     const product = tool ? productById(tool.productId) : undefined;
     if (!product || points.length < 2) return;
@@ -3917,6 +3919,7 @@ export function StudioScreen({
       setPlacing(null);
       setArmedCount(0);
       setArmedId(null);
+      // eslint-disable-next-line react-hooks/purity -- runs in a handler, never during render
       setRodTool({ id: Date.now(), productId: rodRow.id });
       return;
     }

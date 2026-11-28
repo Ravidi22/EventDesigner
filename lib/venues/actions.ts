@@ -25,6 +25,7 @@ import { reachesAllVenues } from "@/lib/team/types";
 import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
 import {
   atLeast,
+  canSeeGrants,
   isGrantKind,
   isVenueRole,
   resolveVenueRole,
@@ -609,10 +610,15 @@ async function grantsOf(venueId: string): Promise<VenueGrant[]> {
   return rows.map(toGrant);
 }
 
-/** Who has access to one property. Readable by anyone who can open it: knowing who else is standing
- *  in the hall is part of working in it, and it is the studio's own list either way. */
+/** Who has access to one property — names and email addresses. The owning studio's people read it
+ *  (knowing who else is standing in the hall is part of working in it) and so does a manager; nobody
+ *  else, though every business can open the plan itself (canSeeGrants, EVE-23). */
 export async function fetchVenueGrants(venueId: string): Promise<VenueGrant[]> {
-  await requireVenueAccess(venueId, "viewer");
+  // Viewer was the bar when viewers were the people a property was shared with. Since 2026-10-30
+  // every business is a viewer of every venue, and this list holds other businesses' names and
+  // email addresses — so it is the owning studio's, and a manager's (canSeeGrants; EVE-23).
+  const { actor, role, ownerOrgId } = await requireVenueAccess(venueId, "viewer");
+  if (!canSeeGrants(ownerOrgId === actor.organizationId, role)) throw new Error("אין לך גישה לרשימת השיתוף של המתחם הזה");
   return grantsOf(venueId);
 }
 

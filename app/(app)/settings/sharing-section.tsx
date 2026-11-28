@@ -71,8 +71,9 @@ export function SharingSection({
   // out, so at most one result can ever be adopted.
   useEffect(() => {
     let live = true;
-    // A property you may open but not manage still answers here; anything else (it was deleted, it
-    // was never yours) leaves the list empty rather than showing the previous venue's people.
+    // Your studio's own property answers here whatever your role on it, and so does one you manage;
+    // anything else — another business's venue you can merely open, one that was deleted — is refused
+    // (canSeeGrants, EVE-23) and leaves the list empty rather than showing the previous venue's people.
     void (venueId ? fetchVenueGrants(venueId) : Promise.resolve([]))
       .then((list) => {
         if (live) setGrants(list);

@@ -40,7 +40,20 @@ const AUTH_PAGES = ["/login", "/signup", "/forgot"];
  * itself. Each checks its own token; this layer has nothing to add.
  */
 // "/v" is the 3D scene's no-login link (lib/scene/share-read.ts): the page itself checks the token.
-const PUBLIC = [...AUTH_PAGES, "/join", "/reset", "/api/auth", "/api/google/callback", "/v", "/"];
+// "/api/csp-report" is where browsers post what the report-only policy would have blocked — a
+// signed-out visitor's page reports too, and a redirect to /login would just lose the report.
+// "/api/health" is for an uptime monitor, which has no session; it says only ok or down.
+const PUBLIC = [
+  ...AUTH_PAGES,
+  "/join",
+  "/reset",
+  "/api/auth",
+  "/api/google/callback",
+  "/v",
+  "/api/csp-report",
+  "/api/health",
+  "/",
+];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;

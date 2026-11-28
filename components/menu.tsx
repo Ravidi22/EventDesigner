@@ -138,6 +138,7 @@ export function Menu({
   // the arrow keys, or because the menu closed under it. The rows are read through a ref so that a
   // caller rebuilding its items every render does not fire a leave/arrive pair on each one.
   const itemsRef = useRef(items);
+  // eslint-disable-next-line react-hooks/refs -- the "latest value" ref described above; deliberate
   itemsRef.current = items;
   const aimed = open ? activeIndex : -1;
   useEffect(() => {

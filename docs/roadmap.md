@@ -1,14 +1,14 @@
 # Roadmap — what is built, and what is left
 
-August 2026 · companion to [01 — requirements](01-מסמך-דרישות.md) and [02 — architecture](02-מסמך-ארכיטקטורה-וטכנולוגיות.md)
+Updated 27 November 2026 (first written August 2026) · companion to [01 — requirements](01-מסמך-דרישות.md) and [02 — architecture](02-מסמך-ארכיטקטורה-וטכנולוגיות.md)
 
-Those two say what the product *is*. This one says where it stands. Ordered by what unblocks what, not by size — the first item is next for a reason, and every item names the file that actually changes.
+**What is left before a public launch is no longer tracked here.** It is [the production-readiness audit of 2026-11-27](qa/2026-11-27-production-readiness.md), split into Jira epics in project **EVE** — **EVE-1** is the platform (security, legal, infrastructure); the others are the visitor, studio, supplier, venue, client and operator lists. This page keeps the record of what was built and why, and the open questions the audit does not own.
 
-**Where it stands.** Every screen in the product exists and works. Every domain lives in Postgres — the design document included, which was the last thing of real value sitting in a browser profile. Files upload, to a folder on disk today and to R2 the moment five environment variables are set. **It is hosted now**: Neon in `eu-central-1`, Vercel deploying from `master`, schema applied by a generated migration rather than by `db:push`.
+Those two documents say what the product *is*. This one says where it stands.
 
-**What is left is now almost entirely accounts.** Everything that can be built without signing up for a service has been. Two blockers are still credentials — R2 and Clerk — and everything else is either a decision only you can make or a piece of work nobody has started.
+**Where it stands (November 2026).** Every screen exists and works, for four kinds of business — studio, supplier, venue owner — and their clients. Every domain lives in Postgres behind `"use server"` actions. **It is hosted**: Neon (`eu-central-1`), Vercel deploying from `master`, R2 for files, Resend for mail, schema applied by generated migrations (0028 is the latest). Auth is **Better Auth**, in-process (ADR-10 as updated 2026-10-17) — the Clerk plan below was replaced. The hosting stack itself is **under review** (Ravid, 2026-11-27): every item that depends on it — domain, production email, backups, crons, signed URLs, the release process, monitoring vendors — is parked on EVE-1 with a comment saying so.
 
-**The one thing hosting did not buy:** files. `lib/files/driver-local.ts` writes to a disk that a serverless instance does not keep, so gallery photography — which is *built* — accepts an upload in production and loses the bytes when the container recycles. R2 is not only for the unbuilt half.
+**Master takes changes only through a pull request with green CI** (EVE-19, 2026-11-27): typecheck, lint, every `check:*` self-check and the production build.
 
 ---
 
@@ -18,27 +18,22 @@ Those two say what the product *is*. This one says where it stands. Ordered by w
 
 | Area | State |
 | --- | --- |
-| **Product surfaces** | All twelve screens built: dashboard, meeting flow, catalog, halls, studio 2D, gallery, outputs, **production runway**, present mode, client portal, settings, suppliers & procurement |
+| **Product surfaces** | Dashboard (today + this week, one calendar for every business), meeting flow, catalog, halls, studio 2D (the shell: start rail, canvas, end panel), gallery, outputs (three document directions × twelve settings), production runway, present mode, client portal, settings, suppliers & procurement, **3D scene** (`/scene`, client link `/v/<token>`), **billing documents** (`/billing`), **marketplace**, **orders**, **venue owners** (`/bookings`, `/menus`) |
 | **Canvas** | One hand-written SVG canvas for every plan surface (ADR-8). No Konva anywhere |
-| **Backend migration** | **Finished.** Twelve domains through `lib/<domain>/actions.ts`. Nothing of the studio's is left in a browser |
-| **People and access** | Accounts, sessions, two role ladders, per-member venue grants enforced on every read and write, invitations by link |
-| **File storage** | Seam built. Upload → store → serve verified end to end on the local driver, with every boundary refused; gallery photography wired, old files cleaned up on replace. The R2 signing path is written and self-checked but **has never been answered by a real bucket** — see §2 |
-| **Account management** | Password change (needs no email, so it did not wait for one) |
+| **Backend migration** | **Finished.** Every domain through `lib/<domain>/actions.ts`. Nothing of the studio's is left in a browser |
+| **People and access** | Better Auth (verification, reset, Google sign-in, rate limit); studio roles; venue grants; client accounts by invitation; supplier and venue organisations |
+| **File storage** | R2 when its env vars are set, a local folder otherwise; product images, gallery, underlays, logos, signatures, sketch photos. Since 2026-11-27 every picture is shrunk and stripped of its metadata in the browser before upload (EVE-25) |
+| **Notifications** | The bell and its side sheet, a row per recipient (`lib/notifications/`); email templates for verification, reset and invitations (`lib/email/`) |
+| **Platform hygiene (2026-11-27)** | Security headers + a report-only CSP (EVE-11), `/api/health` (EVE-24), CI and a protected master (EVE-19), lint clean |
 
-### Left
+### Left — open questions this page still owns
 
-| What | Blocked on | Size |
+| What | Blocked on | Where |
 | --- | --- | --- |
-| ~~**Neon + Vercel** — go live~~ | **done** | Frankfurt, migrations, deployed. Only the first real organisation is left |
-| **Turn R2 on** | 🔑 account | Five env vars + CORS and public-read on Cloudflare's side |
-| **Clerk** — retire ~570 lines of our own auth | 🔑 account | Do it *before* the first outside studio signs up |
-| **Email** — password reset, quotes to clients, guest invitations | 🔑 a sending domain | Resend, free to 3,000/month |
-| **Product images** | nothing | ~3 lines; the catalog drawer just is not wired |
-| ~~**Underlay tracing (F-3.5) + calibration (F-3.4)**~~ | **done** | Placed, calibrated and traced over. Needs R2 to survive a deploy |
-| **Outputs redesign** | 🤔 your design direction | The quote stage was always marked provisional |
-| **Cross-studio hall availability** | 🤔 a modelling decision | See §6 — two studios cannot book one hall today, by construction |
-| **Notification bell** | deferred on purpose | Worth building once there is more than one thing to announce |
-| **Lint pass** | nothing | 20 pre-existing `set-state-in-effect` errors in four `use-*.ts` hooks |
+| **Cross-studio hall availability** | 🤔 a modelling decision | §6 below; audit P2-24 |
+| **The event palette has no input** | 🤔 where it lives | `ShadePicker` waits since 2026-11-10; audit P1-22 |
+| **Billing phase 2** (allocation numbers, signed originals, OPENFRMT) | 🔑 the Tax Authority login | audit P0-9 |
+| **Everything else before launch** | — | the audit + Jira EVE |
 
 🔑 needs an account · 🤔 needs a decision from you
 
@@ -120,9 +115,9 @@ Ordered by what unblocks what. Some sections below carry a checked item among th
 - [x] Switch from `db:push` to generated migrations. Done at the cut-over as planned, against an empty Neon: the two stale files (19 tables, never applied anywhere) were archived, `drizzle/0000_baseline.sql` generated from `schema.ts` — 21 tables, 57 indexes and constraints — the `public` schema dropped, and the baseline *applied*, so the schema is produced by the migration rather than merely resembling it. `__drizzle_migrations` has one row
 - [x] `vercel.json` pins functions to `fra1`, so they run beside the database rather than across an ocean from it
 - [x] The local container tracks Neon's major version (18). Not a one-line change: the 18 image moved its mount to `/var/lib/postgresql`, and a data directory cannot be upgraded in place
-- [ ] **First real organisation instead of the seed's placeholder** — the only step left, and it is a signup form
+- [x] **First real organisation instead of the seed's placeholder** — real studios and a venue have signed up on production since 2026-10-31
 
-**Deploying does not run migrations.** Nothing applies `drizzle/*.sql` to Neon on push; a schema change reaches production only when someone runs `db:migrate` with `DIRECT_URL` set to the direct host. Worth automating before the first schema change that matters, and worth remembering until then.
+**Deploying does not run migrations.** Nothing applies `drizzle/*.sql` to Neon on push; a schema change reaches production only when someone runs `npm run db:migrate:prod`. Writing the release steps down (merge → CI → migrate → deploy → smoke test) is EVE-20, parked with the rest of the environment review.
 
 Budget: **$26–44/month** all in — see §9 of the architecture doc.
 
@@ -135,33 +130,38 @@ The shape is R2's on purpose, not the local driver's: the browser asks for a tic
 - [x] **Presigned upload straight from the browser**, public read — `lib/files/sigv4.ts` signs without pulling in ~15MB of AWS SDK for one URL
 - [x] **Gallery photography** — pick a file when adding a photo; a photo-less row is still valid and renders its `tone` tile. One `<Photo>` component now serves all five places that used to each render the tile themselves
 - [x] Replacing a photograph deletes the one it replaced, so re-uploads do not quietly accumulate objects on a bill nobody is watching
-- [ ] **Product images** — same three lines (`uploadFile` → store the url); the catalog drawer just has not been wired yet
+- [x] **Product images** — the catalog drawer's "תמונה ותגיות" (`ImageField`, kind `product`); a marketplace copy carries its photo under the studio's own key prefix
+- [x] **Shrunk and stripped before upload** (2026-11-27, EVE-25) — `lib/files/shrink.ts`: 2400 px (4000 for an underlay, 1200 for a logo or signature), EXIF rotation applied, no metadata kept
 - [x] **Underlay tracing** (F-3.5) — upload a photo or scan, place it under the wall graph, draw over it. `PlanUnderlayLayer` renders it first in the canvas backdrop, so every zone tint, feature, door and wall sits above it. Locked by default: once walls are traced onto an image, nudging the image invalidates all of them silently, so moving it is something you switch on
 - [x] **Calibration** (F-3.4) — mark two points on the plan, type what that distance really is, and the image is scaled until it reads true. `lib/venues/underlay.ts` + `npm run check:underlay`
 
   **`mmPerUnit` is NOT what calibration writes, and is not a stub.** The plane is millimetres, so the factor is 1 by definition; it survives only from the cancelled PDF import (ADR-3), the one thing that ever put foreign units here. Putting an image's scale there instead would make a 3-metre drape a different size per building (catalog widths are mm), give scale two sources of truth that drift, and route the compensation through `measure.ts` / `quote.ts` / `aggregate.ts` — i.e. prices. So the picture is resized and every millimetre downstream keeps meaning a millimetre. Scaling is uniform-only and anchored at the first point clicked; degenerate spans, non-positive lengths and absurd results are refused with a sentence rather than applied
 
+**Since then R2 is live** — the develop and production studios' photos are served from the bucket. The paragraph below is the August record.
+
 **What is verified, and what is not.** The local path was exercised end to end against a running server: an authenticated PUT stores bytes, a public GET returns them byte-identical with immutable cache headers, and every boundary refuses — another studio's key prefix (404), an SVG (415), an empty body (400), no session (401), a traversal key (rejected). The R2 path is checked against published SHA-256 and RFC 4231 vectors and asserted for structure and determinism, but **no byte has ever landed in a real bucket** — that needs an account. If the first PUT returns 403, the canonical request is where to look. Cloudflare also needs two things set on its side that no environment variable here can express: CORS allowing PUT from the app's origin, and public read on the custom domain.
 
-### 3. Clerk
+### 3. Auth — **done, with Better Auth instead of Clerk**
 
-Blocks nothing, which is why it is not first — but do it **before the first outside studio signs up**. Migrating zero passwords beats migrating real ones.
+The plan here was Clerk. It was replaced on 2026-10-17 by **Better Auth, in-process** (ADR-10 as updated): it owns passwords, sessions, verification, reset, Google sign-in and the rate limit; roles and tenancy stay in our own tables, and `currentSession()` (`lib/auth/session.ts`) is the only seam. No rented identity service, and no passwords to migrate later.
 
-- [ ] Clerk answers "who"; roles and tenancy stay in our own tables (ADR-10)
-- [ ] Retires `lib/auth/password.ts`, `lib/auth/session.ts`, the `sessions` table and the cookie guard — ~570 lines that are a liability to own
-- [ ] Brings verification, reset and invitation email with it
+- [x] Verification, reset and invitation email — `lib/email/templates/` through Resend
+- [ ] Two-factor sign-in for owners — EVE-49
+- [ ] Bot protection on sign-up and forgot-password — EVE-21, parked with the environment review
 
 ### 4. Delivery and notifications
 
-- [ ] **Venue guest invitations are still undeliverable** — `shareVenue({ kind: "guest" })` writes a pending grant and sends nothing. A guest is another studio's designer, so joining them needs a cross-org account flow, not just a password screen
-- [ ] **The bell in the top bar is decorative** — an icon button with no handler and no table behind it. Worth building only once there is more than one thing to announce (a venue shared with an existing teammate is the first real candidate)
-- [ ] **Product email** (Resend, free to 3,000/month) once a sending domain exists — mailing a quote to a client is the first genuine need
+- [x] **Venue guest invitations** — superseded on 2026-10-30: every signed-in business may open every venue's plan, and a guest grant goes to an ORGANISATION (`fetchVenueDirectory`/`followVenue`), so there is no per-person invitation to deliver
+- [x] **The bell** — `lib/notifications/` (a row per recipient), `components/notification-bell.tsx` and the side sheet (`components/notifications-sheet.tsx`), grouped by event
+- [x] **Email** — verification, reset, team and client invitations (`lib/email/`). Whether production mail really reaches an outside inbox is EVE-14, parked with the environment review
+- [ ] **Email for the notifications that matter** — proposal sent, order answered, venue invitation, late installment (audit P1-18, P1-25, P1-27)
 
 ### 5. Account management
 
 - [x] **Password change** — `changePassword` in `lib/auth/actions.ts`, on the account screen. Needs no email, which is why it did not wait for one: it requires the CURRENT password (a session cookie is a bearer token, so a borrowed laptop must not be enough to take an account away from its owner) and ends every other session, which is what a person actually wants when they change a password they think someone else knows
-- [ ] **Reset by email** — for someone who has *forgotten* it. This half genuinely waits on a sending domain
-- [ ] Changing your sign-in address (needs verification of the new one before the old stops working; the field is deliberately read-only until then)
+- [x] **Reset by email** — `/forgot` → `/reset`, Better Auth + Resend
+- [ ] Changing your sign-in address (needs verification of the new one before the old stops working; the field is deliberately read-only until then) — EVE-50
+- [ ] Delete my account / close my business, and a full export first — EVE-22, EVE-51
 
 ### 6. Known rough edges
 
@@ -171,7 +171,7 @@ Small, real, and each one is a decision already made rather than an oversight:
   - Worth recording what this turned up: the silence was not only rude, it was **mispriced**. A drape measures its metres off the wall it hangs on, and with no wall it falls back to the product's catalog width — so a 14-metre run quoted as 3 metres of fabric on a screen that looked merely empty. The notice on the quote and the packing list says exactly that
 - [ ] **Venue-guest availability still has no surface, and deliberately did not get one on `/production`.** `grantScope()` promises guests anonymous busy/free dates, and the runway was the obvious place to hang them — it is the screen with the dates on it. It was the wrong place. Occupancy is a fact about a **property**: it is true of the hall no matter whose studio booked it, and it belongs beside the plan, on the venue/halls surface, where a guest is already allowed to stand. The runway is a fact about **one studio's own book of work** — clients, quotes, confirmations, money — of which a guest may see nothing. Drawing them on one screen would have meant a single page rendering two access levels, which is how the wrong one eventually leaks.
   - Still **blocked on the same model decision, not on UI**: `venue_grants.grantee_org_id` is null until phase 3, and `assertPlacement` requires an event's venue to belong to the event's own studio, so two studios cannot book the same hall today. Decide how a cross-studio booking is represented first. Nothing about the runway moves that decision either way
-- [ ] **The outputs surface wants a redesign** — the quote stage renders the existing screen and was always marked provisional
+- [x] **The outputs surface wants a redesign** — done in November 2026: the outputs shell (start rail, light table, end panel) and the quote in three hand-made directions with twelve settings (CLAUDE.md, "DOCUMENTS" and "OUTPUTS AND 3D WEAR THE SHELL")
 - [x] **`F-8.2` and `F-8.3` are cited in code but were missing from `docs/01`** — §5.8 now carries both: the studio's people, and venue sharing with the guest line written where the requirement can be read rather than only where it is enforced
 
 ### 10. Suppliers and procurement · **built**
@@ -226,9 +226,9 @@ The question that costs them money is **"what is about to go wrong, and how long
 
 ## Not scheduled
 
-**Phase 2** (per §6 of the requirements): 3D in approximation, the client viewing link, saved viewpoints.
+**Phase 2** (per §6 of the requirements): 3D in approximation, the client viewing link, saved viewpoints — **built** (October 2026: `lib/scene/`, `/scene`, `/v/<token>`, viewpoints and the tour).
 
-**Phase 3**: billing, onboarding, full tenant isolation with RLS.
+**Phase 3**: billing — the studio's own tax documents are built (phase 1, `lib/billing/`), phase 2 waits on the Tax Authority login, and charging studios a subscription waits on a price (audit P0-10, P1-24); onboarding — audit P1-19; tenant isolation — a cross-tenant test over every server action is EVE-23, row-level security after it is EVE-76.
 
 **Cancelled and not to be rebuilt without reading why**: PDF import and automatic table recognition (ADR-3), Konva (ADR-8), server-side Playwright PDF rendering (ADR-9). Each removed a dependency, a service or a monthly bill. See appendix ב' of `docs/01`.
 
@@ -236,18 +236,12 @@ The question that costs them money is **"what is about to go wrong, and how long
 
 ## The gates
 
-Before anything is called done:
+CI runs the first four on every push, and master accepts a pull request only when they are green (`.github/workflows/ci.yml`, EVE-19):
 
 ```
 npm run typecheck      # tsc --noEmit; a Stop hook runs this too
-npm run check:actions      # the design-document reducer + undo history
-npm run check:access       # the venue access policy
-npm run check:files        # key shape, path traversal, the upload allowlist
-npm run check:sigv4        # the R2 signing chain, against published crypto vectors
-npm run check:procurement  # the three procurement reductions (sum / peak / per-event)
-npm run check:runway       # the backward plan: lanes, due dates, alerts, collisions
-npm run check:costs        # no client-facing surface reads the studio's cost
-npm run db:verify          # full roundtrip against a real Postgres
+npm run lint           # clean since 2026-11-27 — a deliberate React Compiler pattern is silenced at its line, with the reason
+npm run checks         # every check:* self-check (180+), eight at a time; `npm run checks <part>` runs some
+npm run build          # the production build
+npm run db:verify      # and the db:verify:* walk-throughs — against a real Postgres, by hand
 ```
-
-`npm run lint` currently reports 20 pre-existing `react-hooks/set-state-in-effect` errors in four `use-*.ts` hooks. They are not in the list above because they predate this work and are not gating it — worth a pass of their own.

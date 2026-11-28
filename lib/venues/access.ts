@@ -143,6 +143,13 @@ export function canManageVenue(role: VenueRole): boolean {
   return role === "manager";
 }
 
+/** May the caller read who this property is shared with (names and email addresses)? The owning
+ *  studio's people may — whatever their role on it — and a manager may. Viewer is NOT enough since
+ *  2026-10-30: every business is a viewer of every venue, and anyone may follow one (EVE-23). */
+export function canSeeGrants(ownsVenue: boolean, role: VenueRole): boolean {
+  return ownsVenue || canManageVenue(role);
+}
+
 export function isVenueRole(value: unknown): value is VenueRole {
   return value === "viewer" || value === "editor" || value === "manager";
 }
@@ -197,6 +204,16 @@ if (isMain(import.meta.url)) {
   assert(resolveVenueRole({ ...none, ownsVenue: true, memberGrant: "editor" }) === "editor", "a member grant inside the studio lets them edit");
   assert(resolveVenueRole({ ...none, ownsVenue: true, orgGrant: "manager" }) === "viewer", "a guest grant means nothing inside the owning studio");
   assert(!canEditPlan(resolveVenueRole(none)), "seeing is not editing");
+
+  // Who a property is shared with — names and email addresses of other businesses' people — is the
+  // owning studio's to read, and a manager's (who may share it anyway). Every other business can open
+  // the PLAN since 2026-10-30, and following a venue gives anyone a viewer grant; neither may read the
+  // share list (found by db:verify:isolation, EVE-23).
+  assert(canSeeGrants(true, "viewer"), "the owning studio's people read the share list");
+  assert(canSeeGrants(false, "manager"), "a manager-level guest reads it (they can share anyway)");
+  assert(!canSeeGrants(false, resolveVenueRole(none)), "a business that merely opens the plan does NOT");
+  assert(!canSeeGrants(false, resolveVenueRole({ ...none, orgGrant: "viewer" })), "nor one that followed the venue");
+  assert(!canSeeGrants(false, resolveVenueRole({ ...none, orgGrant: "editor" })), "nor a guest editor");
 
   assert(isVenueRole("editor") && !isVenueRole("admin"), "isVenueRole rejects a role that does not exist");
   assert(isGrantKind("member") && !isGrantKind("owner"), "isGrantKind rejects a studio role");

@@ -25,6 +25,7 @@ export function useCameraSettle(onSettle: (camera: Camera) => void, delayMs = SE
   const get = useThree((s) => s.get);
   const controls = useThree((s) => s.controls);
   const cb = useRef(onSettle);
+  // eslint-disable-next-line react-hooks/refs -- the "latest value" ref the frame callback reads; deliberate
   cb.current = onSettle;
   const settled = useRef({ p: new Vector3(), q: new Quaternion(), valid: false });
   const timer = useRef(0);
@@ -43,6 +44,7 @@ export function useCameraSettle(onSettle: (camera: Camera) => void, delayMs = SE
     timer.current = window.setTimeout(fire, delayMs);
   };
   const armRef = useRef(arm);
+  // eslint-disable-next-line react-hooks/refs -- the "latest value" ref; deliberate
   armRef.current = arm;
 
   useFrame(({ camera }) => {

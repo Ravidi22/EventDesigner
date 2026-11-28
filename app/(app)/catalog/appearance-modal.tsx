@@ -2270,6 +2270,7 @@ export function AppearanceModal({
   // so its Escape answers it.
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const discardUp = useRef(false);
+  // eslint-disable-next-line react-hooks/refs -- the "latest value" ref the key handler reads; deliberate
   discardUp.current = confirmDiscard;
 
   // ── Shades (QA VS-1, DECIDE 4) ────────────────────────────────────────────────────────────────
@@ -2414,11 +2415,13 @@ export function AppearanceModal({
   const duplicate = (ids: readonly string[]) => addCopies(shapes.filter((s) => ids.includes(s.id)).map((s) => shifted(s, PASTE_STEP_MM, PASTE_STEP_MM)));
   const copy = (ids: readonly string[]) => {
     const list = shapes.filter((s) => ids.includes(s.id));
+    // eslint-disable-next-line react-hooks/globals -- the editor's clipboard is module-level on purpose: it outlives one opening of the modal
     if (list.length) copiedShapes = list.map((s) => shifted(s, -anchor.x, -anchor.y));
   };
   const paste = () => {
     if (!copiedShapes.length) return;
     // Each paste steps on from the last one, so three pastes are three shapes, not one on top of two.
+    // eslint-disable-next-line react-hooks/globals -- the module-level clipboard (above), in a click handler
     copiedShapes = copiedShapes.map((s) => shifted(s, PASTE_STEP_MM, PASTE_STEP_MM));
     addCopies(copiedShapes.map((s) => shifted(s, anchor.x, anchor.y)));
   };

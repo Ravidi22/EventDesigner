@@ -176,6 +176,7 @@ export function FrameGate({ scene, hidden, onWarm }: { scene: Scene; hidden: boo
  *  `renderer.info` once the frame is drawn. No state, no re-render. */
 function PerfProbe({ target, stats }: { target: RefObject<HTMLElement | null>; stats: Scene["stats"] }) {
   const gl = useThree((s) => s.gl);
+  // eslint-disable-next-line react-hooks/purity -- a dev perf probe: the first render's time is the point
   const mountedAt = useRef(performance.now());
   const frameStart = useRef(0);
   const firstFrameMs = useRef<number | null>(null);
