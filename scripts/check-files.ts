@@ -5,12 +5,13 @@
 // much (a minified check keeps none of its comments and few of its strings):
 //   · no module the app builds from (lib/, app/, components/, the root's .ts files) has an inline
 //     `if (isMain(import.meta.url))` block — a branch from before the move converts with
-//     `npx tsx scripts/split-self-checks.ts`;
+//     `npx tsx scripts/split-self-checks.ts` — nor Node 24's `if (import.meta.main)`;
 //   · none of them imports, re-exports, import()s or require()s a `*.check` file — read off the syntax
 //     tree, so a commented-out import or a string that merely looks like one never counts;
-//   · every `*.check.ts(x)` is run by some `check:*` script, and every `check:*` script runs only
-//     `*.check` files that exist — a check nobody runs, or a script left running a module whose check
-//     moved out, passes while asserting nothing.
+//   · every `*.check.ts(x)` (the root's too) is run by some `check:*` script, and every `check:*`
+//     script runs at least one `*.check` file and only ones that exist — a check nobody runs, a script
+//     that runs nothing, or a script left running a module whose check moved out, passes while
+//     asserting nothing.
 import ts from "typescript";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -19,6 +20,8 @@ import { findBlockModules } from "./split-self-checks-core";
 const IS_CHECK = /\.check\.tsx?$/;
 const NAMES_A_CHECK = /\.check(\.(tsx?|js))?$/;
 const BUNDLED_DIRS = ["lib", "app", "components"];
+/** A top-level `if (import.meta.main)` starts its line; one quoted in a doc comment does not. */
+const NODE_MAIN_GUARD = /^if \(import\.meta\.main\)/m;
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -65,6 +68,13 @@ export function checkFiles(root: string, scripts: Record<string, string>): strin
   for (const f of findBlockModules(modules)) {
     problems.push(`${rel(f)}: an inline isMain self-check — run \`npx tsx scripts/split-self-checks.ts\``);
   }
+  // Node 24's own spelling of the same guard (PR #3 review). The codemod does not convert it: move the
+  // block into a sibling *.check.ts by hand.
+  for (const f of modules) {
+    if (NODE_MAIN_GUARD.test(readFileSync(f, "utf8"))) {
+      problems.push(`${rel(f)}: an inline \`if (import.meta.main)\` self-check — move it into a sibling *.check.ts`);
+    }
+  }
   for (const f of modules) {
     for (const s of specifiersOf(f)) if (NAMES_A_CHECK.test(s)) problems.push(`${rel(f)}: imports ${s} — that check would ship with it`);
   }
@@ -72,14 +82,18 @@ export function checkFiles(root: string, scripts: Record<string, string>): strin
   const run = new Set<string>();
   for (const [name, command] of Object.entries(scripts)) {
     if (!name.startsWith("check:")) continue;
-    for (const file of command.split(/\s+/).filter((t) => /\.(tsx?|m?js)$/.test(t))) {
+    const files = command.split(/\s+/).filter((t) => /\.(tsx?|m?js)$/.test(t));
+    if (files.length === 0) problems.push(`package.json: ${name} runs no *.check file — it passes while asserting nothing`);
+    for (const file of files) {
       run.add(file);
       if (!IS_CHECK.test(file)) problems.push(`package.json: ${name} runs ${file}, which is not a *.check file`);
       else if (!existsSync(join(root, file))) problems.push(`package.json: ${name} runs ${file}, which does not exist`);
     }
   }
   const checkDirs = [...dirs, ...(existsSync(join(root, "scripts")) ? ["scripts"] : [])];
-  for (const f of checkDirs.flatMap((d) => walk(join(root, d))).filter((f) => IS_CHECK.test(f))) {
+  // The root's own *.check files too (PR #3 review) — the walk covers the folders only.
+  const checks = [...checkDirs.flatMap((d) => walk(join(root, d))), ...rootFiles].filter((f) => IS_CHECK.test(f));
+  for (const f of checks) {
     if (!run.has(rel(f))) problems.push(`${rel(f)}: no check:* script runs it`);
   }
   return problems;

@@ -1,5 +1,5 @@
 // Pure event-folder logic (no imports — keeps the self-check runnable under plain node).
-// Run: node --experimental-strip-types lib/gallery/folder-logic.ts
+// Run: npm run check:folder
 
 // Pure toggle — add if absent, remove if present.
 export function nextFolder(folder: string[], imageId: string): string[] {

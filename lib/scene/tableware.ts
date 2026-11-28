@@ -15,7 +15,7 @@
 // setting is laid off the table's REAL edge along the diner's line of sight (`laySettings`): the
 // charger a hand in from the edge, the whole setting kept on the top, clear of the centrepieces,
 // clear of its neighbours — shrunk (to S_MIN at most) only as far as that takes, and left out
-// where even the smallest one has no room. `npx tsx lib/scene/tableware.ts` holds the cases.
+// where even the smallest one has no room. `npm run check:tableware` holds the cases.
 //
 // One geometry for every seat in the room: a single instanced body however many guests.
 import type { Point } from "@/lib/studio/hall";

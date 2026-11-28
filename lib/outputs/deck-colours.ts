@@ -4,7 +4,7 @@
 // 60 cyan, 90 lavender, 110 orange… A height between two keys takes the nearer one — a 45cm stage is
 // drawn as the 40s are, and its legend row still says 45.
 //
-// Pure, self-checked: `npx tsx lib/outputs/deck-colours.ts`.
+// Pure, self-checked: `npm run check:deck-colours`.
 
 /** The crew's key, centimetres → colour. */
 export const HEIGHT_COLOURS: readonly (readonly [number, string])[] = [

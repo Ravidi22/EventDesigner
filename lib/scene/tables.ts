@@ -14,7 +14,7 @@
 // candlestick on the floor resolve their colour, count, style and flowers by one rule — the canvas's
 // `own` (canvas-stage.tsx:3924): the shade's swatch, else the row's fill, else the kind's tone.
 //
-// Pure: no DOM, no React rendering, no three, no prices. Self-checked: `npx tsx lib/scene/tables.ts`.
+// Pure: no DOM, no React rendering, no three, no prices. Self-checked: `npm run check:tables`.
 import type { Point } from "@/lib/studio/hall";
 import type { Product } from "@/lib/catalog/types";
 import type { DesignDocumentContent, DesignTable, Placement } from "@/lib/design-document/types";

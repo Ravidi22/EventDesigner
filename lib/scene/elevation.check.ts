@@ -6,7 +6,7 @@ import { rectOutline } from "@/lib/design-document/stage";
 import { primeCatalog } from "@/lib/catalog/storage";
 import { elevationOf, RUG_MM } from "./elevation";
 
-// ponytail: self-check. Run: npx tsx lib/scene/elevation.ts
+// ponytail: self-check. Run: npm run check:elevation
 const assert = (ok: boolean, msg: string) => {
   if (!ok) {
     console.error("FAIL", msg);

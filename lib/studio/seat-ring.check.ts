@@ -2,7 +2,7 @@
 import { CHAIR_D_MM, CHAIR_W_MM, type Seat } from "./seating";
 import { ringInRoom, seatRing } from "./seat-ring";
 
-// ponytail: self-check. Run: npx tsx lib/studio/seat-ring.ts
+// ponytail: self-check. Run: npm run check:seat-ring
 const assert = (cond: boolean, m: string) => {
   if (!cond) throw new Error("FAIL: " + m);
 };

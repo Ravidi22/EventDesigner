@@ -5,13 +5,14 @@ import { join, relative } from "node:path";
 import { gzipSync } from "node:zlib";
 
 /**
- * Signs that a self-check made it into a chunk: the old inline guard (`isMain`) or a
- * `check:<name> — …` message. Kept narrow: app text says neither. This is a BACKSTOP, not the guard —
- * a minified check keeps no comments and few distinctive strings, so a `*.check.ts` imported by app
- * code would mostly pass unseen here. `check:check-files` (scripts/check-files.ts) is what stops that,
- * at the source.
+ * Signs that a self-check made it into a chunk: the old inline guard (`isMain`), a `check:<name> — …`
+ * message, a check's `FAIL: ` assertion, or its closing `… self-check passed` line. Since
+ * lib/self-check.ts is gone no chunk can say isMain, and few checks print a check:<name> line; the last
+ * two are printed by most checks and by no app code (PR #3 review). Kept narrow: app text says none of
+ * them. This is a BACKSTOP, not the guard — a minified check keeps no comments and few distinctive
+ * strings — `check:check-files` (scripts/check-files.ts) is what stops a check being imported, at the source.
  */
-export const CHECK_FINGERPRINTS: RegExp[] = [/\bisMain\b/, /check:[a-z][a-z0-9-]+ — /];
+export const CHECK_FINGERPRINTS: RegExp[] = [/\bisMain\b/, /check:[a-z][a-z0-9-]+ — /, /[`"']FAIL: /, /self-check passed/];
 
 export const carriesChecks = (source: string) => CHECK_FINGERPRINTS.some((re) => re.test(source));
 

@@ -1,7 +1,7 @@
 // What `saveSceneSettings` accepts. Every export of a "use server" module is a public POST endpoint
 // (CLAUDE.md), so the settings it is handed are whatever a browser chose to send: this is the one
 // place they are turned into a SceneSettings or refused. Plain module (not "use server") so the
-// rules are checked here under Node — `npx tsx lib/scene/clean.ts`.
+// rules are checked here under Node — `npm run check:scene-settings`.
 import { MAX_VIEWPOINTS, MOODS, type Mood, type SceneSettings, type Tour, type TourStop, type Viewpoint } from "./types";
 
 export const MAX_TOUR_STOPS = 100;

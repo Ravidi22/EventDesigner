@@ -3,7 +3,7 @@ import { TREE_CLUMPS } from "@/components/item-symbol";
 import { type LeafCard, type Part } from "./types";
 import { CARDS, cardSizeOf, DATES, hedgeParts, insideOf, MAX_HEDGE_BLOBS, PALM_LEAFLETS, PALM_TIERS, palmParts, plantTurn, POT_MATERIAL, potParts, shrubParts, TREE, treeParts, TRUNK } from "./plants";
 
-// ponytail: self-check. Run: npx tsx lib/scene/plants.ts
+// ponytail: self-check. Run: npm run check:plants
 const assert = (ok: boolean, msg: string) => {
   if (!ok) {
     console.error("FAIL", msg);

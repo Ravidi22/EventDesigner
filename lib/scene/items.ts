@@ -19,7 +19,7 @@
 // builds the TABLE kinds — the dressed table is what the client sees first (spec §2) — and the
 // chairs; the floor kinds are phase B and get the ADR-5 fallback meanwhile, marked per kind below.
 //
-// Pure: no React, no three. `npx tsx lib/scene/items.ts` runs the self-check.
+// Pure: no React, no three. `npm run check:items` runs the self-check.
 import type { Footprint } from "@/lib/studio/footprint";
 import { footprintOutlines } from "@/lib/studio/footprint";
 import type { Point } from "@/lib/studio/hall";

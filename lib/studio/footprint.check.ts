@@ -5,7 +5,7 @@ import type { Point } from "@/lib/design-document/types";
 import type { EdgeCurve } from "@/lib/studio/hall";
 import { arcSpecOf, buildArcOutline, buildShapeOutline, catalogBox, clampSize, composeShapes, customShapeBounds, edgePiece, evenInset, flattenEdge, footprintBounds, footprintOutlines, hollowOuter, hollowSideNames, MIN_FOOTPRINT_MM, pieceOf, piecesRing, resizeAxes, resolveContent, resolveFootprint, ringSpecOf, sampledBounds, scaleFootprint, shapeFootprint, shapePieces, sizedFootprint, sizedShapes, uShapeBandOf, type BuiltOutline, type Footprint, type ShapeDims } from "./footprint";
 
-// ponytail: self-check. Run: node --experimental-strip-types lib/studio/footprint.ts
+// ponytail: self-check. Run: npm run check:footprint
 const assert = (c: boolean, m: string) => { if (!c) throw new Error("FAIL: " + m); };
 const base: Product = {
   id: "x", name: "בדיקה", category: "chairs", layer: "floor",

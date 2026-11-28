@@ -21,7 +21,7 @@
 // Heights here are above the floor the thing stands on; ./envelope.ts adds that floor (a colonnade
 // on a stage stands on its deck).
 //
-// Pure, deterministic; `npx tsx lib/scene/structures.ts` holds a ring colonnade.
+// Pure, deterministic; `npm run check:structures` holds a ring colonnade.
 import type { Point } from "@/lib/studio/hall";
 import { featureFootprint, type StructureFeature } from "@/lib/venues/structure";
 import { columnOf, columnStacks } from "@/lib/venues/column";

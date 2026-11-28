@@ -12,7 +12,7 @@
 // however many tables there are (./collect.ts). Greens are one flat leaf per colour, scaled to each
 // sprig's length; trails droop as three small orchids; the foliage `base` is nothing — the vase or
 // the table is under it. Deterministic: composeFlowers is seeded and memoised, and nothing here
-// draws a random number. `npx tsx lib/scene/flowers.ts` runs the self-check.
+// draws a random number. `npm run check:scene-flowers` runs the self-check.
 //
 // A HEAD IS A FLOWER (2026-10-27, the user: "more alive, not a circle — look like the flower"):
 // real petals per family (`bloomMesh` — a rose's spiral, a peony's ruffled layers, a tulip's cup, a

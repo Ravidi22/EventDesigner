@@ -2,7 +2,7 @@
 import { type StructureFeature } from "@/lib/venues/structure";
 import { readStructures, shaftTopOf } from "./structures";
 
-// ponytail: self-check. Run: npx tsx lib/scene/structures.ts
+// ponytail: self-check. Run: npm run check:structures
 const assert = (ok: boolean, msg: string) => {
   if (!ok) {
     console.error("FAIL", msg);

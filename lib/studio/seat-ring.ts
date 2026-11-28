@@ -15,7 +15,7 @@
 // IS — the spacing tool, the printed measurements, the clearance halos — stays table edge to table
 // edge, without the chairs (CLAUDE.md, "Gaps between tables … WITHOUT the chairs").
 //
-// Pure; self-checked: `npx tsx lib/studio/seat-ring.ts`.
+// Pure; self-checked: `npm run check:seat-ring`.
 import type { Point } from "./hall";
 import { CHAIR_D_MM, CHAIR_W_MM, type Seat } from "./seating";
 import type { BoxShape } from "./snap";

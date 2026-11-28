@@ -4,7 +4,7 @@ import type { VenueStructure } from "@/lib/venues/structure";
 import { joinWalls, splitWall } from "@/lib/venues/wall-split";
 import { doorOpenings, nearestWall, pointToT, resolveSpan, spanBand, wallSegment, wallTrack, WHOLE_WALL } from "./anchor";
 
-// ponytail: self-check. Run: node --experimental-strip-types lib/studio/anchor.ts
+// ponytail: self-check. Run: npm run check:anchor
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

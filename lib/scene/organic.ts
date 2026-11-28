@@ -1,6 +1,6 @@
 // The arithmetic of the two organic parts — a BLOB (a canopy's clump, a shrub, a hydrangea's
 // mophead) and a FROND (a palm's leaf, a eucalyptus sprig, a monstera leaf) — pure, so the shapes
-// are the builder's to decide and `npx tsx lib/scene/organic.ts` can hold them, and the viewer
+// are the builder's to decide and `npm run check:organic` can hold them, and the viewer
 // (components/scene/scene-geometry.ts) only turns them into triangles.
 //
 // Seen on plan A in a browser (2026-10-24, Ravid: "work and improve the visual of the objects — the

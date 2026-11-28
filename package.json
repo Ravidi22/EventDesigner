@@ -191,7 +191,7 @@
     "db:verify:production": "tsx lib/production/verify.ts",
     "db:verify:billing": "tsx lib/billing/verify.ts",
     "check:client-product": "tsx lib/client-portal/safe-product.check.ts",
-    "check:scene": "tsx lib/scene/check.check.ts",
+    "check:scene": "tsx lib/scene/wiring.check.ts",
     "check:scene-frame": "tsx lib/scene/frame.check.ts",
     "check:scene-boundary": "tsx lib/scene/boundary.check.ts",
     "check:scene-share": "tsx lib/scene/share-boundary.check.ts",
