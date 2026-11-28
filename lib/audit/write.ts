@@ -2,8 +2,16 @@
 // the server actions that call it have already proved who is acting (the same rule as
 // lib/notifications/write.ts).
 //
-// Unlike `notify`, it THROWS: it runs inside the writer's own transaction where there is one, and a
-// sensitive change that cannot be recorded is not made.
+// Unlike `notify`, it THROWS: it runs inside the writer's own transaction, and a sensitive change that
+// cannot be recorded is not made. Every writer passes its `tx` — db:verify:account refuses the insert
+// at the database and checks that each audited change is then not made (PR #5 review).
+//
+// Two changes are made by Better Auth in its own transaction, which ours cannot join:
+//   · a password change (lib/auth/actions.ts changePassword) — the row is written once Better Auth has
+//     committed it, so a row that cannot be written leaves the change unrecorded and the action fails;
+//   · a person's own delete (lib/account/member.ts beforePersonErased, from Better Auth's beforeDelete
+//     hook) — the row is written BEFORE the delete, so a row that cannot be written stops it.
+// The export route (app/api/account/export/data) writes its row before it answers: no row, no data.
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { auditLog, users } from "@/lib/db/schema";

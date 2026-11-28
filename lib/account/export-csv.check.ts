@@ -15,6 +15,17 @@ assert(csvCell("=SUM(A1)") === "'=SUM(A1)", "a formula is defused");
 for (const lead of ["+", "-", "@"]) assert(csvCell(`${lead}A1`) === `'${lead}A1`, `a cell starting with ${lead} is defused`);
 assert(csvCell(null) === "" && csvCell(undefined) === "", "empty for nothing");
 assert(csvCell(-5) === "-5" && csvCell("-100.00") === "-100.00", "a negative number is a number, not a formula");
+// OWASP's list has a leading tab and carriage return too (PR #5 review).
+const TAB = String.fromCharCode(9);
+const CR = String.fromCharCode(13);
+assert(csvCell(`${TAB}=HYPERLINK("http://x","y")`).startsWith(`"'${TAB}=`), "a cell starting with a tab is defused");
+assert(csvCell(`${CR}=1+1`).startsWith(`"'${CR}=`), "a cell starting with a carriage return is defused");
+// A phone number cannot call a function: digits, spaces, dashes and brackets stay as typed — the guard's
+// apostrophe showed on every +972… number in clients.csv (PR #5 review).
+assert(csvCell("+972 50-123-4567") === "+972 50-123-4567", "a +972 phone is left as it is");
+assert(csvCell("+1 (212) 555-0100") === "+1 (212) 555-0100", "…with brackets too");
+assert(csvCell("+972-50-SUM(1)") === "'+972-50-SUM(1)", "…but letters after a + are still defused");
+assert(csvCell("-") === "'-" && csvCell("+") === "'+", "a lone sign is defused (no digit)");
 assert(csvCell(12.5) === "12.5" && csvCell(true) === "כן" && csvCell(false) === "לא", "numbers and switches");
 
 // ── The tables ───────────────────────────────────────────────────────────────────────────────────

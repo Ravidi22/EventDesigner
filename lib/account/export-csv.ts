@@ -7,8 +7,10 @@ export function csvCell(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "boolean") return value ? "כן" : "לא";
   let s = typeof value === "object" ? JSON.stringify(value) : String(value);
-  // A leading = + - @ makes Excel evaluate the cell; a plain (negative) number is left a number.
-  if (/^[=+\-@]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = `'${s}`;
+  // A leading = + - @ — or tab or carriage return (OWASP) — makes a spreadsheet evaluate the cell.
+  // Left as typed: a plain (negative) number, and a phone — digits with spaces, dashes and brackets
+  // after a sign call no function; the apostrophe showed on every +972… number (PR #5 review).
+  if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s) && !/^\+?[\d ()-]*\d[\d ()-]*$/.test(s)) s = `'${s}`;
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 

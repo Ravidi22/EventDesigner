@@ -392,18 +392,19 @@ export async function removeProduct(
       .set({ archived: true, updatedAt: new Date() })
       .where(and(eq(products.id, id), eq(products.organizationId, organizationId)));
   } else {
-    // Variants cascade from the product's own foreign key.
-    await database
-      .delete(products)
-      .where(and(eq(products.id, id), eq(products.organizationId, organizationId)));
+    // Variants cascade from the product's own foreign key. The delete and its audit row are one
+    // transaction: a delete that cannot be recorded is not made (lib/audit/write.ts; PR #5 review).
     const { userId } = await currentActor();
-    await recordAudit(database, {
-      organizationId,
-      actorUserId: userId,
-      action: "product.deleted",
-      target: { kind: "product", id },
-      summary: `מחיקת פריט מהקטלוג: ${row.name}`,
-      people: await peopleOf(database, [userId]),
+    await database.transaction(async (tx) => {
+      await tx.delete(products).where(and(eq(products.id, id), eq(products.organizationId, organizationId)));
+      await recordAudit(tx, {
+        organizationId,
+        actorUserId: userId,
+        action: "product.deleted",
+        target: { kind: "product", id },
+        summary: `מחיקת פריט מהקטלוג: ${row.name}`,
+        people: await peopleOf(tx, [userId]),
+      });
     });
   }
 

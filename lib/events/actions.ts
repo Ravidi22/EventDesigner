@@ -108,10 +108,10 @@ async function assertPlacement(
   venueId: string | undefined,
   zoneIds: string[],
   eventId: string,
-): Promise<void> {
+): Promise<string | null> {
   if (!venueId) {
     if (zoneIds.length) throw new Error("zones were given without a venue");
-    return;
+    return null;
   }
   const database = db();
   const [venue] = await database.select({ id: venues.id, owner: venues.organizationId }).from(venues).where(eq(venues.id, venueId)).limit(1);
@@ -124,10 +124,12 @@ async function assertPlacement(
       .from(events)
       .where(and(eq(events.id, eventId), eq(events.organizationId, organizationId), eq(events.venueId, venueId)))
       .limit(1);
-    if (!already) throw new Error("המתחם שייך לעסק שנסגר — אי אפשר להוסיף אליו אירועים חדשים");
+    // A correction the designer can make — another venue — so it is ANSWERED, not thrown: a thrown
+    // message is redacted in production (CLAUDE.md; PR #5 review).
+    if (!already) return "המתחם שייך לעסק שנסגר — אי אפשר להוסיף אליו אירועים חדשים";
   }
 
-  if (!zoneIds.length) return;
+  if (!zoneIds.length) return null;
   const unique = [...new Set(zoneIds)];
   const found = await database
     .select({ id: zones.id })
@@ -136,6 +138,7 @@ async function assertPlacement(
       and(inArray(zones.id, unique), eq(zones.venueId, venueId)),
     );
   if (found.length !== unique.length) throw new Error("zone not found on this venue");
+  return null;
 }
 
 /** Every event this studio has, newest first — the order the dashboard reads in, and the order the
@@ -221,11 +224,12 @@ export async function fetchActiveEvent(id: string | null): Promise<EventSummary 
  *  Zones are replaced wholesale for the same reason the venue plan's are: the details form hands
  *  back the selection it is holding, and a selection that got SHORTER cannot be expressed as a
  *  series of adds. Returns the whole list, because every caller re-renders one. */
-export async function saveEvent(event: EventSummary): Promise<EventSummary[]> {
+export async function saveEvent(event: EventSummary): Promise<EventSummary[] | { error: string }> {
   assertEvent(event);
   const organizationId = await currentOrg();
   const zoneIds = event.zoneIds ?? [];
-  await assertPlacement(organizationId, event.venueId, zoneIds, event.id);
+  const refusal = await assertPlacement(organizationId, event.venueId, zoneIds, event.id);
+  if (refusal) return { error: refusal };
 
   const row = toEventRow(event, organizationId);
   await db().transaction(async (tx) => {
@@ -284,7 +288,7 @@ export async function saveEvent(event: EventSummary): Promise<EventSummary[]> {
  *  The fields are copied across ONE BY ONE rather than spread. `patch` arrives over HTTP from
  *  whoever chose to POST it, and spreading it into .set() would let a caller write any column in the
  *  table, including organization_id — which is the whole tenant boundary. */
-export async function patchEvent(id: string, patch: EventPatch): Promise<EventSummary[]> {
+export async function patchEvent(id: string, patch: EventPatch): Promise<EventSummary[] | { error: string }> {
   assertId(id, "id");
   if (!patch || typeof patch !== "object") throw new Error("patch must be an object");
   // No currentOrg() call of its own: fetchEvent scopes the read and saveEvent scopes the write, so
@@ -357,23 +361,29 @@ export async function deleteEvent(id: string): Promise<EventSummary[] | { error:
     .where(and(eq(appointments.eventId, id), eq(appointments.organizationId, organizationId)));
   const links = await linksForAppointments(booked.map((a) => a.id), organizationId);
 
-  const [row] = await database
-    .delete(events)
-    .where(and(eq(events.id, id), eq(events.organizationId, organizationId)))
-    .returning({ id: events.id, clientName: events.clientName, date: events.eventDate });
+  // The delete and its audit row are one transaction: a delete that cannot be recorded is not made
+  // (lib/audit/write.ts; PR #5 review).
+  const { userId } = await currentActor();
+  const row = await database.transaction(async (tx) => {
+    const [deleted] = await tx
+      .delete(events)
+      .where(and(eq(events.id, id), eq(events.organizationId, organizationId)))
+      .returning({ id: events.id, clientName: events.clientName, date: events.eventDate });
+    if (!deleted) return null;
+    await recordAudit(tx, {
+      organizationId,
+      actorUserId: userId,
+      action: "event.deleted",
+      target: { kind: "event", id },
+      summary: `מחיקת אירוע: ${deleted.clientName}${deleted.date ? ` · ${deleted.date}` : ""}`,
+      people: await peopleOf(tx, [userId]),
+    });
+    return deleted;
+  });
   // Not found and not ours are the same answer, and it throws rather than returning `{ error }`:
   // a screen showing an event it cannot delete is holding a row that no longer exists, which is not
   // a correction the designer can make.
   if (!row) throw new Error("event not found");
-  const { userId } = await currentActor();
-  await recordAudit(database, {
-    organizationId,
-    actorUserId: userId,
-    action: "event.deleted",
-    target: { kind: "event", id },
-    summary: `מחיקת אירוע: ${row.clientName}${row.date ? ` · ${row.date}` : ""}`,
-    people: await peopleOf(database, [userId]),
-  });
 
   // The diary lives on /dashboard, which revalidateEvents already covers — the meetings that went
   // with the event are on the same screen as the event was.

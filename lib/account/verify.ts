@@ -16,27 +16,29 @@ import * as schema from "@/lib/db/schema";
 import { actAsUserForScript } from "@/lib/auth/session";
 import { cleanup, seed, sweep, type Fixture } from "@/lib/db/isolation/fixture";
 import { issuePaymentRequest } from "@/lib/billing/actions";
-import { removeMember, setMemberRole } from "@/lib/team/actions";
+import { inviteMember, removeMember, setMemberRole } from "@/lib/team/actions";
 import { fetchAuditLog } from "@/lib/audit/actions";
 import { AUTH_BASE_PATH, auth, authOrigin } from "@/lib/auth/auth";
+import { POST as publicAuthRoute } from "@/app/api/auth/[...all]/route";
 import { hashPassword } from "@/lib/auth/password";
 import { closeBusiness, reopenBusiness } from "@/lib/account/actions";
 import { BusinessClosedError } from "@/lib/db/org";
-import { fetchEvents, saveEvent } from "@/lib/events/actions";
+import { deleteEvent, fetchEvents, saveEvent } from "@/lib/events/actions";
 import type { EventSummary } from "@/lib/events/types";
 import { saveDocument } from "@/lib/studio/actions";
 import { mintSceneLink } from "@/lib/scene/actions";
 import { sceneByToken } from "@/lib/scene/share-read";
 import { fetchMyEvents } from "@/lib/client-portal/actions";
 import { fetchMarketplace } from "@/lib/marketplace/actions";
-import { fetchVenueDirectory, fetchVenues, followVenue, renameVenue } from "@/lib/venues/actions";
+import { deleteVenue, fetchVenueDirectory, fetchVenues, followVenue, renameVenue, revokeGrant, setGrantRole, shareVenue } from "@/lib/venues/actions";
 import { closeFinalCount } from "@/lib/hosting/actions";
 import { fetchDesignerSketch, inviteDesigner } from "@/lib/event-links/actions";
-import { sweepAccounts } from "@/lib/account/erase";
+import { eraseBusiness, sweepAccounts } from "@/lib/account/erase";
 import { ACCOUNT_TABLES, isSecretColumn } from "@/lib/account/tables";
 import { exportData } from "@/lib/account/export";
 import { GET as exportRoute } from "@/app/api/account/export/data/route";
-import { shareEventWithClient } from "@/lib/events/client-actions";
+import { shareEventWithClient, unshareEventClient } from "@/lib/events/client-actions";
+import { removeProduct } from "@/lib/catalog/actions";
 import { saveAppointment } from "@/lib/appointments/actions";
 import { saveSketchTemplate } from "@/lib/studio/sketch-actions";
 import { fileDriver } from "@/lib/files/driver";
@@ -104,6 +106,22 @@ async function namedInAudit(userId: string): Promise<number> {
   return rows[0].n;
 }
 
+/** Run `fn` with every audit insert refused by the database, the way a dropped connection or a full
+ *  disk would refuse it. */
+async function withAuditRefused<T>(fn: () => Promise<T>): Promise<T> {
+  await db().execute(sql.raw(`create or replace function verify_refuse_audit() returns trigger language plpgsql as $$ begin raise exception 'audit refused (db:verify:account)'; end $$`));
+  await db().execute(sql.raw(`create trigger verify_refuse_audit before insert on audit_log for each row execute function verify_refuse_audit()`));
+  try {
+    return await fn();
+  } finally {
+    await db().execute(sql.raw(`drop trigger if exists verify_refuse_audit on audit_log`));
+    await db().execute(sql.raw(`drop function if exists verify_refuse_audit()`));
+  }
+}
+
+/** True when the promise rejected. */
+const refused = (p: Promise<unknown>) => p.then(() => false, () => true);
+
 // ── the people ──────────────────────────────────────────────────────────────────────────────────
 
 step("a designer deletes their own account", async (f) => {
@@ -120,6 +138,97 @@ step("a designer deletes their own account", async (f) => {
   assert(self?.line === "מחיקת חשבון: חבר/ת צוות לשעבר", `the self-delete row forgot the name (got: ${self?.line})`);
   const role = log.rows.find((r) => r.action === "member.role_changed");
   assert(role?.line.startsWith("תפקיד: חבר/ת צוות לשעבר"), `an older row forgot the name too (got: ${role?.line})`);
+});
+
+step("the audit log pages through rows that share a timestamp without skipping one", async (f) => {
+  // Rows written in one transaction share now() to the microsecond; a cursor cut to the millisecond by
+  // a JS Date skipped the rows at a page edge (PR #5 review).
+  const at = "2020-01-02 03:04:05.123456+00";
+  const ids: string[] = [];
+  for (let i = 0; i < 60; i++) {
+    const id = randomUUID();
+    ids.push(id);
+    await db().execute(sql`insert into audit_log (id, organization_id, actor_user_id, action, summary, people, at)
+      values (${id}, ${f.orgA}, ${f.ownerA}, 'export.downloaded', ${`row ${i}`}, '{}'::jsonb, ${at}::timestamptz)`);
+  }
+  const seen: string[] = [];
+  let cursor: string | undefined;
+  for (let pages = 0; pages < 20; pages++) {
+    const page = await as(f.ownerA, () => fetchAuditLog({ before: cursor }));
+    seen.push(...page.rows.map((r) => r.id));
+    if (!page.more) break;
+    cursor = page.next;
+  }
+  const missing = ids.filter((id) => !seen.includes(id));
+  const twice = ids.filter((id) => seen.filter((x) => x === id).length > 1);
+  assert(missing.length === 0 && twice.length === 0, `every row once (missing ${missing.length}, twice ${twice.length})`);
+});
+
+step("a grant set to the role it already has writes nothing to the log", async (f) => {
+  const [grant] = await db().select({ role: schema.venueGrants.role }).from(schema.venueGrants).where(eq(schema.venueGrants.id, f.grantId));
+  const lines = async () =>
+    (await db().select().from(schema.auditLog).where(and(eq(schema.auditLog.organizationId, f.orgA), eq(schema.auditLog.action, "venue.grant_changed")))).length;
+  const before = await lines();
+  await as(f.ownerA, () => setGrantRole(f.grantId, grant.role as never));
+  assert((await lines()) === before, `no line for a role that did not change (${before} → ${await lines()})`);
+  await as(f.ownerA, () => setGrantRole(f.grantId, grant.role === "editor" ? "viewer" : "editor"));
+  assert((await lines()) === before + 1, "one line for a real change");
+});
+
+step("a hall cannot invite a designer whose studio is closed", async (f) => {
+  // The invitation would ring a bell in a business whose people only reach /closed: accepted never,
+  // the booking waiting forever (PR #5 review).
+  await as(f.ownerA, async () => closeBusiness({ confirmName: await nameOf(f.orgA) }));
+  const answer = await as(f.venueUserV, () => inviteDesigner(f.bookingEventId, f.ownerAEmail));
+  assert("error" in answer, `refused (${JSON.stringify(answer).slice(0, 200)})`);
+});
+
+step("a change whose audit row cannot be written is not made", async (f) => {
+  // lib/audit/write.ts: "a sensitive change that cannot be recorded is not made" (PR #5 review).
+  const [grant] = await db().select({ role: schema.venueGrants.role }).from(schema.venueGrants).where(eq(schema.venueGrants.id, f.grantId));
+  const other = grant.role === "editor" ? "viewer" : "editor";
+  const stamp = randomUUID().slice(0, 8);
+  const outcomes = await withAuditRefused(() =>
+    as(f.ownerA, async () => ({
+      deleteEvent: await refused(deleteEvent(f.bareEventId)),
+      removeProduct: await refused(removeProduct(f.copyProductId)),
+      deleteVenue: await refused(deleteVenue(f.spareVenueId)),
+      shareVenue: await refused(shareVenue({ venueId: f.venueId, name: "אורח", email: `guest-${stamp}@example.test`, kind: "guest", role: "viewer" } as never)),
+      setGrantRole: await refused(setGrantRole(f.grantId, other)),
+      revokeGrant: await refused(revokeGrant(f.grantId)),
+      shareEventWithClient: await refused(shareEventWithClient(f.eventId, { name: "לקוחה", email: `client-${stamp}@example.test` })),
+      unshareEventClient: await refused(unshareEventClient(f.eventId, f.clientC)),
+      inviteMember: await refused(inviteMember("חבר", `member-${stamp}@example.test`, "designer")),
+      exportRoute: await refused(exportRoute()),
+    })),
+  );
+  const notRefused = Object.entries(outcomes).filter(([, r]) => !r).map(([k]) => k);
+  assert(notRefused.length === 0, `every audited change fails when its row cannot be written (went through: ${notRefused.join(", ")})`);
+
+  const kept: Record<string, boolean> = {
+    "the event": (await db().select().from(schema.events).where(eq(schema.events.id, f.bareEventId))).length === 1,
+    "the product": (await db().select().from(schema.products).where(eq(schema.products.id, f.copyProductId))).length === 1,
+    "the venue": (await db().select().from(schema.venues).where(eq(schema.venues.id, f.spareVenueId))).length === 1,
+    "no guest grant": (await db().select().from(schema.venueGrants).where(eq(schema.venueGrants.granteeEmail, `guest-${stamp}@example.test`))).length === 0,
+    "the grant and its role": (await db().select().from(schema.venueGrants).where(eq(schema.venueGrants.id, f.grantId)))[0]?.role === grant.role,
+    "no new client": (await db().select().from(schema.users).where(eq(schema.users.email, `client-${stamp}@example.test`))).length === 0,
+    "the client's share": (await db().select().from(schema.eventClients).where(and(eq(schema.eventClients.eventId, f.eventId), eq(schema.eventClients.userId, f.clientC)))).length === 1,
+    "no invitation": (await db().select().from(schema.users).where(eq(schema.users.email, `member-${stamp}@example.test`))).length === 0,
+  };
+  const lost = Object.entries(kept).filter(([, ok]) => !ok).map(([k]) => k);
+  assert(lost.length === 0, `nothing changed (changed anyway: ${lost.join(", ")})`);
+});
+
+step("a browser cannot delete an account through Better Auth's public route", async (f) => {
+  // Better Auth deletes without a password on a session under a day old (freshAge). The app asks for
+  // the password in deleteMyAccount, which reaches Better Auth in-process; the public route must not
+  // offer the endpoint at all (PR #5 review).
+  const { cookie } = await signInWithPassword(f.memberA);
+  const headers = new Headers({ "content-type": "application/json", origin: authOrigin(), cookie });
+  const res = await publicAuthRoute(new Request(`${authOrigin()}${AUTH_BASE_PATH}/delete-user`, { method: "POST", headers, body: "{}" }));
+  assert(res.status === 404, `refused at the public route (${res.status} ${await res.text()})`);
+  const left = await db().select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, f.memberA));
+  assert(left.length === 1, "the member is still there");
 });
 
 step("the owner cannot delete their account", async (f) => {
@@ -234,9 +343,18 @@ step("closing locks the business", async (f) => {
   assert(listed?.studioClosed === true, `the client's portal says the studio closed (${JSON.stringify(listed)})`);
 
   assert(!(await as(f.users.venueB, () => fetchVenueDirectory())).some((v) => v.id === f.venueId), "A's venue left the directory");
-  assert((await refusalOf(as(f.users.venueB, () => followVenue(f.spareVenueId)))) instanceof Error, "nobody new can follow A's venue");
-  const placed = await refusalOf(as(f.users.studioB, () => saveEvent(aNewEvent(f.venueId, "אירוע חדש באולם של א"))));
-  assert(placed instanceof Error, "B cannot put a NEW event in A's venue");
+  // Both are corrections the person can make (pick another venue), so they come back as { error } —
+  // a thrown message is redacted in production (CLAUDE.md; PR #5 review).
+  const follow = await as(f.users.venueB, () => followVenue(f.spareVenueId)).catch((e: unknown) => e);
+  assert(
+    !!follow && typeof follow === "object" && "error" in follow && String(follow.error).includes("נסגר"),
+    `nobody new can follow A's venue, and is told why (got: ${follow instanceof Error ? `a throw: ${follow.message}` : JSON.stringify(follow)})`,
+  );
+  const placed = await as(f.users.studioB, () => saveEvent(aNewEvent(f.venueId, "אירוע חדש באולם של א"))).catch((e: unknown) => e);
+  assert(
+    !!placed && typeof placed === "object" && "error" in placed && String(placed.error).includes("נסגר"),
+    `B cannot put a NEW event in A's venue, and is told why (got: ${placed instanceof Error ? `a throw: ${placed.message}` : JSON.stringify(placed)})`,
+  );
   const kept = await refusalOf(as(f.users.studioB, () => saveEvent({ ...bEvent, guests: 12 })));
   assert(kept === null, `B's existing event in A's venue still saves (got: ${String(kept)})`);
 });
@@ -473,6 +591,31 @@ step("the sweep twice: nothing more, and files left behind are finished", async 
   assert((await listLocalFiles(`${f.orgA}/`)).length === 0, "the stuck file is gone");
   const [closure] = await db().select().from(schema.organizationClosures).where(eq(schema.organizationClosures.organizationId, f.orgA));
   assert(closure.filesErasedAt, "and the files are stamped done");
+});
+
+step("a business that is not due keeps its Google connections; an erased one loses them", async (f) => {
+  // The sweep reads the due list once; a business reopened while another was being erased reached
+  // eraseBusiness with no closure — and its members' connections were revoked and deleted BEFORE the
+  // locked re-check said "not due" (PR #5 review).
+  const connect = async (userId: string) => {
+    await db().insert(schema.googleConnections).values({
+      userId,
+      organizationId: f.orgA,
+      googleEmail: `g-${randomUUID()}@example.test`,
+      refreshToken: "sealed-token",
+      calendarId: `cal-${randomUUID()}`,
+    } as never);
+  };
+  await connect(f.memberA);
+  const connectionsOfA = async () =>
+    (await db().select({ id: schema.googleConnections.id }).from(schema.googleConnections).where(eq(schema.googleConnections.organizationId, f.orgA))).length;
+  assert((await eraseBusiness(f.orgA, later(31))) === false, "an open business is not erased");
+  assert((await connectionsOfA()) === 1, "…and its member's Google connection is untouched");
+
+  await as(f.ownerA, async () => closeBusiness({ confirmName: await nameOf(f.orgA) }));
+  const report = await sweepAccounts({ now: later(31), dryRun: false });
+  assert(report.erased.includes(f.orgA), "the closed business is erased when due");
+  assert((await connectionsOfA()) === 0, "…and its Google connections go with it");
 });
 
 step("the erase ends the erased designer's links for good", async (f) => {

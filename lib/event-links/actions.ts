@@ -70,6 +70,9 @@ export async function inviteDesigner(venueEventId: string, email: string): Promi
     .limit(1);
   if (designer?.orgId && designer.orgKind !== "studio") return { error: "הכתובת הזו שייכת לעסק שאינו סטודיו לעיצוב" };
   if (designer?.orgId === actor.organizationId) return { error: "זו כתובת של האולם עצמו" };
+  // A closed studio's people reach only /closed: the invitation would ring there, never be accepted,
+  // and the booking would wait for it forever (PR #5 review).
+  if (designer?.orgId && (await closureOf(designer.orgId))) return { error: "הסטודיו הזה סגר את החשבון שלו ב־Eve" };
   const studioOrgId = designer?.orgId ?? null;
 
   const values = {

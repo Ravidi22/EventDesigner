@@ -279,21 +279,30 @@ export function EventForm({
       // This WAITS for the write, unlike the meeting's later stages. The whole meeting hangs off the
       // event existing — the sketch stages save a document under its id, the quote stamps it — so
       // handing control on before the row is there would leave the next stage drawing into nothing.
+      // A refusal the designer can act on — a venue whose business has closed (PR #5 review) — comes
+      // back as { error } and is shown as it is; anything thrown is the generic line below.
       if (event) {
         const list = await patchEvent(event.id, fields);
+        if (!Array.isArray(list)) {
+          setError(list.error);
+          return;
+        }
         await onSaved(list.find((x) => x.id === event.id) ?? event);
       } else {
         // The venue list is already in state from the picker below — no need to go back to the
         // server for a scale we are holding.
         newEventId.current ??= crypto.randomUUID();
-        await onSaved(
-          await beginEvent({
-            ...fields,
-            id: newEventId.current,
-            mmPerUnit: venue?.plan.mmPerUnit ?? 1,
-            sketchTemplateId: sketchId || undefined,
-          }),
-        );
+        const made = await beginEvent({
+          ...fields,
+          id: newEventId.current,
+          mmPerUnit: venue?.plan.mmPerUnit ?? 1,
+          sketchTemplateId: sketchId || undefined,
+        });
+        if ("error" in made) {
+          setError(made.error);
+          return;
+        }
+        await onSaved(made);
         newEventId.current = null;
       }
     } catch {

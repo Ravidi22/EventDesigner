@@ -30,6 +30,9 @@ export function AuditSection() {
   const [group, setGroup] = useState<AuditGroup | "all">("all");
   const [rows, setRows] = useState<AuditRow[] | null>(null);
   const [more, setMore] = useState(false);
+  // Where the next page starts: the server's cursor (the last row's exact time and id), never a row's
+  // `at` — rows that share a millisecond were skipped at a page edge (PR #5 review).
+  const [next, setNext] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   // A page asked for under another filter arrives after this one was picked: drop it.
@@ -42,6 +45,7 @@ export function AuditSection() {
         if (mine !== seq.current) return;
         setRows((r) => (before && r ? [...r, ...page.rows] : page.rows));
         setMore(page.more);
+        setNext(page.next);
         setFailed(false);
       })
       .catch(() => mine === seq.current && setFailed(true))
@@ -55,12 +59,13 @@ export function AuditSection() {
     if (g === group) return;
     setRows(null);
     setMore(false);
+    setNext(undefined);
     setGroup(g);
   };
 
   const loadMore = () => {
     setBusy(true);
-    load(group, rows?.[rows.length - 1]?.at);
+    load(group, next);
   };
 
   const days: { key: string; label: string; rows: AuditRow[] }[] = [];

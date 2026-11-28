@@ -464,22 +464,38 @@ export async function disconnect(userId: string, organizationId: string): Promis
   // Best-effort revocation before the row goes: once it is deleted there is no token left to revoke
   // with, and a refresh token that outlives the connection it belonged to is exactly the kind of
   // credential that turns up in an audit years later.
-  if (config) {
-    const refresh = open(row.refreshToken, config.tokenKey);
-    if (refresh) {
-      await fetch("https://oauth2.googleapis.com/revoke", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ token: refresh }),
-        cache: "no-store",
-      }).catch(() => {
-        // Revocation is a courtesy to the designer's account, not a precondition for forgetting the
-        // row here. A network failure must not leave them unable to disconnect.
-      });
-    }
-  }
+  const refresh = config ? open(row.refreshToken, config.tokenKey) : null;
+  if (refresh) await revokeRefreshTokens([refresh]);
 
   await db().delete(googleConnections).where(eq(googleConnections.id, row.id));
+}
+
+type Database = ReturnType<typeof db> | Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0];
+
+/** A business's refresh tokens, opened — read by the erase INSIDE its transaction, once it holds the
+ *  closure and knows the business is due, while the rows still exist; revoked by revokeRefreshTokens
+ *  after it commits (lib/account/erase.ts; PR #5 review). Nothing when Google is not configured. */
+export async function refreshTokensOf(database: Database, organizationId: string): Promise<string[]> {
+  const config = googleConfig();
+  if (!config) return [];
+  const rows = await database
+    .select({ refreshToken: googleConnections.refreshToken })
+    .from(googleConnections)
+    .where(eq(googleConnections.organizationId, organizationId));
+  return rows.map((r) => open(r.refreshToken, config.tokenKey)).filter((t): t is string => !!t);
+}
+
+/** Revoke refresh tokens at Google. Best effort: revocation is a courtesy to the person's account, not
+ *  a precondition for forgetting the connection here — a network failure must not stop that. */
+export async function revokeRefreshTokens(tokens: readonly string[]): Promise<void> {
+  for (const token of tokens) {
+    await fetch("https://oauth2.googleapis.com/revoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token }),
+      cache: "no-store",
+    }).catch(() => undefined);
+  }
 }
 
 /** The connection as the settings screen needs it — no tokens, ever. This return value crosses into

@@ -72,13 +72,17 @@ export function VenueSwitcher({
   /** Resolves to the refusal (e.g. "still has events on it", and how many) if the delete was refused. */
   onDelete: (id: string) => Promise<VenueDeleteRefusal | null>;
   /** Put an existing property — somebody else's — on this business's list and open it. */
-  onFollow: (id: string) => Promise<void>;
+  /** Resolves to null when the venue is on the list, else why not. */
+  onFollow: (id: string) => Promise<string | null>;
 }) {
   const [open, setOpen] = useState(false);
   // The platform's other venues, read when "מתחם קיים" is pressed — everybody sees the same venue
   // (lib/venues/access.ts), so a designer picks the hall its owner drew instead of tracing it.
   const [directory, setDirectory] = useState<VenueDirectoryEntry[] | null>(null);
   const [directoryQuery, setDirectoryQuery] = useState("");
+  // Why the venue picked from the directory could not be added — its business has closed since the
+  // list was read (PR #5 review). Never a silent failure.
+  const [followError, setFollowError] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const draftRef = useRef<{ id: string; name: string; original: string } | null>(null);
@@ -400,7 +404,10 @@ export function VenueSwitcher({
           {directory === null ? (
             <button
               type="button"
-              onClick={() => void fetchVenueDirectory().then(setDirectory)}
+              onClick={() => {
+                setFollowError(null);
+                void fetchVenueDirectory().then(setDirectory);
+              }}
               className="flex w-full items-center gap-2.5 rounded-sm px-3 py-2 text-sm text-accent transition-colors hover:bg-accent-tint"
             >
               <Search className="h-4 w-4 shrink-0" strokeWidth={2} />
@@ -429,10 +436,15 @@ export function VenueSwitcher({
                       key={d.id}
                       type="button"
                       onClick={() => {
-                        void onFollow(d.id).then(() => {
-                          setDirectory(null);
-                          closeMenu();
-                        });
+                        setFollowError(null);
+                        void onFollow(d.id).then(
+                          (refused) => {
+                            if (refused) return setFollowError(refused);
+                            setDirectory(null);
+                            closeMenu();
+                          },
+                          () => setFollowError("לא ניתן להוסיף את המתחם כרגע"),
+                        );
                       }}
                       className="flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-start text-sm text-ink-soft transition-colors hover:bg-accent-tint hover:text-accent-hover"
                     >
@@ -444,6 +456,11 @@ export function VenueSwitcher({
                     </button>
                   ))}
                 {directory.length === 0 && <p className="px-2 py-2 text-xs text-muted">אין מתחמים נוספים במאגר.</p>}
+                {followError && (
+                  <p role="alert" className="px-2 py-2 text-xs font-medium text-alert-ink">
+                    {followError}
+                  </p>
+                )}
               </div>
             </div>
           )}

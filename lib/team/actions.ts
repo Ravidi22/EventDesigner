@@ -151,26 +151,29 @@ export async function inviteMember(
   }
 
   const invite = mintInviteToken();
-  const [invited] = await database.insert(users).values({
-    organizationId: actor.organizationId,
-    kind: "studio",
-    email: address,
-    name: String(name ?? "").trim() || null,
-    role,
-    state: "pending",
-    passwordHash: null,
-    inviteTokenHash: invite.tokenHash,
-    inviteExpiresAt: invite.expiresAt,
-    // Set when they accept, not when they are asked — this column is the day they JOINED.
-    joinedAt: null,
-  }).returning({ id: users.id });
-  await recordAudit(database, {
-    organizationId: actor.organizationId,
-    actorUserId: actor.userId,
-    action: "member.invited",
-    target: { kind: "user", id: invited.id },
-    summary: `הזמנה לצוות: ${personToken(invited.id)} · ${STUDIO_ROLE_LABEL[role]}`,
-    people: await peopleOf(database, [actor.userId, invited.id]),
+  // The invitation and its audit row are one transaction (lib/audit/write.ts; PR #5 review).
+  await database.transaction(async (tx) => {
+    const [invited] = await tx.insert(users).values({
+      organizationId: actor.organizationId,
+      kind: "studio",
+      email: address,
+      name: String(name ?? "").trim() || null,
+      role,
+      state: "pending",
+      passwordHash: null,
+      inviteTokenHash: invite.tokenHash,
+      inviteExpiresAt: invite.expiresAt,
+      // Set when they accept, not when they are asked — this column is the day they JOINED.
+      joinedAt: null,
+    }).returning({ id: users.id });
+    await recordAudit(tx, {
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      action: "member.invited",
+      target: { kind: "user", id: invited.id },
+      summary: `הזמנה לצוות: ${personToken(invited.id)} · ${STUDIO_ROLE_LABEL[role]}`,
+      people: await peopleOf(tx, [actor.userId, invited.id]),
+    });
   });
 
   revalidateSettings();

@@ -33,7 +33,7 @@ import {
 } from "@/lib/db/schema";
 import { fileDriver, type FileDriver } from "@/lib/files/driver";
 import { keyFromUrl } from "@/lib/files/keys";
-import { disconnect } from "@/lib/google/sync";
+import { refreshTokensOf, revokeRefreshTokens } from "@/lib/google/sync";
 import { notify, studioRecipients } from "@/lib/notifications/write";
 import { ACCOUNT_TABLES, ERASE_ORDER } from "./tables";
 import { retainUntilOf, retentionOver, skeletonPatch, type IssuerSnapshot, type PrintedFacts } from "./rules";
@@ -193,13 +193,13 @@ async function issuerOf(tx: Tx, organizationId: string, fallbackName: string): P
 
 /** Erase one due business. False when it was not due after all (reopened, or erased by another
  *  sweep). Throws `DryRun` with the plan when `planOnly`. */
-async function eraseBusiness(organizationId: string, now: Date, planOnly = false): Promise<boolean> {
-  // Best effort, outside the transaction: revoke every member's Google connection.
-  if (!planOnly) {
-    const members = await db().select({ id: users.id }).from(users).where(eq(users.organizationId, organizationId));
-    for (const m of members) await disconnect(m.id, organizationId).catch((e) => console.error("google disconnect on erase failed", e));
-  }
-
+export async function eraseBusiness(organizationId: string, now: Date, planOnly = false): Promise<boolean> {
+  // The members' Google refresh tokens, read under the closure's lock once the business is known to be
+  // due; the connection rows go with the erase, and the tokens are revoked at Google after it commits.
+  // Before, every connection was revoked and deleted BEFORE the locked re-check, so a business reopened
+  // while the sweep ran lost its calendar sync (PR #5 review) — and the HTTP calls no longer run while
+  // a transaction is open.
+  let tokens: string[] = [];
   const bells: { recipients: string[]; studioOrg: string; studioEvent: string; label: string; venueName: string }[] = [];
   const done = await db().transaction(async (tx) => {
     const [closure] = await tx
@@ -208,6 +208,7 @@ async function eraseBusiness(organizationId: string, now: Date, planOnly = false
       .where(and(eq(organizationClosures.organizationId, organizationId), isNull(organizationClosures.erasedAt), lte(organizationClosures.eraseAfter, now)))
       .for("update");
     if (!closure) return false;
+    tokens = planOnly ? [] : await refreshTokensOf(tx, organizationId);
     const keep = await retainedOf(tx, organizationId);
     const plan: { delete: Record<string, number>; keep: Record<string, number> } = {
       delete: {},
@@ -284,6 +285,9 @@ async function eraseBusiness(organizationId: string, now: Date, planOnly = false
       .where(eq(organizationClosures.organizationId, organizationId));
     return true;
   });
+
+  // After the commit, best effort: the erased business's Google tokens are revoked.
+  if (done) await revokeRefreshTokens(tokens).catch((e) => console.error("google revoke on erase failed", e));
 
   // After the commit: the designers whose linked venue went.
   for (const b of bells) {

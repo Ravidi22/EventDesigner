@@ -114,51 +114,56 @@ export async function shareEventWithClient(eventId: string, input: { name: strin
     return { error: "הכתובת הזאת שייכת לחשבון סטודיו ולא יכולה לשמש כחשבון לקוח", clients: await clientsOf(event.id) };
   }
 
-  let userId = existing?.id;
-  let link: string | undefined;
-  if (!existing) {
-    const invite = mintInviteToken();
-    const [row] = await database
-      .insert(users)
-      .values({
-        organizationId: null,
-        kind: "client",
-        email: address,
-        name,
-        state: "pending",
-        passwordHash: null,
-        inviteTokenHash: invite.tokenHash,
-        inviteExpiresAt: invite.expiresAt,
-        joinedAt: null,
-      })
-      .returning({ id: users.id });
-    userId = row.id;
-    link = invitePath(invite.token);
-  } else if (existing.state === "pending") {
-    const invite = mintInviteToken();
-    await database
-      .update(users)
-      .set({ inviteTokenHash: invite.tokenHash, inviteExpiresAt: invite.expiresAt, ...(name ? { name } : {}) })
-      .where(and(eq(users.id, existing.id), eq(users.state, "pending")));
-    link = invitePath(invite.token);
-  }
+  // The account, the share and its audit row are one transaction: a share that cannot be recorded
+  // is not made (lib/audit/write.ts; PR #5 review).
+  const { userId, link, added } = await database.transaction(async (tx) => {
+    let userId = existing?.id;
+    let link: string | undefined;
+    if (!existing) {
+      const invite = mintInviteToken();
+      const [row] = await tx
+        .insert(users)
+        .values({
+          organizationId: null,
+          kind: "client",
+          email: address,
+          name,
+          state: "pending",
+          passwordHash: null,
+          inviteTokenHash: invite.tokenHash,
+          inviteExpiresAt: invite.expiresAt,
+          joinedAt: null,
+        })
+        .returning({ id: users.id });
+      userId = row.id;
+      link = invitePath(invite.token);
+    } else if (existing.state === "pending") {
+      const invite = mintInviteToken();
+      await tx
+        .update(users)
+        .set({ inviteTokenHash: invite.tokenHash, inviteExpiresAt: invite.expiresAt, ...(name ? { name } : {}) })
+        .where(and(eq(users.id, existing.id), eq(users.state, "pending")));
+      link = invitePath(invite.token);
+    }
 
-  const [added] = await database
-    .insert(eventClients)
-    .values({ eventId: event.id, userId: userId!, role })
-    .onConflictDoNothing()
-    .returning({ userId: eventClients.userId });
+    const [added] = await tx
+      .insert(eventClients)
+      .values({ eventId: event.id, userId: userId!, role })
+      .onConflictDoNothing()
+      .returning({ userId: eventClients.userId });
 
-  if (added) {
-    await recordAudit(database, {
-      organizationId: actor.organizationId,
-      actorUserId: actor.userId,
-      action: "client.access_granted",
-      target: { kind: "event", id: event.id },
-      summary: `שיתוף עם לקוח/ה: ${personToken(userId!)} · ${event.clientName}`,
-      people: await peopleOf(database, [actor.userId, userId]),
-    });
-  }
+    if (added) {
+      await recordAudit(tx, {
+        organizationId: actor.organizationId,
+        actorUserId: actor.userId,
+        action: "client.access_granted",
+        target: { kind: "event", id: event.id },
+        summary: `שיתוף עם לקוח/ה: ${personToken(userId!)} · ${event.clientName}`,
+        people: await peopleOf(tx, [actor.userId, userId]),
+      });
+    }
+    return { userId, link, added };
+  });
 
   // Someone who already signs in hears about it; a pending account will see it when they join.
   if (added && existing?.state === "active") {
@@ -249,33 +254,37 @@ export async function unshareEventClient(eventId: string, userId: string): Promi
   assertId(userId, "userId");
   const database = db();
   const people = await peopleOf(database, [actor.userId, userId]);
-  const removed = await database
-    .delete(eventClients)
-    .where(and(eq(eventClients.eventId, event.id), eq(eventClients.userId, userId)))
-    .returning({ userId: eventClients.userId });
-  if (removed.length > 0) {
-    await recordAudit(database, {
-      organizationId: actor.organizationId,
-      actorUserId: actor.userId,
-      action: "client.access_revoked",
-      target: { kind: "event", id: event.id },
-      summary: `ביטול שיתוף: ${personToken(userId)} · ${event.clientName}`,
-      people,
-    });
-  }
-  // Someone who never joined and now has nothing shared with them is an invitation to nothing — and
-  // a row that would block their address from ever being invited cleanly again. It goes.
-  const [stillShared] = await database
-    .select({ eventId: eventClients.eventId })
-    .from(eventClients)
-    .where(eq(eventClients.userId, userId))
-    .limit(1);
-  if (!stillShared) {
-    const gone = await database
-      .delete(users)
-      .where(and(eq(users.id, userId), eq(users.kind, "client"), eq(users.state, "pending")))
-      .returning({ id: users.id });
-    if (gone.length) await forgetPersonEverywhere(database, userId);
-  }
+  // The unshare, its audit row and the clean-up below are one transaction: an unshare that cannot be
+  // recorded is not made (lib/audit/write.ts; PR #5 review).
+  await database.transaction(async (tx) => {
+    const removed = await tx
+      .delete(eventClients)
+      .where(and(eq(eventClients.eventId, event.id), eq(eventClients.userId, userId)))
+      .returning({ userId: eventClients.userId });
+    if (removed.length > 0) {
+      await recordAudit(tx, {
+        organizationId: actor.organizationId,
+        actorUserId: actor.userId,
+        action: "client.access_revoked",
+        target: { kind: "event", id: event.id },
+        summary: `ביטול שיתוף: ${personToken(userId)} · ${event.clientName}`,
+        people,
+      });
+    }
+    // Someone who never joined and now has nothing shared with them is an invitation to nothing — and
+    // a row that would block their address from ever being invited cleanly again. It goes.
+    const [stillShared] = await tx
+      .select({ eventId: eventClients.eventId })
+      .from(eventClients)
+      .where(eq(eventClients.userId, userId))
+      .limit(1);
+    if (!stillShared) {
+      const gone = await tx
+        .delete(users)
+        .where(and(eq(users.id, userId), eq(users.kind, "client"), eq(users.state, "pending")))
+        .returning({ id: users.id });
+      if (gone.length) await forgetPersonEverywhere(tx, userId);
+    }
+  });
   return clientsOf(event.id);
 }
