@@ -12,7 +12,7 @@ import { ENVELOPE } from "./materials";
 import { type MaterialRef, type Part, transform, vec3 } from "./types";
 import { chairParts, chairRequest, FIRE, itemBody, PLAN_ONLY_STYLES, PLATE_MM, ROD_MM, vesselForm, vesselFormOf, vesselInside, vesselRimShare, WAX } from "./items";
 
-// ponytail: self-check. Run: npx tsx lib/scene/items.ts
+// ponytail: self-check. Run: npm run check:items
 const assert = (ok: boolean, msg: string) => {
   if (!ok) {
     console.error("FAIL", msg);

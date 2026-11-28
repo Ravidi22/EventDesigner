@@ -13,7 +13,7 @@ import { BULB, CABLE_R_MM, CANDLE_SLEEVE, ceilingDrapeBody, ceilingUndersideMm, 
 
 const GLASS = glassMaterial();
 
-// ponytail: self-check. Run: npx tsx lib/scene/overhead.ts
+// ponytail: self-check. Run: npm run check:overhead
 const assert = (ok: boolean, msg: string) => {
   if (!ok) {
     console.error("FAIL", msg);

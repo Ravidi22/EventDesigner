@@ -13,7 +13,7 @@ import { elevationOf } from "./elevation";
 import { DEFAULT_SETTINGS, DOOR_HEIGHT_MM, DOOR_LEAF_MM, GARDEN_WALL_MM, GROUND_MARGIN_MM, KERB_MM, KERB_THICK_MM, WALL_THICK_MM, WATER_DEPTH_MM, type Part } from "./types";
 import { BASIN_MATERIAL, BASIN_RIM_MM, BASIN_WATER_MM, BED_SOIL_MM, closedPolyline, COPING_HIGH_MM, COPING_MATERIAL, COPING_MM, envelopeNodes, FENCE_THICK_MM, FRAME_PROUD_MM, FRAME_TRIM_MM, GLASS_MM, inwardSide, MAX_HEADS, PLANT_FILL, plantInstance, ROOF_SLAB_MM, ROOF_UNDER_MM, tinted, type FloorOf } from "./envelope";
 
-// ponytail: self-check. Run: npx tsx lib/scene/envelope.ts
+// ponytail: self-check. Run: npm run check:envelope
 {
   const assert = (ok: boolean, msg: string) => {
     if (!ok) {

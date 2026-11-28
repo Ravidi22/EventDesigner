@@ -3,7 +3,7 @@ import { bulgeToCurve } from "@/lib/studio/geometry";
 import { type VenueStructure } from "./structure";
 import { detectFaces, faceAt, pointInPolygon } from "./faces";
 
-// ponytail: self-check. Run: node --experimental-strip-types lib/venues/faces.ts
+// ponytail: self-check. Run: npm run check:faces
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

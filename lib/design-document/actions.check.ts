@@ -2,7 +2,7 @@
 import type { DesignDocumentContent, Placement, DesignTable } from "./types";
 import { amend, apply, dispatch, groupOf, initHistory, redo, undo } from "./actions";
 
-// ponytail: self-check for the reducer + history. Run: node --experimental-strip-types lib/design-document/actions.ts
+// ponytail: self-check for the reducer + history. Run: npm run check:actions
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

@@ -38,6 +38,15 @@ export function outputType(inputType: string, hasAlpha: boolean): OutputType {
   return hasAlpha ? "image/png" : "image/jpeg";
 }
 
+/** True when the file as PICKED goes up rather than its redraw: the redraw came out bigger, and the
+ *  picked file is not a JPEG. A canvas's PNG encoder compresses less than the tools that make an
+ *  optimised PNG, so a hall plan that uploaded before EVE-25 could come back over MAX_BYTES and be
+ *  refused (PR #2 review). A JPEG always goes up redrawn — that is the only way to drop a phone photo's
+ *  EXIF; a PNG or a WebP very rarely carries location data. */
+export function uploadOriginal(pickedType: string, pickedSize: number, redrawnSize: number): boolean {
+  return redrawnSize > pickedSize && pickedType !== "image/jpeg";
+}
+
 /** The same name with the extension of what it now is. */
 export function renamed(name: string, type: OutputType): string {
   const ext = type === "image/png" ? "png" : "jpg";

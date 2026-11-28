@@ -16,7 +16,7 @@ import { ENVELOPE } from "./materials";
 import { type Part } from "./types";
 import { BATTEN_MM, chairRowsBody, floorKindBody, GATE_VOUSSOIRS, POSY_SHARE, profileBowls, rad, rugBody, SHEER_OPACITY, SLAT_H_MM } from "./floor-kinds";
 
-// ponytail: self-check. Run: npx tsx lib/scene/floor-kinds.ts
+// ponytail: self-check. Run: npm run check:floor-kinds
 const assert = (ok: boolean, msg: string) => {
   if (!ok) {
     console.error("FAIL", msg);

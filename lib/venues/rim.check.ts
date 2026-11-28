@@ -3,7 +3,7 @@ import { flattenEdge, footprintOutlines, sampledBounds, type BuiltOutline, type 
 import { featureFootprint, type StructureFeature } from "./structure";
 import { DEFAULT_RIM_MM, insideFootprint, insideOutlines, obstacleFootprint, rimMeasure, rimOf, rimPatch, rimSpecOf } from "./rim";
 
-// ponytail: self-check. Run: npx tsx lib/venues/rim.ts
+// ponytail: self-check. Run: npm run check:rim
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

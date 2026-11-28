@@ -169,6 +169,7 @@
     "check:run-checks": "tsx scripts/run-checks.check.ts",
     "check:shrink": "tsx lib/files/shrink-rules.check.ts",
     "check:isolation-inventory": "tsx lib/db/isolation/inventory.check.ts",
+    "check:isolation-env": "tsx lib/db/isolation/env.check.ts",
     "check:isolation-judge": "tsx lib/db/isolation/judge.check.ts",
     "checks": "tsx scripts/run-checks.ts",
     "check:password": "tsx lib/auth/password.check.ts",
@@ -190,7 +191,7 @@
     "db:verify:production": "tsx lib/production/verify.ts",
     "db:verify:billing": "tsx lib/billing/verify.ts",
     "check:client-product": "tsx lib/client-portal/safe-product.check.ts",
-    "check:scene": "tsx lib/scene/check.check.ts",
+    "check:scene": "tsx lib/scene/wiring.check.ts",
     "check:scene-frame": "tsx lib/scene/frame.check.ts",
     "check:scene-boundary": "tsx lib/scene/boundary.check.ts",
     "check:scene-share": "tsx lib/scene/share-boundary.check.ts",
@@ -200,6 +201,7 @@
     "db:verify:isolation": "tsx lib/db/verify-isolation.ts",
     "db:verify:account": "tsx lib/account/verify.ts",
     "accounts:erase-due": "tsx scripts/accounts-erase-due.ts",
+    "db:verify:signup": "tsx lib/auth/verify-signup.ts",
     "check:envelope": "tsx lib/scene/envelope.check.ts",
     "check:billiard": "tsx lib/catalog/game-tables.check.ts",
     "check:venue-table": "tsx lib/venues/venue-table.check.ts",
@@ -224,6 +226,7 @@
     "check:export-zip": "tsx lib/account/export-zip.check.ts",
     "check:audit": "tsx lib/audit/render.check.ts",
     "check:list-objects": "tsx lib/files/list-objects.check.ts",
+    "check:auth-routes": "tsx lib/auth/public-routes.check.ts",
     "legal:export": "tsx scripts/legal-export.ts"
   },
   "dependencies": {

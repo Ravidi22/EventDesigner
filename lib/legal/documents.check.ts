@@ -3,6 +3,7 @@
 import { termsAcceptance } from "./acceptance";
 import { LEGAL_DOCS, blockTexts, docBySlug, factsUsed, publishBlockers } from "./documents";
 import { FACT_LABELS, LEGAL_FACTS, factHref, missingFacts, type FactKey } from "./facts";
+import { hashTarget } from "./hash";
 import { parseInline } from "./inline";
 import { LEGAL_STATUS, LEGAL_VERSION } from "./status";
 
@@ -35,7 +36,17 @@ try {
 }
 assert(threw, "a link leaves the site only through a fact, never typed into the text");
 // A mark the parser does not match must not print literally on a published page (review, round 3).
-for (const bad of ["{{ legalName }}", "{{legal_name}}", "{{legalName}", "x }} y", "[x] (/terms)", String.raw`[x](/\evil.example)`]) {
+for (const bad of [
+  "{{ legalName }}",
+  "{{legal_name}}",
+  "{{legalName}",
+  "x }} y",
+  "[x] (/terms)",
+  String.raw`[x](/\evil.example)`,
+  // A fact inside a link's label printed its braces on the page (PR #4 review).
+  "[פנו אל {{contactEmail}}](/privacy#contact)",
+  "[x }} y](/terms)",
+]) {
   let refused = false;
   try {
     parseInline(bad);
@@ -126,5 +137,14 @@ for (const accepted of [false, undefined, "true", 1, null]) {
   const r = termsAcceptance({ status: "published", accepted, version: "v", now });
   assert(r !== null && "error" in r, `published + ${JSON.stringify(accepted)} is refused`);
 }
+
+// The contents list reads the address's #fragment. Malformed percent-encoding (a link a chat app
+// mangled) made decodeURIComponent throw inside an effect, and the visitor got the error page instead
+// of the legal text (PR #4 review).
+assert(hashTarget("#roles") === "roles", "a plain fragment");
+assert(hashTarget("#%D7%A1%D7%A2%D7%99%D7%A3") === "סעיף", "a percent-encoded fragment is decoded");
+assert(hashTarget("#%E0") === "%E0", "malformed encoding is kept as written, never thrown");
+assert(hashTarget("#%") === "%", "…a lone %");
+assert(hashTarget("") === "", "no fragment");
 
 console.log("check:legal — ok");

@@ -22,7 +22,8 @@ import { installStandardCatalog } from "@/lib/catalog/standard/install";
 import { adoptVenueGrants, openFirstVenue } from "@/lib/venues/granted";
 import { adoptLinkInvites } from "@/lib/event-links/sync";
 import { revalidateSettings } from "@/lib/db/revalidate";
-import { authAccounts, eventClients, events, legalAcceptances, organizations, studioSettings, users } from "@/lib/db/schema";
+import { authAccounts, eventClients, events, organizations, studioSettings, users } from "@/lib/db/schema";
+import { settleNewAccount } from "./new-account";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
 import { notify, studioRecipients } from "@/lib/notifications/write";
 import { peopleOf, recordAudit } from "@/lib/audit/write";
@@ -159,11 +160,9 @@ export async function signUp(input: {
   }
   const userId = created.data.user.id;
 
-  // Better Auth wrote the person; what they ARE is ours to write. A studio account with no
-  // organisation yet: the (app) layout sends it to /welcome until it has one.
-  await database.update(users).set({ kind: "studio", role: "owner", state: "active" }).where(eq(users.id, userId));
-  // …and, once the legal texts are published, which version of them this person accepted, and when.
-  if (accepted) await database.insert(legalAcceptances).values({ userId, version: accepted.version, acceptedAt: accepted.at });
+  // Better Auth wrote the person; what they ARE is ours to write — a studio owner with no organisation
+  // yet, and the terms version they accepted — all or nothing (./new-account.ts, PR #4 review).
+  if (!(await settleNewAccount(userId, accepted))) return { error: "ההרשמה נכשלה. נסו שוב." };
 
   // With mail configured, the address must be confirmed before there is a session.
   if (!created.data.token) return { verifyEmail: true };

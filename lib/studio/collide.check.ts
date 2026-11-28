@@ -1,7 +1,7 @@
 // npm run check:collide — the self-check of ./collide.ts, kept beside it so it never ships in the browser bundle (EVE-54).
 import { FLOOR_COVER, mayOverlap, nudgeApart, overlappingAtStart, pushApart, WALL_SOLID, wallSolids, type SolidBox } from "./collide";
 
-// ponytail: self-check. Run: node --experimental-strip-types lib/studio/collide.ts
+// ponytail: self-check. Run: npm run check:collide
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

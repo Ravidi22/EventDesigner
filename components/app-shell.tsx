@@ -30,15 +30,28 @@ import { HeaderSlotProvider } from "@/components/header-slot";
 import { requestNewEvent } from "@/components/new-event-request";
 import { SidePanel } from "@/components/side-panel";
 import { OrgKindProvider } from "@/components/org-kind-context";
+import { EventDialogLoading, EventDialogUnavailable } from "@/components/event-dialog-unavailable";
 import { ORG_HOME, type OrgKind } from "@/lib/auth/kinds";
 
 // The "אירוע חדש" dialog is loaded on its own, not with the shell (EVE-54). Through its event form's
 // venue zones it brings the whole venue model — structure, stages, footprints, the catalog's types —
 // and the shell is on every page, so every page paid for it before anyone clicked — billing, orders,
 // gallery and the rest ~90 KB gzip each, on pages that do not even show the button. It is mounted on
-// the first click. The two pages that show the button (/dashboard, /production) load the dialog with
-// the page anyway — their event drawer edits through it — so that click never waits on a download.
-const EventDialog = dynamic(() => import("@/components/event-dialog").then((m) => m.EventDialog), { ssr: false });
+// the first click, and fetched as soon as the button is hovered or focused, so the click rarely waits.
+//
+// A chunk can fail to load — a tab left open across a deploy, a dropped connection — and an unhandled
+// failure here went up past (app)/error.tsx and replaced the whole studio with the root error page
+// (PR #3 review). So a failed download opens EventDialogUnavailable instead: one small dialog that
+// says what happened and offers a refresh.
+const loadEventDialog = () => import("@/components/event-dialog");
+const EventDialog = dynamic<{ open: boolean; onClose: () => void }>(
+  () =>
+    loadEventDialog()
+      .then((m) => m.EventDialog)
+      .catch(() => EventDialogUnavailable),
+  { ssr: false, loading: () => <EventDialogLoading /> },
+);
+const prefetchEventDialog = () => void loadEventDialog().catch(() => undefined);
 
 interface NavItem {
   href: string;
@@ -312,6 +325,8 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
               {showHeaderActions && (
               <button
                 type="button"
+                onPointerEnter={user.orgKind === "venue" ? undefined : prefetchEventDialog}
+                onFocus={user.orgKind === "venue" ? undefined : prefetchEventDialog}
                 onClick={() => {
                   if (user.orgKind === "venue") return requestNewEvent();
                   setDialogMounted(true);

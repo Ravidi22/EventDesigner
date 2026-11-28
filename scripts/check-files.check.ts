@@ -35,10 +35,15 @@ try {
   put("lib/n.check.ts", `console.log("nobody runs me");\n`);
   put("lib/o.check.ts", `console.log("o");\n`);
   put("lib/p.ts", `export const p = 1;\n`);
+  // PR #3 review: Node 24's own spelling of the guard, a check at the repo root, a check:* running nothing.
+  put("lib/mm.ts", `export const mm = 1;\nif (import.meta.main) {\n  console.log(mm);\n}\n`);
+  put("lib/mn.ts", `/**\n * if (import.meta.main) { … } in a comment\n */\nexport const mn = 1;\n`);
+  put("root.check.ts", `console.log("nobody runs me either");\n`);
   const scripts = {
     "check:o": "tsx --tsconfig tsconfig.json lib/o.check.ts",
     "check:p": "tsx lib/p.ts",
     "check:q": "tsx lib/o.check.ts && tsx lib/missing.check.ts",
+    "check:r": "echo all good",
     build: "next build",
   };
   const problems = checkFiles(dir, scripts);
@@ -58,6 +63,10 @@ try {
   assert(problems.some((p) => p.startsWith("package.json:") && p.includes("check:p") && p.includes("lib/p.ts")), "a check:* script running a file that is not a *.check is caught");
   assert(problems.some((p) => p.includes("check:q") && p.includes("lib/missing.check.ts")), "…and one running a file that does not exist");
   assert(!problems.some((p) => p.includes("build")), "scripts that are not check:* are not judged");
+  assert(about("lib/mm.ts").some((p) => p.includes("inline")), "an inline `if (import.meta.main)` block is caught");
+  assert(about("lib/mn.ts").length === 0, "…one quoted in a doc comment is not");
+  assert(about("root.check.ts").some((p) => p.includes("no check:* script")), "a *.check file at the repo root that no script runs is caught");
+  assert(problems.some((p) => p.startsWith("package.json:") && p.includes("check:r") && p.includes("runs no")), "a check:* script that runs no file is caught");
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

@@ -22,7 +22,7 @@
 // bottle of one radius in the room is one geometry, every banquette chair of one style and colour
 // is one with the tables' chairs. A tree's lobes are not: a tree is one thing.
 //
-// Pure: no React, no three. `npx tsx lib/scene/floor-kinds.ts` runs the self-check.
+// Pure: no React, no three. `npm run check:floor-kinds` runs the self-check.
 import type { BuiltOutline, Footprint } from "@/lib/studio/footprint";
 import { catalogBox, footprintOutlines, pieceOf } from "@/lib/studio/footprint";
 import type { Point } from "@/lib/studio/hall";

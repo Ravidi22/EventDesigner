@@ -6,7 +6,7 @@ import { applyTransform } from "./frame";
 import { type NodeTag, type Part, vec3 } from "./types";
 import { bloomMesh, flowerBuild, headPart, LEAF_Z, MASS_SINK, TRUNK, TRUNK_STEMS } from "./flowers";
 
-// ponytail: self-check. Run: npx tsx lib/scene/flowers.ts
+// ponytail: self-check. Run: npm run check:scene-flowers
 const assert = (ok: boolean, msg: string) => {
   if (!ok) {
     console.error("FAIL", msg);

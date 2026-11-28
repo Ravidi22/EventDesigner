@@ -1,6 +1,6 @@
 // npm run check:shrink — how big an upload is drawn, and in what format, before it leaves the browser (EVE-25).
 import { FILE_KINDS } from "./keys";
-import { JPEG_QUALITY, LONG_SIDE, outputType, renamed, targetSize } from "./shrink-rules";
+import { JPEG_QUALITY, LONG_SIDE, outputType, renamed, targetSize, uploadOriginal } from "./shrink-rules";
 
 const assert = (ok: boolean, what: string) => {
   if (!ok) {
@@ -41,5 +41,15 @@ assert(outputType("image/avif", false) === "image/jpeg", "an opaque AVIF → JPE
 assert(renamed("IMG_1.HEIC.webp", "image/jpeg") === "IMG_1.HEIC.jpg", "the last extension is replaced");
 assert(renamed("logo", "image/png") === "logo.png", "a name with no extension gets one");
 assert(renamed("photo.JPG", "image/jpeg") === "photo.jpg", "an upper-case extension is replaced too");
+
+// What goes up (PR #2 review): never something bigger than what was picked, unless only the redraw
+// drops the metadata. A canvas PNG encoder compresses less than the tool that made an optimised PNG, so
+// a hall plan that uploaded before EVE-25 must not grow past MAX_BYTES and be refused after it.
+const MB = 1024 * 1024;
+assert(uploadOriginal("image/png", 20 * MB, 28 * MB), "a PNG that came out bigger goes up as picked");
+assert(!uploadOriginal("image/png", 20 * MB, 6 * MB), "a PNG that came out smaller goes up redrawn");
+assert(uploadOriginal("image/webp", 15 * MB, 30 * MB), "a transparent WebP that became a bigger PNG goes up as picked");
+assert(!uploadOriginal("image/jpeg", 2 * MB, 3 * MB), "a JPEG goes up redrawn even when bigger — the redraw is what drops its EXIF");
+assert(!uploadOriginal("image/png", 5 * MB, 5 * MB), "the same size: redrawn");
 
 console.log("shrink self-check passed");

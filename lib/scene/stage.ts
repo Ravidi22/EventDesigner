@@ -21,7 +21,7 @@
 // other way round — it is climbed from the edge in). A RAMP is one tilted slab over a stepped dark
 // infill, so it reads as a wedge whichever way the viewer pivots a tilt.
 //
-// Pure, no DOM; `npx tsx lib/scene/stage.ts` runs the self-check at the bottom.
+// Pure, no DOM; `npm run check:scene-stage` runs the self-check at the bottom.
 import type { Point } from "@/lib/studio/hall";
 import type { StageStair } from "@/lib/design-document/types";
 import { BENCH_TOP_MM, TREAD_MM, edgeItemShape, openEdges, railingRuns, stageCorners, stageHeight, type CornerPiece, type EdgeItemShape, type EdgeRun, stageHoles, type StagePlacement } from "@/lib/design-document/stage";

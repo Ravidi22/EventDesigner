@@ -2,7 +2,7 @@
 import type { DesignDocumentContent } from "@/lib/design-document/types";
 import { quoteGroups, quoteTotals, type QuoteLookup } from "./quote";
 
-// ponytail: self-check for the money paths. Run: node --experimental-strip-types lib/outputs/quote.ts
+// ponytail: self-check for the money paths. Run: npm run check:quote
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

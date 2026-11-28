@@ -11,7 +11,7 @@ import { applyTransform } from "./frame";
 import { type BodyNode, type LabelNode, transform, vec3 } from "./types";
 import { BARE_TABLE_TONE, CLOTH_THICK_MM, clothHemParts, clothParts, hemBands, itemContextOf, LEG_INSET_MM, LEG_MM, offsetOutline, polySize, tableNodes } from "./tables";
 
-// ponytail: self-check. Run: npx tsx lib/scene/tables.ts
+// ponytail: self-check. Run: npm run check:tables
 const assert = (ok: boolean, msg: string) => {
   if (!ok) {
     console.error("FAIL", msg);
