@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ListOrdered } from "lucide-react";
+import { hashTarget } from "@/lib/legal/hash";
 import type { LegalSlug } from "@/lib/legal/types";
 
 export interface TocEntry {
@@ -24,7 +25,7 @@ function useCurrent(entries: TocEntry[], media: string) {
     let frame = 0;
     // The section last jumped to (a click or the address's #): at the foot of the page several short
     // sections are on screen and none can reach the header, so the one asked for is the answer.
-    let picked = decodeURIComponent(window.location.hash.slice(1));
+    let picked = hashTarget(window.location.hash);
     const read = () => {
       frame = 0;
       let at = entries[0]?.id ?? "";
@@ -43,7 +44,7 @@ function useCurrent(entries: TocEntry[], media: string) {
       if (!frame) frame = requestAnimationFrame(read);
     };
     const onHash = () => {
-      picked = decodeURIComponent(window.location.hash.slice(1));
+      picked = hashTarget(window.location.hash);
       schedule();
     };
     const listen = () => {
@@ -133,23 +134,23 @@ export function LegalTocMobile({ entries }: { entries: TocEntry[] }) {
         </span>
         <ChevronDown aria-hidden className={`ms-auto h-[18px] w-[18px] text-ink-soft transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
-      {open && (
-        <ol id="legal-toc-list" className="border-t border-border-soft p-1.5">
-          {entries.map((e, i) => (
-            <li key={e.id}>
-              <a
-                href={`#${e.id}`}
-                onClick={() => setOpen(false)}
-                aria-current={current === e.id ? "true" : undefined}
-                className="flex min-h-11 items-center gap-1.5 rounded-sm px-2.5 text-body leading-[1.4] text-ink-soft aria-[current=true]:bg-accent-tint aria-[current=true]:font-bold aria-[current=true]:text-accent"
-              >
-                <span className="min-w-[1.4em] shrink-0 tabular-nums">{i + 1}.</span>
-                {e.title}
-              </a>
-            </li>
-          ))}
-        </ol>
-      )}
+      {/* Always in the DOM, hidden while closed, so the button's aria-controls always names a list
+          that exists (PR #4 review). */}
+      <ol id="legal-toc-list" hidden={!open} className="border-t border-border-soft p-1.5">
+        {entries.map((e, i) => (
+          <li key={e.id}>
+            <a
+              href={`#${e.id}`}
+              onClick={() => setOpen(false)}
+              aria-current={current === e.id ? "true" : undefined}
+              className="flex min-h-11 items-center gap-1.5 rounded-sm px-2.5 text-body leading-[1.4] text-ink-soft aria-[current=true]:bg-accent-tint aria-[current=true]:font-bold aria-[current=true]:text-accent"
+            >
+              <span className="min-w-[1.4em] shrink-0 tabular-nums">{i + 1}.</span>
+              {e.title}
+            </a>
+          </li>
+        ))}
+      </ol>
     </nav>
   );
 }

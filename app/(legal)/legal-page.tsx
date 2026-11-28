@@ -8,7 +8,7 @@ import Link from "next/link";
 import { Accessibility, FilePenLine, MessageSquareWarning, ShieldCheck } from "lucide-react";
 import { Wordmark } from "@/components/wordmark";
 import { docBySlug, LEGAL_DOCS } from "@/lib/legal/documents";
-import { LEGAL_FACTS } from "@/lib/legal/facts";
+import { LEGAL_FACTS, factHref } from "@/lib/legal/facts";
 import { LEGAL_VERSION, legalPublished } from "@/lib/legal/status";
 import type { LegalBlock, LegalContact, LegalSlug } from "@/lib/legal/types";
 import { LegalText } from "./legal-text";
@@ -198,7 +198,9 @@ function PublicHeader() {
 /** The landing's footer with the documents in it. The documents link to each other even as drafts —
  *  nothing OUTSIDE them links in until they are published (app/page.tsx's footer). */
 function PublicFooter({ current }: { current: LegalSlug }) {
-  const email = LEGAL_FACTS.contactEmail?.trim();
+  // Through factHref like the body text, so a fact that is not an email address never becomes a
+  // broken mailto: here while the body prints it as text (PR #4 review).
+  const contact = LEGAL_FACTS.contactEmail ? factHref("contactEmail", LEGAL_FACTS.contactEmail) : null;
   return (
     <footer className="border-t border-border bg-canvas">
       <div className="mx-auto flex w-full max-w-6xl flex-col items-start justify-between gap-4 px-4 py-6 text-sm text-ink-soft sm:px-6 min-[901px]:flex-row min-[901px]:flex-wrap min-[901px]:items-center">
@@ -214,8 +216,8 @@ function PublicFooter({ current }: { current: LegalSlug }) {
               {d.title}
             </Link>
           ))}
-          {email && (
-            <a href={`mailto:${email}`} className="transition-colors hover:text-accent">
+          {contact && (
+            <a href={contact} className="transition-colors hover:text-accent">
               יצירת קשר
             </a>
           )}

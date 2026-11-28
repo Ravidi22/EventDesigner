@@ -199,6 +199,7 @@
     "check:scene-focus": "tsx lib/scene/focus.check.ts",
     "db:verify:scene": "tsx lib/scene/verify.ts",
     "db:verify:isolation": "tsx lib/db/verify-isolation.ts",
+    "db:verify:signup": "tsx lib/auth/verify-signup.ts",
     "check:envelope": "tsx lib/scene/envelope.check.ts",
     "check:billiard": "tsx lib/catalog/game-tables.check.ts",
     "check:venue-table": "tsx lib/venues/venue-table.check.ts",
@@ -217,6 +218,7 @@
     "check:elevation": "tsx lib/scene/elevation.check.ts",
     "check:tableware": "tsx lib/scene/tableware.check.ts",
     "check:legal": "tsx lib/legal/documents.check.ts",
+    "check:auth-routes": "tsx lib/auth/public-routes.check.ts",
     "legal:export": "tsx scripts/legal-export.ts"
   },
   "dependencies": {

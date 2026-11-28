@@ -32,6 +32,8 @@ export function parseInline(source: string): InlineToken[] {
       // supplies, never typed in. A backslash is refused too — browsers read "/\host" as "//host".
       const local = m[3].startsWith("#") || (m[3].startsWith("/") && !m[3].startsWith("//"));
       if (!local || m[3].includes("\\")) throw new Error(`legal text: link leaves the site: ${m[3]}`);
+      // A label is printed as it is: a fact or a stray brace in it would show literally (PR #4 review).
+      if (STRAY.test(m[2])) throw new Error(`legal text: a mark inside a link label "${m[2]}"`);
       out.push({ kind: "link", label: m[2], href: m[3] });
     }
     at = m.index + m[0].length;
