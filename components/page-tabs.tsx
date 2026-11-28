@@ -33,7 +33,7 @@ export function PageTabs<T extends string>({
           >
             {o.label}
             {o.count !== undefined && (
-              <span className={"nums text-xs font-semibold " + (active ? "text-accent" : "text-quiet")}>{o.count}</span>
+              <span className={"nums text-xs font-semibold " + (active ? "text-accent" : "text-muted")}>{o.count}</span>
             )}
           </button>
         );

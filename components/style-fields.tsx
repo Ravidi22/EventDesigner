@@ -122,7 +122,7 @@ export function ColorField({
             setHexText(toHex(value)); // an incomplete hex (1–5 digits) snaps back to the last real value
           }}
           aria-label={`${label} — קוד צבע`}
-          className="w-0 min-w-0 flex-1 bg-transparent text-right text-xs nums text-ink placeholder:text-faint"
+          className="w-0 min-w-0 flex-1 bg-transparent text-right text-xs nums text-ink placeholder:text-quiet"
         />
 
         {hasColor && onOpacityChange && (

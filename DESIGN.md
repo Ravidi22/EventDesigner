@@ -13,8 +13,8 @@ colors:
   inset-border: "#eae8f0"
   ink: "#1b1725"
   ink-soft: "#4a4658"
-  muted: "#7c7889"
-  quiet: "#9c98ac"
+  muted: "#6c6877"
+  quiet: "#77718c"
   faint: "#a29eb2"
   indigo-900: "#4b3a8c"
   indigo-700: "#6d55bd"
@@ -96,7 +96,7 @@ spacing:
   xl: "40px"
 components:
   button-primary:
-    backgroundColor: "linear-gradient(150deg, #8b6fd6, #6d55bd)"
+    backgroundColor: "linear-gradient(150deg, #7f61d2, #6d55bd)"
     textColor: "{colors.canvas}"
     rounded: "{rounded.pill}"
     padding: "6px 22px 6px 6px"
@@ -197,9 +197,9 @@ A six-stop ramp: `900 #4B3A8C` · `700 #6D55BD` · `500 #8F78D8` · `300 #B7A4EA
 - **Inset** (`#FAF9FD`): a well recessed *inside* a card — a code sample, a spec swatch, a read-only field.
 - **Ink** (`#1B1725`): primary text and icons, a violet-leaning near-black. 16:1 on white.
 - **Ink Soft** (`#4A4658`): secondary text and body copy. 8.6:1.
-- **Muted** (`#7C7889`): section subtitles, labels, and meta. 4.3:1 on white — see The Contrast Note below.
-- **Quiet** (`#9C98AC`): captions and swatch labels, at 13px and up.
-- **Faint** (`#A29EB2`): kickers, rules, dividers, disabled glyphs.
+- **Muted** (`#6C6877`): section subtitles, labels, and meta — text on any ground. 5.4:1 on white, 4.65:1 on the plane.
+- **Quiet** (`#77718C`): captions, counts, placeholders, kickers — on white only (4.6:1). On a tinted ground (inset, the plane, accent-tint) a caption is `muted` instead.
+- **Faint** (`#A29EB2`): never text that has to be read — rules, dividers, bullets, decorative and disabled glyphs.
 - **Border** (`#E9E7F0`) / **Border Soft** (`#F0EEF5`) / **Inset Border** (`#EAE8F0`): hairlines between panels, between rows inside a card, and around an inset well.
 
 ### Warm accents — lifted out of the mesh
@@ -220,7 +220,7 @@ Each has a **hue** (the swatch, for fills, dots, and bars) and a **tint** (the c
 
 **The Swatch-Is-Not-A-Label Rule.** Indigo `300`/`500` and the warm accents are *fills* — gradient members, dots, bars, illustration. They never carry small text. Amber is the one hue with a separate label value (`warn-ink`): the `#C79A2E` swatch is for fills and dots, `#A97E1F` for any warning text.
 
-**The Contrast Note.** These values come from the design system as authored, and three of them sit just under WCAG AA for small text: `muted` `#7C7889` (4.3:1), `alert` `#C9603F` (4.0:1), and `warn-ink` on its tint (3.2:1). Body copy runs on `ink-soft` `#4A4658` (8.6:1) and every warning pairs colour with an icon and words, so meaning never rests on the hue alone — but if the AA bar is later made hard, these three are the values to deepen.
+**The Contrast Note (AA since 2026-11-27, EVE-10 — approved in Claude Design, "Eve — דפים משפטיים וניגודיות").** Every text pair clears WCAG AA: `muted` and `quiet` were deepened (above); `faint` carries no text; text in a semantic colour is its `-ink` (`alert-ink`, `success-ink`, `warn-ink` — the fills `alert`/`success`/`warn` are dots, bars, outlines and icons); the CTA gradient's light stop went from `#8B6FD6` to `#7F61D2` so white on it is 4.6:1. The one exception is the logo — the "EVENT STUDIO" caption under the wordmark is part of the mark.
 
 **The One-Saturated-Surface Rule.** At most one mesh-gradient surface per screen, and one filled CTA. Everything else is ink, muted, and space. If the chrome competes with a product photo for attention, the chrome is wrong.
 
@@ -322,7 +322,7 @@ The signature entry action, and the one component the reference specifies in ful
 
 Five variants, all `{rounded.pill}`, label weight **700**, `transition-all` 150ms. The design system specifies the `lg` step exactly; `md` (44px) and `sm` (36px) scale it down for dense toolbar and inline use.
 
-- **Primary:** the gradient fill (`150deg, #8B6FD6 → #6D55BD`), white label, CTA shadow. **58px** tall at `lg`, 15px label. The one saturated control on a screen — one per view, on the single most important action. Hover brightens 10%.
+- **Primary:** the gradient fill (`150deg, #7F61D2 → #6D55BD`), white label, CTA shadow. **58px** tall at `lg`, 15px label. The one saturated control on a screen — one per view, on the single most important action. Hover brightens 10%.
 - **Soft:** the tint gradient (`150deg, #EFEAFB → #E7E0F7`) with a `soft-line` (`#E0D8F2`) hairline and an `accent-hover` label. **54px** at `lg`, 14px label. Secondary weight without competing.
 - **Outline:** no fill, a 1.5px `accent-line` stroke, `accent` label. **50px** at `lg`. Hover fills to `accent-tint`.
 - **Ghost:** no fill or border at rest, `ink-soft` label; background lifts to `accent-tint` and the label to `accent-hover` on hover. Not in the design system — the app needs a borderless toolbar action, and this is it.
@@ -385,5 +385,5 @@ The 2D studio is the one place the accent does real work: selected tables and pl
 - **Don't** go consumer-flashy or playful: no bright bounce, gamification, or illustration filler.
 - **Don't** become a cluttered enterprise CRM: no dense gray-on-gray toolbars or deep nav trees burying the canvas.
 - **Don't** use a colored side-stripe border (`border-left`/`border-right` > 1px) on cards, list items, or alerts — use full hairline borders or a tint wash.
-- **Don't** set body or placeholder text lighter than `quiet` (`#9C98AC`); `faint` is for kickers, rules and dividers.
+- **Don't** set body or placeholder text lighter than `quiet` (`#77718C`), nor `quiet` text on a tinted ground; `faint` is for rules, dividers and disabled glyphs.
 - **Don't** express luxury with a cream/sand/beige body background or gold gradients — the warmth in this system lives in the mesh and the accent, on a cool lavender-grey plane.

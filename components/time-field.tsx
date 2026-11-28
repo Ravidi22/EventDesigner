@@ -230,7 +230,7 @@ export function TimeField({
       {label && (
         <span className={fieldLabelClassName}>
           {label}
-          {required && <span className="text-alert"> *</span>}
+          {required && <span className="text-alert-ink"> *</span>}
         </span>
       )}
       <button
@@ -248,11 +248,11 @@ export function TimeField({
         } ${className}`}
       >
         <Clock className="h-4 w-4 shrink-0 text-muted" strokeWidth={2} />
-        <span className={`nums flex-1 truncate ${selected ? "text-ink" : "text-faint"}`} dir="ltr">
+        <span className={`nums flex-1 truncate ${selected ? "text-ink" : "text-quiet"}`} dir="ltr">
           {selected ? format(selected) : placeholder}
         </span>
       </button>
-      {error && errorMessage && <p className="mt-1 text-xs text-alert">{errorMessage}</p>}
+      {error && errorMessage && <p className="mt-1 text-xs text-alert-ink">{errorMessage}</p>}
 
       {open && (
         <div className="absolute start-0 top-[calc(100%+6px)] z-20 rounded-md border border-border bg-surface p-3 shadow-lifted">

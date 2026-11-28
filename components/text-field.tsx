@@ -57,7 +57,7 @@ export function TextField({
    *  answer to them (a flower name, a tag). Single-line only; a textarea has no list. */
   list?: string;
 }) {
-  const inputClass = `${controlClassName} w-full px-2.5 placeholder:text-faint ${
+  const inputClass = `${controlClassName} w-full px-2.5 placeholder:text-quiet ${
     error ? "border-alert hover:border-alert" : ""
   } ${multiline ? "h-auto resize-y py-2" : ""} ${className}`;
 
@@ -66,7 +66,7 @@ export function TextField({
       {label && (
         <span className={fieldLabelClassName}>
           {label}
-          {required && <span className="text-alert"> *</span>}
+          {required && <span className="text-alert-ink"> *</span>}
         </span>
       )}
       {multiline ? (
@@ -100,7 +100,7 @@ export function TextField({
           className={inputClass}
         />
       )}
-      {error && errorMessage && <p className="mt-1 text-xs text-alert">{errorMessage}</p>}
+      {error && errorMessage && <p className="mt-1 text-xs text-alert-ink">{errorMessage}</p>}
     </label>
   );
 }

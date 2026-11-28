@@ -382,7 +382,7 @@ export function BookingDrawer({
                     קישור
                   </Button>
                 </div>
-                {linkError && <p className="text-xs text-alert">{linkError}</p>}
+                {linkError && <p className="text-xs text-alert-ink">{linkError}</p>}
               </div>
             )}
           </DrawerSection>

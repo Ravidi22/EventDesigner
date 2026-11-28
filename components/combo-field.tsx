@@ -154,7 +154,7 @@ export function ComboField({
         }}
         onFocus={() => setOpen(true)}
         onKeyDown={onKeyDown}
-        className={`${controlClassName} w-full px-2.5 placeholder:text-faint`}
+        className={`${controlClassName} w-full px-2.5 placeholder:text-quiet`}
       />
       {visible && (
         <div

@@ -377,7 +377,7 @@ export function ProductionScreen({
               to be able to overhang this. */}
           <h2 className="sticky top-0 z-10 flex items-baseline gap-2 bg-bg py-2 text-caption font-bold text-muted">
             {group.label}
-            <span className="nums font-semibold text-quiet">{group.rows.length}</span>
+            <span className="nums font-semibold text-muted">{group.rows.length}</span>
           </h2>
           <ul className="flex flex-col gap-2.5 pb-4">
             {group.rows.map((row) => {

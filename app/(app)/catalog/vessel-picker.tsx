@@ -126,7 +126,7 @@ export function VesselPicker({
             setActive(0);
           }}
           onKeyDown={onKeyDown}
-          className={`${controlClassName} w-full ps-8 pe-2.5 placeholder:text-faint`}
+          className={`${controlClassName} w-full ps-8 pe-2.5 placeholder:text-quiet`}
         />
       </div>
       <div id={listId} role="listbox" aria-label={listLabel} className={`scroll-slim mt-1.5 overflow-y-auto ${listClassName}`}>

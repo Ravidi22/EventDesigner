@@ -270,7 +270,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
                 {/* The email, not a role label: it is what tells you WHICH account this browser is
                     signed into, which is the question a profile card in a multi-tenant app is
                     actually being asked. */}
-                <span className="block truncate text-xs text-quiet" dir="ltr">
+                <span className="block truncate text-xs text-muted" dir="ltr">
                   {user.email}
                 </span>
               </span>

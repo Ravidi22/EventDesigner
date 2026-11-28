@@ -184,7 +184,7 @@ export function PanelListHeading({
 }) {
   const EyeIcon = visible ? Eye : EyeOff;
   return (
-    <div className={"mt-1 flex h-7 items-center gap-1.5 px-1.5 " + (visible ? "" : "text-faint")}>
+    <div className={"mt-1 flex h-7 items-center gap-1.5 px-1.5 " + (visible ? "" : "text-quiet")}>
       <button
         type="button"
         onClick={onActivate}
@@ -195,7 +195,7 @@ export function PanelListHeading({
         {label}
       </button>
       {active && <span className="rounded-pill bg-accent-wash px-[7px] text-[10px] font-bold text-accent-hover">פעילה</span>}
-      {count !== undefined && <span className="nums text-xs text-faint">{count}</span>}
+      {count !== undefined && <span className="nums text-xs text-quiet">{count}</span>}
       <div className="h-px flex-1 bg-border-soft" aria-hidden />
       {onToggleVisible && (
         <button
@@ -293,7 +293,7 @@ export function PanelListFolded({
       >
         <Icon className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.75} />
         <span className="whitespace-nowrap text-[13px] font-semibold text-ink">{title}</span>
-        {count !== undefined && <span className="nums text-xs text-quiet">{count}</span>}
+        {count !== undefined && <span className="nums text-xs text-muted">{count}</span>}
         {badge}
         <span className="min-w-0 flex-1 truncate text-end text-xs text-muted">{crumb}</span>
         <ChevronDown className="h-3 w-3 shrink-0 text-faint" strokeWidth={2} />

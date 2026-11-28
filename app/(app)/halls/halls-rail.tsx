@@ -99,7 +99,7 @@ export function HallsRail({
             >
               <PenLine className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.75} aria-hidden />
               שרטוט קירות
-              <kbd className="ms-auto font-mono text-[11px] font-normal text-faint">W</kbd>
+              <kbd className="ms-auto font-mono text-[11px] font-normal text-muted">W</kbd>
             </button>
             <button
               type="button"
@@ -173,7 +173,7 @@ function CatalogTab({ tools, armedId, onPick }: { tools: AddTool[]; armedId: str
             <div key={g.id} className="flex flex-col gap-0.5">
               <span className="flex items-baseline gap-1.5 ps-0.5 text-xs font-semibold text-muted">
                 {g.label}
-                <span className="nums text-[11px] font-normal text-faint">{g.tools.length}</span>
+                <span className="nums text-[11px] font-normal text-quiet">{g.tools.length}</span>
               </span>
               <ul className="flex flex-col gap-0.5">
                 {g.tools.map((tool) => (

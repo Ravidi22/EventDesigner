@@ -13,7 +13,7 @@ const variants: Record<Variant, string> = {
   soft: "grad-soft border border-soft-line text-accent-hover hover:brightness-[0.98]",
   outline: "border-[1.5px] border-accent-line text-accent hover:bg-accent-tint",
   ghost: "text-ink-soft hover:bg-accent-tint hover:text-accent-hover",
-  danger: "text-muted hover:bg-alert-tint hover:text-alert",
+  danger: "text-muted hover:bg-alert-tint hover:text-alert-ink",
 };
 
 // The design system specifies the `lg` step exactly: 58/32r primary, 54/28r soft, 50/26r outline.

@@ -80,7 +80,7 @@ export function DataSection() {
 
         {confirming ? (
           <span className="flex items-center gap-2">
-            <span className="text-[13px] font-semibold text-alert">לנקות את מה שהמכשיר הזה זוכר?</span>
+            <span className="text-[13px] font-semibold text-alert-ink">לנקות את מה שהמכשיר הזה זוכר?</span>
             {/* Outline geometry with the alert stroke, written out: passing border-alert to the
                 outline Button would collide with its own border colour. */}
             <button
@@ -89,7 +89,7 @@ export function DataSection() {
                 resetAll();
                 window.location.reload();
               }}
-              className="inline-flex h-9 items-center justify-center rounded-pill border-[1.5px] border-alert px-4 text-[13px] font-bold text-alert transition-colors hover:bg-alert-tint"
+              className="inline-flex h-9 items-center justify-center rounded-pill border-[1.5px] border-alert px-4 text-[13px] font-bold text-alert-ink transition-colors hover:bg-alert-tint"
             >
               אישור
             </button>

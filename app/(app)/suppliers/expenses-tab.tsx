@@ -114,7 +114,7 @@ export function ExpensesTab({
         <div className="ms-auto flex shrink-0 items-center gap-3">
           {outstanding > 0 && (
             <span className="text-sm text-muted">
-              פתוח: <span className="nums font-semibold text-alert">{formatPrice(outstanding)}</span>
+              פתוח: <span className="nums font-semibold text-alert-ink">{formatPrice(outstanding)}</span>
             </span>
           )}
           <span className="text-sm text-muted">
@@ -172,7 +172,7 @@ export function ExpensesTab({
                     <span
                       className={
                         "inline-flex items-center rounded-pill px-2 py-0.5 text-xs font-medium " +
-                        (e.paid ? "bg-inset text-ink-soft" : "bg-alert-tint text-alert")
+                        (e.paid ? "bg-inset text-ink-soft" : "bg-alert-tint text-alert-ink")
                       }
                     >
                       {e.paid ? "שולם" : "פתוח"}

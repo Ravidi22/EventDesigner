@@ -319,8 +319,8 @@ export function Menu({
                   className={`flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-start text-sm transition-colors ${
                     item.danger
                       ? index === activeIndex
-                        ? "bg-alert-tint text-alert"
-                        : "text-alert"
+                        ? "bg-alert-tint text-alert-ink"
+                        : "text-alert-ink"
                       : item.emphasis
                         ? index === activeIndex
                           ? "bg-accent-tint font-semibold text-accent"
@@ -332,7 +332,7 @@ export function Menu({
                 >
                   {Icon && <Icon className={`h-3.5 w-3.5 shrink-0${item.iconClassName ? ` ${item.iconClassName}` : ""}`} strokeWidth={2} />}
                   <span className={item.hint ? "min-w-0 flex-1 truncate" : "truncate"}>{item.label}</span>
-                  {item.hint && <span className="shrink-0 text-xs text-quiet">{item.hint}</span>}
+                  {item.hint && <span className="shrink-0 text-xs text-muted">{item.hint}</span>}
                 </button>
               </Fragment>
             );

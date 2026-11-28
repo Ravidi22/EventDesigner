@@ -185,7 +185,7 @@ function PasswordFields() {
         <Button size="sm" variant="outline" onClick={submit} disabled={!filled || busy}>
           {busy ? "מעדכן…" : "עדכון הסיסמה"}
         </Button>
-        {error && <p className="text-[13px] font-medium text-alert">{error}</p>}
+        {error && <p className="text-[13px] font-medium text-alert-ink">{error}</p>}
         {done && <p className="text-[13px] text-ink-soft">{done}</p>}
       </div>
     </div>

@@ -134,7 +134,7 @@ export function SurfacePicker({
             e.target.value = "";
           }}
         />
-        {error && <p className="mt-1 text-xs text-alert">{error}</p>}
+        {error && <p className="mt-1 text-xs text-alert-ink">{error}</p>}
       </div>
 
       {image && (

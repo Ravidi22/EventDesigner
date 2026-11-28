@@ -240,6 +240,28 @@ export const users = pgTable(
 );
 
 
+/** Who accepted which version of the terms and the privacy policy, and when (EVE-9; `LEGAL_VERSION`,
+ *  lib/legal/status.ts). Written by `signUp` through `termsAcceptance` — and only once the texts are
+ *  published: nobody is asked to accept a draft, so the table is empty until then.
+ *
+ *  ⚠ Its OWN table, never columns on `users`: Better Auth reads and returns whole `users` rows, so a
+ *  column added there must exist in the database before the code that declares it deploys, or every
+ *  sign-in fails. Kept apart, this code deploys safely before its migration and the table is needed
+ *  only from go-live. A row per acceptance, so accepting a later version adds a row and keeps the
+ *  earlier one. */
+export const legalAcceptances = pgTable(
+  "legal_acceptances",
+  {
+    id: id(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    version: text("version").notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [uniqueIndex("legal_acceptances_user_version_key").on(t.userId, t.version)],
+);
+
 // ── Better Auth (lib/auth/auth.ts) ─────────────────────────────────────────────────────────────
 // Who is signed in, and how they prove it. Better Auth owns these four tables; `users` above is
 // its "user" model too, mapped field by field, so a person is still ONE row and every foreign key in

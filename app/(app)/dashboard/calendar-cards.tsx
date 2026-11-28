@@ -129,7 +129,7 @@ export function BusyChip({ block, compact }: { block: BusyBlock; compact: boolea
       <Lock className={size.icon + " shrink-0 text-faint"} strokeWidth={1.8} aria-hidden />
       <span className={"min-w-0 flex-1 truncate font-medium text-muted " + size.name}>{block.title}</span>
       {time && (
-        <span className={"nums shrink-0 font-medium text-faint " + size.time} dir="ltr">
+        <span className={"nums shrink-0 font-medium text-muted " + size.time} dir="ltr">
           {time}
         </span>
       )}

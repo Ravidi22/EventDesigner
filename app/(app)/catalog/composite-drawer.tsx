@@ -206,7 +206,7 @@ export function CompositeDrawer({
                         type="button"
                         onClick={() => setRecipe(recipe.filter((l) => l.id !== line.id))}
                         aria-label={`הסרת ${p?.name ?? "הרכיב"}`}
-                        className="rounded-md p-1.5 text-muted transition-colors hover:bg-alert-tint hover:text-alert"
+                        className="rounded-md p-1.5 text-muted transition-colors hover:bg-alert-tint hover:text-alert-ink"
                       >
                         <Trash2 className="h-4 w-4" strokeWidth={2} />
                       </button>

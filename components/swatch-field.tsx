@@ -63,7 +63,7 @@ export function SwatchField({
           onClick={() => onChange(undefined)}
           aria-label={`ניקוי הצבע — ${label}`}
           title="ללא צבע"
-          className="absolute -end-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-border bg-surface text-[10px] leading-none text-muted transition-colors hover:text-alert"
+          className="absolute -end-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-border bg-surface text-[10px] leading-none text-muted transition-colors hover:text-alert-ink"
         >
           ×
         </button>

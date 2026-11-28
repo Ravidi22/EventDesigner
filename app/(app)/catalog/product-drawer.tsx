@@ -348,7 +348,7 @@ function FlowerSpecFields({
         </p>
       ) : (
         <div className="space-y-2">
-          <div className={`${columns} px-0.5 text-[11px] font-semibold text-faint`}>
+          <div className={`${columns} px-0.5 text-[11px] font-semibold text-quiet`}>
             <span>פרח</span>
             <span>גבעולים</span>
             <span>צבע</span>
@@ -385,7 +385,7 @@ function FlowerSpecFields({
                 type="button"
                 onClick={() => remove(l.id)}
                 aria-label={`הסר ${l.name || "פרח"}`}
-                className="rounded-md p-1.5 text-muted transition-colors hover:bg-alert-tint hover:text-alert"
+                className="rounded-md p-1.5 text-muted transition-colors hover:bg-alert-tint hover:text-alert-ink"
               >
                 <Trash2 className="h-4 w-4" strokeWidth={2} />
               </button>
@@ -435,7 +435,7 @@ function FlowerSpecFields({
 function SectionDivider({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[11px] font-semibold text-faint">{label}</span>
+      <span className="text-[11px] font-semibold text-quiet">{label}</span>
       <div className="h-px flex-1 bg-border" />
     </div>
   );
@@ -1482,7 +1482,7 @@ export function ProductDrawer({
                         type="button"
                         onClick={() => removeVariant(v.id)}
                         aria-label={`הסרת הגוון ${v.name || ""}`.trim()}
-                        className="rounded-md p-1.5 text-muted transition-colors hover:bg-alert-tint hover:text-alert"
+                        className="rounded-md p-1.5 text-muted transition-colors hover:bg-alert-tint hover:text-alert-ink"
                       >
                         <Trash2 className="h-4 w-4" strokeWidth={2} />
                       </button>

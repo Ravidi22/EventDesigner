@@ -72,7 +72,7 @@ export function PanelFoot({
           ))}
         </div>
       )}
-      {below && <span className="nums text-center text-[11px] text-faint">{below}</span>}
+      {below && <span className="nums text-center text-[11px] text-muted">{below}</span>}
     </div>
   );
 }
@@ -139,7 +139,7 @@ export function CheckRow({
       </span>
       <span className={"min-w-0 flex-1 truncate text-[13px] " + (disabled ? "font-medium text-faint" : on ? "font-semibold text-ink" : "font-medium text-ink-soft")}>{children}</span>
       {chip ? (
-        <span className={"shrink-0 rounded-pill border px-[7px] text-[11px] font-semibold " + (recommend ? "border-accent-line text-accent-hover" : "border-border text-faint")}>{chip}</span>
+        <span className={"shrink-0 rounded-pill border px-[7px] text-[11px] font-semibold " + (recommend ? "border-accent-line text-accent-hover" : "border-border text-quiet")}>{chip}</span>
       ) : (
         meta !== undefined && meta !== null && meta !== "" && <span className="nums shrink-0 text-xs text-muted">{meta}</span>
       )}

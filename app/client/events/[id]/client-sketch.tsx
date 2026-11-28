@@ -551,7 +551,7 @@ export function ClientSketchView({ sketch }: { sketch: ClientSketch }) {
                   </div>
                 </div>
               )}
-              <button type="button" onClick={() => setConfirmDiscard(true)} className="mt-3 text-[13px] font-semibold text-muted hover:text-alert">
+              <button type="button" onClick={() => setConfirmDiscard(true)} className="mt-3 text-[13px] font-semibold text-muted hover:text-alert-ink">
                 חזרה לסקיצה של המעצב
               </button>
             </>

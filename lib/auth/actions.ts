@@ -23,8 +23,11 @@ import { adoptVenueGrants, openFirstVenue } from "@/lib/venues/granted";
 import { adoptLinkInvites } from "@/lib/event-links/sync";
 import { revalidateSettings } from "@/lib/db/revalidate";
 import { authAccounts, eventClients, events, organizations, studioSettings, users } from "@/lib/db/schema";
+import { settleNewAccount } from "./new-account";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
 import { notify, studioRecipients } from "@/lib/notifications/write";
+import { termsAcceptance } from "@/lib/legal/acceptance";
+import { LEGAL_STATUS, LEGAL_VERSION } from "@/lib/legal/status";
 import { callAuth } from "./auth-call";
 import { hashInviteToken } from "./invite-token";
 import { HOME_FOR, ORG_HOME, isOrgKind, type AccountKind, type OrgKind } from "./kinds";
@@ -37,7 +40,7 @@ export interface AuthResult {
   /** A Hebrew message to show the person, or absent on success. */
   error?: string;
   /** Which field it belongs under, when it belongs under one. */
-  field?: "email" | "password" | "studioName" | "name" | "phone";
+  field?: "email" | "password" | "studioName" | "name" | "phone" | "terms";
   /** Where this account belongs, on success. The two kinds land in different halves of the app and
    *  the caller should not have to re-derive which. */
   home?: string;
@@ -102,6 +105,9 @@ export async function signUp(input: {
   password: string;
   /** "זכור אותי", as on the sign-in form. Anything but a literal true is a no. */
   remember?: boolean;
+  /** The terms line, ticked (EVE-9). Read only once the legal texts are published — see
+   *  lib/legal/acceptance.ts; while they are drafts the line is not shown and nothing is stored. */
+  acceptTerms?: boolean;
 }): Promise<AuthResult> {
   const name = String(input?.name ?? "").trim();
   const email = normalizeEmail(String(input?.email ?? ""));
@@ -111,6 +117,8 @@ export async function signUp(input: {
   if (!EMAIL_RE.test(email)) return { error: "כתובת אימייל לא תקינה", field: "email" };
   const problem = passwordProblem(password);
   if (problem) return { error: problem, field: "password" };
+  const accepted = termsAcceptance({ status: LEGAL_STATUS, accepted: input?.acceptTerms, version: LEGAL_VERSION, now: new Date() });
+  if (accepted && "error" in accepted) return { error: accepted.error, field: "terms" };
 
   const database = db();
   const [existing] = await database
@@ -150,9 +158,9 @@ export async function signUp(input: {
   }
   const userId = created.data.user.id;
 
-  // Better Auth wrote the person; what they ARE is ours to write. A studio account with no
-  // organisation yet: the (app) layout sends it to /welcome until it has one.
-  await database.update(users).set({ kind: "studio", role: "owner", state: "active" }).where(eq(users.id, userId));
+  // Better Auth wrote the person; what they ARE is ours to write — a studio owner with no organisation
+  // yet, and the terms version they accepted — all or nothing (./new-account.ts, PR #4 review).
+  if (!(await settleNewAccount(userId, accepted))) return { error: "ההרשמה נכשלה. נסו שוב." };
 
   // With mail configured, the address must be confirmed before there is a session.
   if (!created.data.token) return { verifyEmail: true };

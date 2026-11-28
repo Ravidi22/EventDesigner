@@ -456,7 +456,7 @@ export function EventDetailDrawer({
               <FoldRow
                 icon={Truck}
                 title="הפקה"
-                summary={<span className="text-faint">אחרי אישור הלקוח</span>}
+                summary={<span className="text-quiet">אחרי אישור הלקוח</span>}
                 open={!!folds.production}
                 onToggle={() => toggle("production")}
               >
@@ -465,7 +465,7 @@ export function EventDetailDrawer({
             )}
           </div>
 
-          <p className="nums text-center text-caption text-faint">
+          <p className="nums text-center text-caption text-muted">
             נוצר ב־{new Date(event.createdAt).toLocaleDateString("he-IL", { day: "numeric", month: "short", year: "numeric" })}
           </p>
         </div>

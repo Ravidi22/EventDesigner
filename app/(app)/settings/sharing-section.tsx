@@ -269,7 +269,7 @@ export function SharingSection({
             </div>
           )}
 
-          {error && <p className="mt-2 text-xs text-alert">{error}</p>}
+          {error && <p className="mt-2 text-xs text-alert-ink">{error}</p>}
           <p className="mt-3 text-xs leading-relaxed text-muted">{VENUE_ROLE_SUMMARY[role]}</p>
         </div>
       </Panel>
@@ -288,7 +288,7 @@ export function SharingSection({
               {scope[key] ? (
                 <Check className="h-4 w-4 shrink-0 text-success" strokeWidth={2.5} aria-label="נכלל" />
               ) : (
-                <X className="h-4 w-4 shrink-0 text-faint" strokeWidth={2} aria-label="לא נכלל" />
+                <X className="h-4 w-4 shrink-0 text-quiet" strokeWidth={2} aria-label="לא נכלל" />
               )}
               <span className={scope[key] ? "text-ink-soft" : "text-muted line-through decoration-faint"}>
                 {SCOPE_LABEL[key]}

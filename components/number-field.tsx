@@ -169,7 +169,7 @@ export function NumberField({
       }}
       onBlur={commit}
       onKeyDown={onKeyDown}
-      className={`${sizeBase[size]} nums text-end placeholder:text-faint ${layout === "stack" ? `${sized ? "" : "w-full "}px-2.5` : size === "sm" ? "px-1.5" : "px-2"} ${
+      className={`${sizeBase[size]} nums text-end placeholder:text-quiet ${layout === "stack" ? `${sized ? "" : "w-full "}px-2.5` : size === "sm" ? "px-1.5" : "px-2"} ${
         error ? "border-alert hover:border-alert" : ""
       } ${className}`}
     />
@@ -189,11 +189,11 @@ export function NumberField({
       {label && (
         <span className={fieldLabelClassName}>
           {label}
-          {required && <span className="text-alert"> *</span>}
+          {required && <span className="text-alert-ink"> *</span>}
         </span>
       )}
       {input}
-      {error && errorMessage && <p className="mt-1 text-xs text-alert">{errorMessage}</p>}
+      {error && errorMessage && <p className="mt-1 text-xs text-alert-ink">{errorMessage}</p>}
     </label>
   );
 }

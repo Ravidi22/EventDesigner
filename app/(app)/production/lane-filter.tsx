@@ -139,7 +139,7 @@ export function LaneFilter({
                     ? "text-alert-ink"
                     : active
                       ? "text-accent"
-                      : "text-quiet")
+                      : "text-muted")
                 }
               >
                 {option.count}

@@ -50,9 +50,9 @@ export function ErrorPanel({
       </button>
 
       {error.digest && (
-        <p className="mt-6 text-xs text-quiet">
+        <p className="mt-6 text-xs text-muted">
           קוד תקלה:{" "}
-          <code dir="ltr" className="nums font-label text-quiet">
+          <code dir="ltr" className="nums font-label text-muted">
             {error.digest}
           </code>
         </p>

@@ -140,7 +140,7 @@ export function ExpenseDrawer({
         <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
           <div>
             <label htmlFor="e-supplier" className={fieldLabelClassName}>
-              ספק <span className="text-alert">*</span>
+              ספק <span className="text-alert-ink">*</span>
             </label>
             <Select
               id="e-supplier"
@@ -149,7 +149,7 @@ export function ExpenseDrawer({
               options={supplierOptions}
               className="w-full"
             />
-            {supplierError && <p className="mt-1 text-xs text-alert">יש לבחור ספק.</p>}
+            {supplierError && <p className="mt-1 text-xs text-alert-ink">יש לבחור ספק.</p>}
           </div>
 
           <div className="grid grid-cols-2 gap-3">

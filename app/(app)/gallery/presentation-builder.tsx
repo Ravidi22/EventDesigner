@@ -326,7 +326,7 @@ export function PresentationBuilder({
               <button
                 type="button"
                 onClick={() => onDelete(draft.id)}
-                className="mt-auto flex items-center gap-1.5 self-start pt-2 text-xs font-medium text-muted transition-colors hover:text-alert"
+                className="mt-auto flex items-center gap-1.5 self-start pt-2 text-xs font-medium text-muted transition-colors hover:text-alert-ink"
               >
                 <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
                 מחיקת המצגת
@@ -482,7 +482,7 @@ function CatalogList({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="חיפוש מוצר…"
-          className="mb-1.5 h-9 w-full rounded-lg border border-border bg-canvas px-3 text-sm placeholder:text-faint focus-visible:border-accent focus-visible:outline-none"
+          className="mb-1.5 h-9 w-full rounded-lg border border-border bg-canvas px-3 text-sm placeholder:text-quiet focus-visible:border-accent focus-visible:outline-none"
         />
       )}
 
@@ -661,7 +661,7 @@ function FilmstripCard({
         type="button"
         onClick={onRemove}
         aria-label={`הסרת "${slide.name}" מהמצגת`}
-        className="absolute inset-inline-end-1 top-1 rounded-full bg-canvas/85 p-1 text-muted opacity-0 transition-opacity hover:text-alert focus-visible:opacity-100 group-hover:opacity-100"
+        className="absolute inset-inline-end-1 top-1 rounded-full bg-canvas/85 p-1 text-muted opacity-0 transition-opacity hover:text-alert-ink focus-visible:opacity-100 group-hover:opacity-100"
       >
         <X className="h-3 w-3" strokeWidth={2.5} />
       </button>

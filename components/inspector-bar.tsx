@@ -308,7 +308,7 @@ export function BarButton({
       className={
         "shrink-0 rounded-md p-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-35 " +
         (tone === "danger"
-          ? "text-muted hover:bg-alert-tint hover:text-alert"
+          ? "text-muted hover:bg-alert-tint hover:text-alert-ink"
           : active
             ? "bg-accent-tint text-accent"
             : "text-muted hover:bg-accent-tint hover:text-accent-hover")

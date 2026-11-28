@@ -311,7 +311,7 @@ export function TourEditor({ work, playing, activeId, editable }: { work: Camera
                       disabled={!editable || tour.stops.length <= 1}
                       aria-label={`הסרת ${work.nameOf(s.viewpointId)} מהסיור`}
                       title="הסרה מהסיור"
-                      className="inline-flex h-6 w-6 items-center justify-center rounded-pill text-muted transition-colors hover:bg-alert-tint hover:text-alert disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted"
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-pill text-muted transition-colors hover:bg-alert-tint hover:text-alert-ink disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted"
                     >
                       <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
                     </button>

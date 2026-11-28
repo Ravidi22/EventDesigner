@@ -52,6 +52,10 @@ const PUBLIC = [
   "/v",
   "/api/csp-report",
   "/api/health",
+  // The legal documents (EVE-8/9/10) — readable by anyone, signed in or not.
+  "/privacy",
+  "/terms",
+  "/accessibility",
   "/",
 ];
 

@@ -163,7 +163,7 @@ export function BookingsScreen({
                 <section key={g.key || "undated"} aria-label={monthLabel(g.key)}>
                   <h2 className="sticky top-0 z-10 flex items-baseline gap-2 bg-bg py-2 text-caption font-bold text-muted">
                     {monthLabel(g.key)}
-                    <span className="nums font-semibold text-quiet">{g.items.length}</span>
+                    <span className="nums font-semibold text-muted">{g.items.length}</span>
                   </h2>
                   <ul className="flex flex-col gap-2.5 pb-4">
                     {g.items.map((b) => {

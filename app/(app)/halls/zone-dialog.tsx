@@ -197,7 +197,7 @@ export function ZoneDialog({
                       </>
                     )}
                   </p>
-                  <p className={`mt-1 text-xs leading-relaxed ${detached ? "text-alert" : "text-muted"}`}>
+                  <p className={`mt-1 text-xs leading-relaxed ${detached ? "text-alert-ink" : "text-muted"}`}>
                     {detached
                       ? detachedNote(zone)
                       : zone.source.type === "region"
@@ -293,7 +293,7 @@ export function ZoneDialog({
               <button
                 type="button"
                 onClick={() => setConfirming(true)}
-                className="inline-flex h-9 items-center gap-1.5 rounded-pill px-3 text-[13px] font-bold text-alert transition-colors hover:bg-alert-tint"
+                className="inline-flex h-9 items-center gap-1.5 rounded-pill px-3 text-[13px] font-bold text-alert-ink transition-colors hover:bg-alert-tint"
               >
                 <Trash2 className="h-4 w-4" strokeWidth={2} />
                 מחיקת האזור
