@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Lock, ShieldCheck } from "lucide-react";
+import { DoorClosed, Lock, ShieldCheck, Trash2 } from "lucide-react";
 import { ROLE_SUMMARY, STUDIO_ROLE_LABEL, type StudioMember } from "@/lib/team/types";
 import { updateMyName } from "@/lib/team/actions";
 import { changePassword } from "@/lib/auth/actions";
 import { Button } from "@/components/button";
 import { TextField } from "@/components/text-field";
 import { StatusChip } from "@/components/status-chip";
+import { DeleteAccountDialog } from "@/components/delete-account-dialog";
 import { Avatar, Note, Panel, SavedFlag } from "./ui";
 
 // The signed-in person's own row — the real one.
@@ -21,7 +22,19 @@ import { Avatar, Note, Panel, SavedFlag } from "./ui";
 // account signs in with, so changing it is an identity change that needs the new address verified
 // before the old one stops working. A text field that silently swaps your login is worse than no
 // field at all.
-export function AccountSection({ initialMe }: { initialMe: StudioMember | null }) {
+export function AccountSection({
+  initialMe,
+  needsPassword,
+  studioName,
+  onOpenClose,
+}: {
+  initialMe: StudioMember | null;
+  /** The account has a password to confirm a delete with (lib/auth/logins.ts). */
+  needsPassword: boolean;
+  studioName: string;
+  /** Opens סגירת העסק — the owner's way out, named in place of the delete they do not have. */
+  onOpenClose: () => void;
+}) {
   // The row comes from page.tsx's server read — the same one the team and sharing sections use, so
   // opening all three costs one lookup rather than three.
   const [me, setMe] = useState<StudioMember | null>(initialMe);
@@ -91,10 +104,22 @@ export function AccountSection({ initialMe }: { initialMe: StudioMember | null }
 
         <PasswordFields />
 
+        {me.role === "owner" ? null : <DeleteEntry email={me.email} studioName={studioName} needsPassword={needsPassword} />}
+
         <Note icon={<Lock className="h-4 w-4" strokeWidth={1.6} />}>
           התפקיד שלכם נקבע על ידי בעלי הסטודיו, ולכן אינו נערך מכאן. שינוי כתובת הכניסה ואיפוס סיסמה
           במייל (למי ששכח אותה) עדיין לא מחוברים — כתובת שמתחלפת בלי אימות היא דרך לאבד גישה לחשבון.
         </Note>
+
+        {me.role === "owner" && (
+          <Note icon={<DoorClosed className="h-4 w-4" strokeWidth={1.6} />}>
+            לבעלים אין כאן מחיקה: הדרך שלהם החוצה היא סגירת העסק, בהגדרות ›{" "}
+            <button type="button" onClick={onOpenClose} className="font-semibold text-accent underline-offset-2 hover:underline">
+              סגירת העסק
+            </button>
+            .
+          </Note>
+        )}
       </div>
     </Panel>
   );
@@ -188,6 +213,33 @@ function PasswordFields() {
         {error && <p className="text-[13px] font-medium text-alert-ink">{error}</p>}
         {done && <p className="text-[13px] text-ink-soft">{done}</p>}
       </div>
+    </div>
+  );
+}
+
+/** A team member deletes their own account (EVE-22, spec §5.6). Their work stays in the studio, their
+ *  name on it replaced by "חבר/ת צוות לשעבר" (lib/account/member.ts beforePersonErased). */
+function DeleteEntry({ email, studioName, needsPassword }: { email: string; studioName: string; needsPassword: boolean }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border-t border-border-soft pt-5">
+      <h3 className="text-[15px] font-semibold text-ink">מחיקת החשבון</h3>
+      <p className="mt-1 text-caption leading-relaxed text-ink-soft">
+        החשבון שלכם נמחק ואתם יוצאים מהסטודיו. העבודה שעשיתם נשארת בסטודיו, ושמכם עליה מוחלף ב״חבר/ת צוות לשעבר״.
+      </p>
+      <div className="mt-3.5">
+        <Button size="sm" variant="danger" onClick={() => setOpen(true)} icon={<Trash2 className="h-4 w-4" strokeWidth={1.75} />}>
+          מחיקת החשבון
+        </Button>
+      </div>
+      <DeleteAccountDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        who="member"
+        email={email}
+        studioName={studioName}
+        needsPassword={needsPassword}
+      />
     </div>
   );
 }

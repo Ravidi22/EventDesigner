@@ -20,9 +20,13 @@ import { currentSession } from "@/lib/auth/session";
 import { emailConfig } from "@/lib/email/config";
 import { sendEmail } from "@/lib/email/send";
 import { invitationEmail } from "@/lib/email/templates";
+import { peopleOf, recordAudit } from "@/lib/audit/write";
+import { personToken } from "@/lib/audit/render";
+import { eraseMember } from "@/lib/account/member";
 import {
   canManagePeople,
   isStudioRole,
+  STUDIO_ROLE_LABEL,
   type InviteResult,
   type StudioMember,
   type StudioRole,
@@ -147,18 +151,29 @@ export async function inviteMember(
   }
 
   const invite = mintInviteToken();
-  await database.insert(users).values({
-    organizationId: actor.organizationId,
-    kind: "studio",
-    email: address,
-    name: String(name ?? "").trim() || null,
-    role,
-    state: "pending",
-    passwordHash: null,
-    inviteTokenHash: invite.tokenHash,
-    inviteExpiresAt: invite.expiresAt,
-    // Set when they accept, not when they are asked — this column is the day they JOINED.
-    joinedAt: null,
+  // The invitation and its audit row are one transaction (lib/audit/write.ts; PR #5 review).
+  await database.transaction(async (tx) => {
+    const [invited] = await tx.insert(users).values({
+      organizationId: actor.organizationId,
+      kind: "studio",
+      email: address,
+      name: String(name ?? "").trim() || null,
+      role,
+      state: "pending",
+      passwordHash: null,
+      inviteTokenHash: invite.tokenHash,
+      inviteExpiresAt: invite.expiresAt,
+      // Set when they accept, not when they are asked — this column is the day they JOINED.
+      joinedAt: null,
+    }).returning({ id: users.id });
+    await recordAudit(tx, {
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      action: "member.invited",
+      target: { kind: "user", id: invited.id },
+      summary: `הזמנה לצוות: ${personToken(invited.id)} · ${STUDIO_ROLE_LABEL[role]}`,
+      people: await peopleOf(tx, [actor.userId, invited.id]),
+    });
   });
 
   revalidateSettings();
@@ -265,10 +280,25 @@ export async function setMemberRole(id: string, role: StudioRole): Promise<Studi
   if (!canManagePeople(actor.role)) throw new Error("only the owner can change roles");
   if (id === actor.userId) throw new Error("you cannot change your own role");
 
-  await db()
-    .update(users)
-    .set({ role })
-    .where(and(eq(users.id, id), eq(users.organizationId, actor.organizationId), eq(users.kind, "studio")));
+  await db().transaction(async (tx) => {
+    const [before] = await tx
+      .select({ role: users.role })
+      .from(users)
+      .where(and(eq(users.id, id), eq(users.organizationId, actor.organizationId), eq(users.kind, "studio")));
+    if (!before || before.role === role) return;
+    await tx
+      .update(users)
+      .set({ role })
+      .where(and(eq(users.id, id), eq(users.organizationId, actor.organizationId), eq(users.kind, "studio")));
+    await recordAudit(tx, {
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      action: "member.role_changed",
+      target: { kind: "user", id },
+      summary: `תפקיד: ${personToken(id)} · ${STUDIO_ROLE_LABEL[before.role]} ← ${STUDIO_ROLE_LABEL[role]}`,
+      people: await peopleOf(tx, [actor.userId, id]),
+    });
+  });
   revalidateSettings();
   return membersOf(actor.organizationId);
 }
@@ -288,18 +318,8 @@ export async function removeMember(id: string): Promise<StudioMember[]> {
   if (!canManagePeople(actor.role)) throw new Error("only the owner can remove people");
   if (id === actor.userId) throw new Error("you cannot remove yourself");
 
-  await db()
-    .delete(users)
-    .where(
-      and(
-        eq(users.id, id),
-        eq(users.organizationId, actor.organizationId),
-        eq(users.kind, "studio"),
-        // Belt and braces next to the self-check above: whatever happens to roles later, the row
-        // that owns this studio is not deletable through the people screen.
-        ne(users.role, "owner"),
-      ),
-    );
+  if (!actor.userId) throw new Error("not signed in");
+  await eraseMember(actor.organizationId, id, actor.userId);
   revalidateSettings();
   return membersOf(actor.organizationId);
 }

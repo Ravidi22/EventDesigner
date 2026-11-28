@@ -23,12 +23,16 @@ import { revalidateSettings, revalidateShell } from "@/lib/db/revalidate";
 import { organizations, users, venues, venueGrants, zones, venueStructures, events, eventZones } from "@/lib/db/schema";
 import { reachesAllVenues } from "@/lib/team/types";
 import { ownedFileUrl, removeReplacedFile } from "@/lib/files/owned";
+import { peopleOf, recordAudit, type Database } from "@/lib/audit/write";
+import { closureOf, notClosed } from "@/lib/account/closure";
+import { personToken } from "@/lib/audit/render";
 import {
   atLeast,
   canSeeGrants,
   isGrantKind,
   isVenueRole,
   resolveVenueRole,
+  VENUE_ROLE_LABEL,
   type GrantKind,
   type ShareResult,
   type VenueGrant,
@@ -68,7 +72,7 @@ function today(): string {
  * caller's organisation by a manager. `ownerOrgId` is what every WRITE below scopes by: a guest
  * editor's save lands under the property's own organisation, never under the guest's.
  */
-async function venueRoleFor(actor: Actor, venueId: string): Promise<{ role: VenueRole; ownerOrgId: string } | null> {
+async function venueRoleFor(actor: Actor, venueId: string): Promise<{ role: VenueRole; ownerOrgId: string; ownerClosed: boolean } | null> {
   const database = db();
 
   const [venue] = await database
@@ -117,7 +121,10 @@ async function venueRoleFor(actor: Actor, venueId: string): Promise<{ role: Venu
       if (!orgGrant || atLeast(role, orgGrant)) orgGrant = role;
     }
   }
-  return { role: resolveVenueRole({ ownsVenue, reachesAll, memberGrant, orgGrant }), ownerOrgId: venue.organizationId };
+  // Somebody else's closed business: read-only to every guest (EVE-22, spec §5.3). Its own people
+  // never get here — the closure stops them at currentActor().
+  const ownerClosed = !ownsVenue && !!(await closureOf(venue.organizationId));
+  return { role: resolveVenueRole({ ownsVenue, reachesAll, memberGrant, orgGrant, ownerClosed }), ownerOrgId: venue.organizationId, ownerClosed };
 }
 
 /**
@@ -178,7 +185,13 @@ export async function fetchVenues(): Promise<Venue[]> {
     rows.map(async ({ venue, ownerName }) => {
       const found = await venueRoleFor(actor, venue.id);
       const owned = venue.organizationId === actor.organizationId;
-      return { ...toVenue(venue), access: found?.role ?? "viewer", owned, ownerName: owned ? undefined : (ownerName ?? undefined) };
+      return {
+        ...toVenue(venue),
+        access: found?.role ?? "viewer",
+        owned,
+        ownerName: owned ? undefined : (ownerName ?? undefined),
+        ...(found?.ownerClosed ? { ownerClosed: true } : {}),
+      };
     }),
   );
 }
@@ -192,6 +205,8 @@ export async function fetchVenueDirectory(): Promise<VenueDirectoryEntry[]> {
     .select({ id: venues.id, name: venues.name, logoUrl: venues.logoUrl, ownerName: organizations.name })
     .from(venues)
     .leftJoin(organizations, eq(organizations.id, venues.organizationId))
+    // A closed business's venues take no new followers or events (EVE-22, DECIDE-14).
+    .where(notClosed(venues.organizationId))
     .orderBy(asc(venues.name));
   return rows
     .filter((r) => !mine.has(r.id))
@@ -202,8 +217,11 @@ export async function fetchVenueDirectory(): Promise<VenueDirectoryEntry[]> {
  *  organisation, active at once (viewing is everybody's anyway; the row is the list entry). A
  *  manager there may raise it to editor later. Idempotent: a second follow meets the
  *  (venue, email) key and does nothing. */
-export async function followVenue(venueId: string): Promise<{ venues: Venue[]; id: string }> {
+export async function followVenue(venueId: string): Promise<{ venues: Venue[]; id: string } | { error: string }> {
   const { actor, ownerOrgId } = await requireVenueAccess(venueId, "viewer");
+  // Answered, not thrown: a directory opened before the owner closed still lists it, and the person
+  // can pick another — a thrown message is redacted in production (CLAUDE.md; PR #5 review).
+  if (ownerOrgId !== actor.organizationId && (await closureOf(ownerOrgId))) return { error: "המתחם שייך לעסק שנסגר" };
   if (ownerOrgId !== actor.organizationId && actor.userId) {
     const [me] = await db().select({ email: users.email, name: users.name }).from(users).where(eq(users.id, actor.userId)).limit(1);
     if (me) {
@@ -569,7 +587,22 @@ export async function deleteVenue(id: string): Promise<Venue[] | { error: string
     };
   }
 
-  await database.delete(venues).where(and(eq(venues.id, id), eq(venues.organizationId, actor.organizationId)));
+  // The delete and its audit row are one transaction (lib/audit/write.ts; PR #5 review).
+  await database.transaction(async (tx) => {
+    const gone = await tx
+      .delete(venues)
+      .where(and(eq(venues.id, id), eq(venues.organizationId, actor.organizationId)))
+      .returning({ name: venues.name });
+    if (gone.length === 0) return;
+    await recordAudit(tx, {
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      action: "venue.deleted",
+      target: { kind: "venue", id },
+      summary: `מחיקת מתחם: ${gone[0].name}`,
+      people: await peopleOf(tx, [actor.userId]),
+    });
+  });
   revalidateShell();
   return fetchVenues();
 }
@@ -693,22 +726,28 @@ export async function shareVenue(input: {
     }
   }
 
+  // The grant and its audit row are one transaction (lib/audit/write.ts; PR #5 review).
   try {
-    await db().insert(venueGrants).values({
-      venueId,
-      grantorOrgId: actor.organizationId,
-      granteeOrgId,
-      granteeUserId,
-      granteeEmail: address,
-      granteeName: String(input?.name ?? "").trim() || null,
-      kind: input.kind,
-      role: input.role,
-      state: granteeOrgId ? "active" : "pending",
-      invitedAt: today(),
+    await db().transaction(async (tx) => {
+      const [{ id: grantId }] = await tx.insert(venueGrants).values({
+        venueId,
+        grantorOrgId: actor.organizationId,
+        granteeOrgId,
+        granteeUserId,
+        granteeEmail: address,
+        granteeName: String(input?.name ?? "").trim() || null,
+        kind: input.kind,
+        role: input.role,
+        state: granteeOrgId ? "active" : "pending",
+        invitedAt: today(),
+      }).returning({ id: venueGrants.id });
+      await auditGrant(tx, actor, grantId, VENUE_ROLE_LABEL[input.role]);
     });
-  } catch {
+  } catch (e) {
     // venue_grants_venue_email_key: one person, one grant per venue. Re-inviting an address that
-    // already holds one is a role change, which has its own call.
+    // already holds one is a role change, which has its own call. Anything else — an audit row
+    // that could not be written among them — is not this answer, and is not swallowed.
+    if (!isUniqueViolation(e)) throw e;
     return { error: "הכתובת הזו כבר קיבלה גישה למתחם", grants: await grantsOf(venueId) };
   }
 
@@ -716,20 +755,57 @@ export async function shareVenue(input: {
   return { grants: await grantsOf(venueId) };
 }
 
-/** The venue a grant belongs to — every mutation below needs it before it may check anything, and
- *  a grant id on its own says nothing about who is allowed to touch it. */
-async function venueOfGrant(id: string): Promise<string> {
+/** One audit row for a change to who may open a venue (EVE-52): a member as a person token, a guest
+ *  by the address the grant was made to. Written to the ACTING business's log. */
+async function auditGrant(database: Database, actor: Actor, grantId: string, what: string): Promise<void> {
+  const [g] = await database
+    .select({ venue: venues.name, kind: venueGrants.kind, userId: venueGrants.granteeUserId, email: venueGrants.granteeEmail })
+    .from(venueGrants)
+    .innerJoin(venues, eq(venues.id, venueGrants.venueId))
+    .where(eq(venueGrants.id, grantId))
+    .limit(1);
+  if (!g) return;
+  const who = g.kind === "member" && g.userId ? personToken(g.userId) : g.email;
+  await recordAudit(database, {
+    organizationId: actor.organizationId,
+    actorUserId: actor.userId,
+    action: "venue.grant_changed",
+    target: { kind: "venue_grant", id: grantId },
+    summary: `שיתוף מתחם: ${g.venue} · ${who} · ${what}`,
+    people: await peopleOf(database, [actor.userId, g.kind === "member" ? g.userId : null]),
+  });
+}
+
+/** Postgres' unique_violation (23505), whether drizzle hands the driver's error over or wraps it. */
+function isUniqueViolation(e: unknown): boolean {
+  const code = (x: unknown) => (x && typeof x === "object" && "code" in x ? (x as { code?: unknown }).code : undefined);
+  return code(e) === "23505" || code((e as { cause?: unknown })?.cause) === "23505";
+}
+
+/** The venue a grant belongs to, and the grant's role — every mutation below needs the venue before it
+ *  may check anything, and a grant id on its own says nothing about who is allowed to touch it. */
+async function venueOfGrant(id: string): Promise<{ venueId: string; role: VenueRole }> {
   assertId(id, "id");
-  const [row] = await db().select({ venueId: venueGrants.venueId }).from(venueGrants).where(eq(venueGrants.id, id)).limit(1);
+  const [row] = await db()
+    .select({ venueId: venueGrants.venueId, role: venueGrants.role })
+    .from(venueGrants)
+    .where(eq(venueGrants.id, id))
+    .limit(1);
   if (!row) throw new Error("אין לך גישה למתחם הזה");
-  return row.venueId;
+  return row as { venueId: string; role: VenueRole };
 }
 
 export async function setGrantRole(id: string, role: VenueRole): Promise<VenueGrant[]> {
   if (!isVenueRole(role)) throw new Error("role must be viewer | editor | manager");
-  const venueId = await venueOfGrant(id);
-  await requireVenueAccess(venueId, "manager");
-  await db().update(venueGrants).set({ role }).where(eq(venueGrants.id, id));
+  const { venueId, role: was } = await venueOfGrant(id);
+  const { actor } = await requireVenueAccess(venueId, "manager");
+  // The role it already has changes nothing, and writes no line in the log (PR #5 review).
+  if (was === role) return grantsOf(venueId);
+  // The change and its audit row are one transaction (lib/audit/write.ts).
+  await db().transaction(async (tx) => {
+    await tx.update(venueGrants).set({ role }).where(eq(venueGrants.id, id));
+    await auditGrant(tx, actor, id, VENUE_ROLE_LABEL[role]);
+  });
   revalidateSettings();
   return grantsOf(venueId);
 }
@@ -740,7 +816,7 @@ export async function setGrantRole(id: string, role: VenueRole): Promise<VenueGr
  *  property they are standing in, and the click would lock them out of it with no way back in
  *  except asking the owner. Same shape as "you cannot remove yourself" on the team screen. */
 export async function revokeGrant(id: string): Promise<VenueGrant[]> {
-  const venueId = await venueOfGrant(id);
+  const { venueId } = await venueOfGrant(id);
   const { actor } = await requireVenueAccess(venueId, "manager");
 
   const [row] = await db()
@@ -752,7 +828,12 @@ export async function revokeGrant(id: string): Promise<VenueGrant[]> {
     throw new Error("אי אפשר לבטל את הגישה של עצמכם");
   }
 
-  await db().delete(venueGrants).where(eq(venueGrants.id, id));
+  // One transaction; the audit row is written before the delete because the row it reads is the one
+  // going (lib/audit/write.ts; PR #5 review).
+  await db().transaction(async (tx) => {
+    await auditGrant(tx, actor, id, "בוטל");
+    await tx.delete(venueGrants).where(eq(venueGrants.id, id));
+  });
   revalidateSettings();
   return grantsOf(venueId);
 }

@@ -15,6 +15,7 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { eventHosting, eventLinks, eventZones, events } from "@/lib/db/schema";
 import { notify, studioRecipients } from "@/lib/notifications/write";
+import { closureOf } from "@/lib/account/closure";
 import { revalidateBookings } from "@/lib/db/revalidate";
 import { changedFacts, followedPatch, SHARED_FACT_LABEL } from "./types";
 
@@ -47,6 +48,9 @@ export async function followBooking(venueEventId: string, hostName: string): Pro
   try {
     const [link] = await db().select().from(eventLinks).where(eq(eventLinks.venueEventId, venueEventId)).limit(1);
     if (!link || link.state !== "active" || !link.studioEventId || !link.studioOrgId) return;
+    // A designer whose business closed (EVE-22) is no longer on the other end: their event — locked,
+    // and after the erase perhaps a retained record — never moves with the booking.
+    if (await closureOf(link.studioOrgId)) return;
     const [booking, before] = await Promise.all([factsOf(venueEventId, link.venueOrgId), factsOf(link.studioEventId, link.studioOrgId)]);
     if (!booking || !before) return;
     const after = followedPatch(booking);

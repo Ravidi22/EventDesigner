@@ -66,6 +66,8 @@ import type { SceneSettings } from "@/lib/scene/types";
 import type { Course, DishTag, PackageCourse, PackageExtra } from "@/lib/menus/types";
 import type { DaySlot, EventVendor, RunStep, ServiceStyle, SpecialMeal } from "@/lib/hosting/types";
 import type { LinkState } from "@/lib/event-links/types";
+import type { IssuerSnapshot, PrintedFacts } from "@/lib/account/rules";
+import type { AuditAction, AuditPeople } from "@/lib/audit/types";
 import type {
   AllocationStatus,
   DocumentCredit,
@@ -1711,4 +1713,55 @@ export const eventLinks = pgTable(
     index("event_links_studio_org_idx").on(t.studioOrgId),
     index("event_links_email_idx").on(t.invitedEmail),
   ],
+);
+
+// ── The account lifecycle (docs/superpowers/specs/2026-11-27-account-lifecycle-design.md) ──────────
+
+/** A business that was closed (lib/account/). One row from the owner's close until nothing of the
+ *  business is left: `erased_at` null = still in its grace period and reopenable; set = erased, and
+ *  the row is the tombstone the RETAINED billing records hang on until `retain_until`.
+ *
+ *  Its own table, not columns on `organizations`: the lifecycle lives together, and the organisation
+ *  row every screen reads stays as it was. Every request reads it (lib/auth/session.ts), so its
+ *  migration reaches production before the code that reads it. */
+export const organizationClosures = pgTable("organization_closures", {
+  organizationId: uuid("organization_id").primaryKey(),
+  /** The business's name when it closed — what an ownerless venue shows as its owner after erase. */
+  name: text("name").notNull(),
+  closedAt: timestamp("closed_at", { withTimezone: true }).notNull(),
+  /** Who closed it. No FK: the person is erased with the business, the row outlives them. */
+  closedBy: uuid("closed_by"),
+  eraseAfter: timestamp("erase_after", { withTimezone: true }).notNull(),
+  erasedAt: timestamp("erased_at", { withTimezone: true }),
+  /** Every object under the business's file prefix but the KEEP list is gone (lib/account/erase.ts). */
+  filesErasedAt: timestamp("files_erased_at", { withTimezone: true }),
+  /** The day after which the retained billing documents may go (lib/account/rules.ts). */
+  retainUntil: date("retain_until"),
+  /** What the retained documents' page read from studio_settings, written at erase. */
+  issuer: jsonb("issuer").$type<IssuerSnapshot>(),
+  /** Per retained event id: the venue name and zones label its documents print. */
+  printed: jsonb("printed").$type<Record<string, PrintedFacts>>(),
+});
+
+/** Who did what, for the actions a business owner must be able to look back on (EVE-52, lib/audit/).
+ *  A person appears in `summary` only as a `{{p:<id>}}` token and in `people` by name, so erasing a
+ *  person is one wipe of their name here and the row still says what was done. */
+export const auditLog = pgTable(
+  "audit_log",
+  {
+    id: id(),
+    organizationId: orgId(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    /** No FK: a person may be erased, their actions stay (their name is wiped from `people`). Null =
+     *  a script or the system. */
+    actorUserId: uuid("actor_user_id"),
+    action: text("action").$type<AuditAction>().notNull(),
+    targetKind: text("target_kind"),
+    targetId: text("target_id"),
+    /** The Hebrew line, people as `{{p:<id>}}` tokens (lib/audit/render.ts fills them). */
+    summary: text("summary").notNull(),
+    people: jsonb("people").$type<AuditPeople>().notNull().default({}),
+    details: jsonb("details").$type<Record<string, unknown>>(),
+  },
+  (t) => [index("audit_log_org_at_idx").on(t.organizationId, t.at.desc())],
 );

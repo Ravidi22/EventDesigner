@@ -1,12 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { CalendarDays, ChevronLeft, LogOut, MapPin, Users } from "lucide-react";
+import { CalendarDays, ChevronLeft, MapPin, Users } from "lucide-react";
 import { NotificationBell } from "@/components/notification-bell";
 import { Wordmark } from "@/components/wordmark";
-import { signOut } from "@/lib/auth/actions";
+import { ClientAccountMenu } from "@/components/client-account-menu";
 import { formatEventDate } from "@/lib/events/types";
 import type { ClientEvent } from "@/lib/client-portal/types";
 
@@ -21,42 +19,21 @@ export function ClientHome({
   name,
   email,
   events,
+  needsPassword,
 }: {
   name: string | null;
   email: string;
   events: ClientEvent[];
+  /** The login has a password — deleting it asks for it (lib/auth/logins.ts). */
+  needsPassword: boolean;
 }) {
-  const router = useRouter();
-  const [leaving, setLeaving] = useState(false);
-
-  const leave = async () => {
-    setLeaving(true);
-    await signOut();
-    router.replace("/login");
-    router.refresh();
-  };
-
   return (
     <div dir="rtl" className="flex min-h-dvh flex-col bg-bg">
       <header className="flex h-16 shrink-0 items-center gap-4 border-b border-border bg-surface px-6">
         <Wordmark tone="mono" className="text-[22px]" />
-        <span className="ms-auto min-w-0 leading-tight text-end">
-          <span className="block truncate text-sm font-semibold text-ink">{name || "החשבון שלי"}</span>
-          <span className="block truncate text-xs text-quiet" dir="ltr">
-            {email}
-          </span>
-        </span>
+        <span className="ms-auto" />
         <NotificationBell side="client" />
-        <button
-          type="button"
-          onClick={leave}
-          disabled={leaving}
-          aria-label="יציאה מהחשבון"
-          title="יציאה מהחשבון"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-bg hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40"
-        >
-          <LogOut className="h-[18px] w-[18px]" strokeWidth={1.4} />
-        </button>
+        <ClientAccountMenu name={name} email={email} needsPassword={needsPassword} />
       </header>
 
       <main className="mx-auto w-full max-w-2xl flex-1 px-6 py-12">
@@ -86,41 +63,57 @@ function EventList({ events }: { events: ClientEvent[] }) {
     <>
       <h1 className="font-display text-h1 text-ink text-balance">האירוע שלכם</h1>
       <div className="mt-6 flex flex-col gap-4">
-        {events.map((e) => (
-          <Link
-            key={e.id}
-            href={`/client/events/${e.id}`}
-            className="group block rounded-lg border border-border bg-surface p-6 transition-shadow hover:shadow-floating focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-          >
-            <p className="font-label text-[10px] font-medium uppercase tracking-[3px] text-quiet" dir="ltr">
-              {e.studioName}
-            </p>
-            <h2 className="mt-2 font-display text-h2 text-ink">
-              {e.venueName ?? "המתחם טרם נבחר"}
-            </h2>
-            <dl className="mt-4 flex flex-col gap-2.5 text-sm text-ink-soft">
-              <Row icon={CalendarDays} label="תאריך">
-                {formatEventDate(e.date)}
-                {e.time ? ` · ${e.time}` : ""}
-              </Row>
-              {e.where && (
-                <Row icon={MapPin} label="איפה">
-                  {e.where}
-                </Row>
-              )}
-              {e.guests > 0 && (
-                <Row icon={Users} label="אורחים">
-                  <span className="nums">{e.guests}</span>
-                </Row>
-              )}
-            </dl>
-            <p className="mt-5 flex items-center justify-between gap-3 border-t border-border pt-4 text-sm font-semibold text-accent">
-              לסקיצה של האירוע — לצפייה ולהצעת שינויים
-              <ChevronLeft className="h-4 w-4 shrink-0 transition-transform group-hover:-translate-x-0.5" strokeWidth={1.75} />
-            </p>
-          </Link>
-        ))}
+        {events.map((e) =>
+          // A closed studio's event stays on the list, saying so (EVE-22) — it opens nothing any more.
+          e.studioClosed ? (
+            <div key={e.id} className="block rounded-lg border border-border bg-surface p-6">
+              <EventFacts event={e} />
+              <p className="mt-5 border-t border-border pt-4 text-sm text-ink-soft">
+                הסטודיו סגר את החשבון ב־Eve, והסקיצה כבר לא זמינה כאן. שאלות על האירוע — לסטודיו.
+              </p>
+            </div>
+          ) : (
+            <Link
+              key={e.id}
+              href={`/client/events/${e.id}`}
+              className="group block rounded-lg border border-border bg-surface p-6 transition-shadow hover:shadow-floating focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              <EventFacts event={e} />
+              <p className="mt-5 flex items-center justify-between gap-3 border-t border-border pt-4 text-sm font-semibold text-accent">
+                לסקיצה של האירוע — לצפייה ולהצעת שינויים
+                <ChevronLeft className="h-4 w-4 shrink-0 transition-transform group-hover:-translate-x-0.5" strokeWidth={1.75} />
+              </p>
+            </Link>
+          ),
+        )}
       </div>
+    </>
+  );
+}
+
+function EventFacts({ event: e }: { event: ClientEvent }) {
+  return (
+    <>
+      <p className="font-label text-[10px] font-medium uppercase tracking-[3px] text-quiet" dir="ltr">
+        {e.studioName}
+      </p>
+      <h2 className="mt-2 font-display text-h2 text-ink">{e.venueName ?? "המתחם טרם נבחר"}</h2>
+      <dl className="mt-4 flex flex-col gap-2.5 text-sm text-ink-soft">
+        <Row icon={CalendarDays} label="תאריך">
+          {formatEventDate(e.date)}
+          {e.time ? ` · ${e.time}` : ""}
+        </Row>
+        {e.where && (
+          <Row icon={MapPin} label="איפה">
+            {e.where}
+          </Row>
+        )}
+        {e.guests > 0 && (
+          <Row icon={Users} label="אורחים">
+            <span className="nums">{e.guests}</span>
+          </Row>
+        )}
+      </dl>
     </>
   );
 }

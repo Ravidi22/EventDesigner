@@ -27,6 +27,7 @@ import { assertEventOwned } from "@/lib/events/ownership";
 import { fetchEvent } from "@/lib/events/actions";
 import type { EventSummary } from "@/lib/events/types";
 import { toDocument } from "./db-mapping";
+import { peopleOf, recordAudit } from "@/lib/audit/write";
 import {
   allocationRequired,
   amountLine,
@@ -49,6 +50,7 @@ import {
 } from "./rules";
 import {
   DOCUMENT_KINDS,
+  KIND_LABEL,
   PAYMENT_MEANS,
   type AllocationStatus,
   type BillingDocument,
@@ -262,6 +264,19 @@ async function insertDocument(tx: Tx, organizationId: string, issuedBy: string |
       contentHash: createHash("sha256").update(frozen).digest("hex"),
     })
     .returning();
+  // Every issue passes here, so one audit row covers them all — inside the transaction that took the
+  // number: a document nobody can trace is not issued.
+  await recordAudit(tx, {
+    organizationId,
+    actorUserId: issuedBy,
+    action: d.kind === "credit" ? "billing.credited" : "billing.issued",
+    target: { kind: "billing_document", id: row.id },
+    summary:
+      d.kind === "credit"
+        ? `זיכוי ${number}${d.credit?.againstNumber ? ` · נגד ${d.credit.againstNumber}` : ""}`
+        : `הפקת ${KIND_LABEL[d.kind]} ${number} · ${d.customer.name}`,
+    people: await peopleOf(tx, [issuedBy]),
+  });
   return toDocument(row);
 }
 
@@ -764,11 +779,23 @@ export async function cancelDocument(id: string, reason: string): Promise<Billin
   const doc = await ownedDocument(organizationId, id);
   const refusal = cancelRefusal(doc, today());
   if (refusal) return { error: refusal };
-  const [row] = await db()
-    .update(billingDocuments)
-    .set({ status: "cancelled", cancelledAt: new Date(), cancelReason: str(reason, 300) || null })
-    .where(and(eq(billingDocuments.id, id), eq(billingDocuments.organizationId, organizationId)))
-    .returning();
+  const actor = await currentActor();
+  const row = await db().transaction(async (tx) => {
+    const [updated] = await tx
+      .update(billingDocuments)
+      .set({ status: "cancelled", cancelledAt: new Date(), cancelReason: str(reason, 300) || null })
+      .where(and(eq(billingDocuments.id, id), eq(billingDocuments.organizationId, organizationId)))
+      .returning();
+    await recordAudit(tx, {
+      organizationId,
+      actorUserId: actor.userId,
+      action: "billing.cancelled",
+      target: { kind: "billing_document", id },
+      summary: `ביטול ${KIND_LABEL[doc.kind]} ${doc.number}`,
+      people: await peopleOf(tx, [actor.userId]),
+    });
+    return updated;
+  });
   revalidateBilling();
   return toDocument(row);
 }
@@ -779,11 +806,23 @@ export async function markOriginal(id: string): Promise<BillingDocument> {
   const organizationId = await currentOrg();
   const doc = await ownedDocument(organizationId, id);
   if (doc.originalAt) return doc;
-  const [row] = await db()
-    .update(billingDocuments)
-    .set({ originalAt: new Date() })
-    .where(and(eq(billingDocuments.id, id), eq(billingDocuments.organizationId, organizationId)))
-    .returning();
+  const actor = await currentActor();
+  const row = await db().transaction(async (tx) => {
+    const [updated] = await tx
+      .update(billingDocuments)
+      .set({ originalAt: new Date() })
+      .where(and(eq(billingDocuments.id, id), eq(billingDocuments.organizationId, organizationId)))
+      .returning();
+    await recordAudit(tx, {
+      organizationId,
+      actorUserId: actor.userId,
+      action: "billing.original_marked",
+      target: { kind: "billing_document", id },
+      summary: `הדפסת מקור: ${KIND_LABEL[doc.kind]} ${doc.number}`,
+      people: await peopleOf(tx, [actor.userId]),
+    });
+    return updated;
+  });
   return toDocument(row);
 }
 

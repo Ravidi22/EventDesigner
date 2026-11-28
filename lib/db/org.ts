@@ -13,7 +13,8 @@
 // "use client" module — a tenant check that runs in the browser is a tenant check the browser can
 // edit. It imports next/headers (through the session module), which is itself an error in a client
 // bundle.
-import { currentSession } from "@/lib/auth/session";
+import { currentSession, type Session } from "@/lib/auth/session";
+import { CLOSED_REFUSAL } from "@/lib/account/words";
 import type { StudioRole } from "@/lib/team/types";
 import type { OrgKind } from "@/lib/auth/kinds";
 
@@ -84,6 +85,33 @@ export interface Actor {
   role: StudioRole;
 }
 
+/** Every studio action, once the business has been closed (EVE-22): the business is locked — for
+ *  the owner as for the members — until it is reopened or erased. The few things allowed while closed
+ *  go through closedMember() instead. */
+export class BusinessClosedError extends Error {
+  constructor() {
+    super(CLOSED_REFUSAL);
+    this.name = "BusinessClosedError";
+  }
+}
+
+/** The signed-in person of a CLOSED business — for the closed page, reopening, the owner's export
+ *  and a member's own account deletion. Throws when the business is open (use currentActor()) or for a
+ *  script. */
+export async function closedMember(): Promise<Actor & { closed: NonNullable<Session["closed"]> }> {
+  if (scriptOrg) throw new Error("a script acts on an open business");
+  const session = await currentSession();
+  if (!session) throw new Error("not signed in");
+  if (session.kind !== "studio" || !session.organizationId || !session.closed) throw new Error("the business is not closed");
+  return {
+    organizationId: session.organizationId,
+    organizationKind: session.organizationKind ?? "studio",
+    userId: session.userId,
+    role: session.role,
+    closed: session.closed,
+  };
+}
+
 export async function currentActor(): Promise<Actor> {
   // A script has no cookie and therefore no person. It acts as an owner because that is exactly the
   // access it has had all along — actAsOrgForScript() predates roles and was never filtered by
@@ -96,6 +124,7 @@ export async function currentActor(): Promise<Actor> {
   if (session.kind !== "studio" || !session.organizationId) {
     throw new Error("this account is not a studio account");
   }
+  if (session.closed) throw new BusinessClosedError();
   return {
     organizationId: session.organizationId,
     organizationKind: session.organizationKind ?? "studio",

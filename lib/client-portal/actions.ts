@@ -16,6 +16,7 @@
 // (see the schema note); the designer's design_documents row is not touched by anything here.
 // Every save is re-derived through the delta filter (lib/design-document/delta.ts), so a field a
 // client may not change cannot reach the row whatever the browser sent.
+import { notClosed } from "@/lib/account/closure";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentSession, type Session } from "@/lib/auth/session";
@@ -23,6 +24,7 @@ import {
   eventClients,
   eventZones,
   events,
+  organizationClosures,
   organizations,
   sketchProposals,
   venues,
@@ -67,6 +69,7 @@ export async function fetchMyEvents(): Promise<ClientEvent[]> {
       guests: events.guests,
       venueName: venues.name,
       studioName: organizations.name,
+      closedAt: organizationClosures.closedAt,
     })
     .from(eventClients)
     // The join IS the permission check. An event with no row in event_clients for this user simply
@@ -74,6 +77,9 @@ export async function fetchMyEvents(): Promise<ClientEvent[]> {
     .innerJoin(events, eq(events.id, eventClients.eventId))
     .leftJoin(venues, eq(venues.id, events.venueId))
     .leftJoin(organizations, eq(organizations.id, events.organizationId))
+    // A closed studio's event stays on the list, saying so (spec §5.3) — it is not a link any more:
+    // every other read of it (the sketch, the 3D) answers as for an unknown event.
+    .leftJoin(organizationClosures, eq(organizationClosures.organizationId, events.organizationId))
     .where(and(eq(eventClients.userId, session.userId), eq(events.archived, false)))
     .orderBy(asc(events.eventDate));
 
@@ -85,6 +91,7 @@ export async function fetchMyEvents(): Promise<ClientEvent[]> {
     guests: r.guests,
     venueName: r.venueName ?? undefined,
     studioName: r.studioName ?? "",
+    ...(r.closedAt ? { studioClosed: true } : {}),
   }));
 }
 
@@ -125,7 +132,7 @@ async function sharedEvent(eventId: string): Promise<Shared> {
     .innerJoin(events, eq(events.id, eventClients.eventId))
     .leftJoin(venues, eq(venues.id, events.venueId))
     .leftJoin(organizations, eq(organizations.id, events.organizationId))
-    .where(and(eq(eventClients.userId, session.userId), eq(eventClients.eventId, eventId), eq(events.archived, false)))
+    .where(and(eq(eventClients.userId, session.userId), eq(eventClients.eventId, eventId), eq(events.archived, false), notClosed(events.organizationId)))
     .limit(1);
   if (!row) throw new Error("this event is not shared with you");
   return {

@@ -67,6 +67,12 @@ assert(presign({ ...base, expiresIn: 600 }) !== url, "the expiry is signed");
 assert(presign({ ...base, secretAccessKey: "other" }) !== url, "the secret is signed");
 assert(presign({ ...base, now: new Date("2026-08-14T10:15:30Z") }) !== url, "the date is signed");
 
+// A bucket-level request (the erase's ListObjectsV2, EVE-22): no key, extra query parameters signed.
+const list = presign({ ...base, method: "GET", key: "", params: [["prefix", "org-1/"], ["list-type", "2"]] });
+assert(list.startsWith("https://acct.r2.cloudflarestorage.com/eve-media?"), "a bucket-level URL has no trailing slash or key");
+assert(list.includes("list-type=2") && list.includes("prefix=org-1%2F"), "the extra parameters are in the query, encoded");
+assert(presign({ ...base, method: "GET", key: "", params: [["prefix", "org-2/"], ["list-type", "2"]] }) !== list, "the parameters are signed");
+
 // The query must be in sorted order, because that is the order the server rebuilds it in.
 const query = url.split("?")[1].split("&").map((p) => p.split("=")[0]);
 const withoutSignature = query.slice(0, -1);

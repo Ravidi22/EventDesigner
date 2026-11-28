@@ -2,6 +2,7 @@
 import { invitationEmail } from "./invitation";
 import { clientInvitationEmail } from "./client-invitation";
 import { resetPasswordEmail } from "./reset-password";
+import { businessClosedEmail } from "./business-closed";
 import { verifyEmailEmail } from "./verify-email";
 import type { RenderedEmail } from "./layout";
 
@@ -15,6 +16,7 @@ const rendered: [string, RenderedEmail][] = [
   ["invitation, no inviter", invitationEmail({ studioName: "", inviterName: null, url: URL_, expiresInDays: 14 })],
   ["client invitation", clientInvitationEmail({ studioName: "סטודיו לילך", url: URL_, expiresInDays: 14 })],
   ["reset", resetPasswordEmail({ url: URL_, expiresInMinutes: 60 })],
+  ["closed", businessClosedEmail({ name: "אירית עיצובים", eraseOn: "27.12.2026", url: URL_ })],
   ["verify", verifyEmailEmail({ url: URL_, expiresInHours: 24 })],
 ];
 

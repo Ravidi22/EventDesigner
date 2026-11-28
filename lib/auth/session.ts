@@ -11,7 +11,8 @@ import { cache } from "react";
 import { headers } from "next/headers";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { organizations, users } from "@/lib/db/schema";
+import { organizationClosures, organizations, users } from "@/lib/db/schema";
+import { closureState } from "@/lib/account/rules";
 import type { OrgKind } from "./kinds";
 import { auth } from "./auth";
 
@@ -31,6 +32,9 @@ export interface Session {
   email: string;
   name: string | null;
   role: "owner" | "designer" | "crew";
+  /** The business was closed by its owner and waits to be erased (lib/account/, EVE-22). Every studio
+   *  action refuses it (lib/db/org.ts) and every studio page sends its people to /closed. Null = open. */
+  closed: { closedAt: string; eraseAfter: string; state: "closed" | "due" } | null;
 }
 
 const ROLES = new Set(["owner", "designer", "crew"]);
@@ -63,14 +67,24 @@ async function scriptSession(userId: string) {
   return row ?? null;
 }
 
-/** What the organisation is. A row written before organisations had a kind is a studio. */
-async function organizationKindOf(organizationId: string): Promise<OrgKind> {
+/** What the organisation is — a row written before organisations had a kind is a studio — and
+ *  whether it has been closed, in one query. */
+async function organizationOf(organizationId: string): Promise<{ kind: OrgKind; closed: Session["closed"] }> {
   const [org] = await db()
-    .select({ kind: organizations.kind })
+    .select({ kind: organizations.kind, closedAt: organizationClosures.closedAt, eraseAfter: organizationClosures.eraseAfter })
     .from(organizations)
+    .leftJoin(organizationClosures, eq(organizationClosures.organizationId, organizations.id))
     .where(eq(organizations.id, organizationId))
     .limit(1);
-  return org?.kind ?? "studio";
+  const closed =
+    org?.closedAt && org.eraseAfter
+      ? {
+          closedAt: org.closedAt.toISOString(),
+          eraseAfter: org.eraseAfter.toISOString(),
+          state: closureState({ closedAt: org.closedAt, eraseAfter: org.eraseAfter, erasedAt: null }, new Date()) === "due" ? ("due" as const) : ("closed" as const),
+        }
+      : null;
+  return { kind: org?.kind ?? "studio", closed };
 }
 
 /**
@@ -104,14 +118,16 @@ export const currentSession = cache(async (): Promise<Session | null> => {
   if (user.state !== "active") return null;
 
   const organizationId = user.organizationId ?? null;
+  const org = organizationId ? await organizationOf(organizationId) : null;
   return {
     userId: user.id,
     // Anything but a literal "studio" is a client: the side of the app that grants less.
     kind: user.kind === "studio" ? "studio" : "client",
     organizationId,
-    organizationKind: organizationId ? await organizationKindOf(organizationId) : null,
+    organizationKind: org?.kind ?? null,
     email: user.email,
     name: user.name || null,
     role: ROLES.has(user.role ?? "") ? (user.role as Session["role"]) : "designer",
+    closed: org?.closed ?? null,
   };
 });

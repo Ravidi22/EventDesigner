@@ -1,13 +1,14 @@
-// Better Auth's own endpoints: email verification links, the password-reset handshake, Google's
-// sign-in callback (reached through app/api/google/callback), and the sign-in/sign-up calls the
-// account actions make through lib/auth/auth-call.ts. Everything is lib/auth/auth.ts's to answer —
-// except the endpoints the app only calls in-process (lib/auth/public-routes.ts): from outside they
-// would skip the server action's own rules, so they are not found here (PR #4 review).
+// Better Auth's endpoints, as a BROWSER may reach them: the links Better Auth mails or redirects to —
+// the email confirmation, the reset link, its error page — and nothing else (lib/auth/public-routes.ts,
+// an allow-list). Everything the app itself asks of Better Auth (sign-in and sign-up, the reset form,
+// delete-account, Google's sign-in callback) goes in-process, through lib/auth/auth-call.ts or
+// app/api/google/callback, past the server action's own rules; from outside it is not found here
+// (PR #4 review, PR #5's re-review).
 import { auth } from "@/lib/auth/auth";
 import { refusedPublicly } from "@/lib/auth/public-routes";
 
 const handle = (request: Request) =>
-  refusedPublicly(request.url) ? new Response(null, { status: 404 }) : auth().handler(request);
+  refusedPublicly(request.url, request.method) ? new Response(null, { status: 404 }) : auth().handler(request);
 
 export const GET = handle;
 export const POST = handle;

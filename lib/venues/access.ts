@@ -92,6 +92,9 @@ export interface VenueStanding {
   memberGrant: VenueRole | null;
   /** The highest active guest grant handed to the caller's organisation. */
   orgGrant: VenueRole | null;
+  /** The owning business is closed (EVE-22): other businesses keep reading its plan, and nobody
+   *  outside it changes it any more — its own people are locked out by the closure itself. */
+  ownerClosed?: boolean;
 }
 
 /** EVERYBODY SEES THE SAME VENUE (2026-10-30, the user: "the one who created it can define who can
@@ -101,6 +104,7 @@ export interface VenueStanding {
  *  another business has the grant its organisation was handed. */
 export function resolveVenueRole(s: VenueStanding): VenueRole {
   if (s.ownsVenue) return s.reachesAll ? "manager" : (s.memberGrant ?? "viewer");
+  if (s.ownerClosed) return "viewer";
   return s.orgGrant ?? "viewer";
 }
 

@@ -73,6 +73,8 @@ export interface PresignInput {
   /** Seconds the URL stays valid. Short on purpose: it is a bearer credential in a query string. */
   expiresIn: number;
   now?: Date;
+  /** Extra query parameters, signed with the rest — a bucket-level ListObjectsV2 (`key: ""`). */
+  params?: readonly (readonly [string, string])[];
 }
 
 /**
@@ -84,18 +86,20 @@ export interface PresignInput {
  * shows up as 403 with no explanation of which byte differed.
  */
 export function presign(input: PresignInput): string {
-  const url = new URL(input.endpoint.replace(/\/$/, "") + "/" + input.key.replace(/^\//, ""));
+  const bucket = input.endpoint.replace(/\/$/, "");
+  const url = new URL(input.key ? bucket + "/" + input.key.replace(/^\//, "") : bucket);
   const { amzDate, dateStamp } = amzDates(input.now ?? new Date());
   const scope = `${dateStamp}/${input.region}/s3/aws4_request`;
 
   // `host` is the only signed header. Every other header the browser sends is therefore free to
   // vary, which matters because we do not control what a browser attaches to a PUT.
-  const query: [string, string][] = [
+  const query: (readonly [string, string])[] = [
     ["X-Amz-Algorithm", ALGORITHM],
     ["X-Amz-Credential", `${input.accessKeyId}/${scope}`],
     ["X-Amz-Date", amzDate],
     ["X-Amz-Expires", String(input.expiresIn)],
     ["X-Amz-SignedHeaders", "host"],
+    ...(input.params ?? []),
   ];
 
   // Sorted by encoded key — AWS compares byte order, not insertion order.

@@ -127,6 +127,7 @@ export function saveEndPanelOpen(screen: string, open: boolean): void {
   }
 }
 
-// There is no clearScratch(). Nothing called the old clearDoc() either, and the one place that
-// wants this gone — "ניקוי נתוני המכשיר" in settings — drops every `eve.*` key at once
-// (lib/settings/data.ts). A second way to delete the same thing is a second thing to keep correct.
+// There is no clearScratch(). Nothing called the old clearDoc() either. What this browser keeps is
+// per-device position (which event and venue it has open, a scratch drawing), and settings no longer
+// offers to wipe it: the old "נתונים" panel went when the whole business became a real export
+// (EVE-51, settings › ייצוא נתונים). A browser's own "clear site data" drops every `eve.*` key.

@@ -60,4 +60,9 @@ assert(!canSeeGrants(false, resolveVenueRole({ ...none, orgGrant: "editor" })), 
 assert(isVenueRole("editor") && !isVenueRole("admin"), "isVenueRole rejects a role that does not exist");
 assert(isGrantKind("member") && !isGrantKind("owner"), "isGrantKind rejects a studio role");
 
+// A closed business's venue (EVE-22): other businesses keep reading it, nobody else changes it.
+assert(resolveVenueRole({ ...none, orgGrant: "manager", ownerClosed: true }) === "viewer", "a guest manager of a closed business's venue only reads it");
+assert(resolveVenueRole({ ...none, orgGrant: "editor", ownerClosed: true }) === "viewer", "so does a guest editor");
+assert(resolveVenueRole({ ...none, orgGrant: "editor", ownerClosed: false }) === "editor", "an open owner's grant stands");
+
 console.log("venue access policy self-check passed");

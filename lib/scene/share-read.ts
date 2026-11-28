@@ -11,6 +11,7 @@
 // What it returns is the client portal's shape exactly (./reads.ts clientSceneFor): products
 // through clientProduct, the studio's public contact line, no price anywhere. `check:scene-share`
 // holds what this file and app/v may import.
+import { notClosed } from "@/lib/account/closure";
 import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { events, organizations, sceneLinks, venues } from "@/lib/db/schema";
@@ -44,7 +45,16 @@ export async function sceneByToken(token: string): Promise<ClientScene | null> {
     .innerJoin(events, and(eq(events.id, sceneLinks.eventId), eq(events.organizationId, sceneLinks.organizationId)))
     .leftJoin(venues, eq(venues.id, events.venueId))
     .leftJoin(organizations, eq(organizations.id, events.organizationId))
-    .where(and(eq(sceneLinks.tokenHash, hashInviteToken(token)), isNull(sceneLinks.revokedAt), gt(sceneLinks.expiresAt, now), eq(events.archived, false)))
+    .where(
+      and(
+        eq(sceneLinks.tokenHash, hashInviteToken(token)),
+        isNull(sceneLinks.revokedAt),
+        gt(sceneLinks.expiresAt, now),
+        eq(events.archived, false),
+        // A closed business answers no link (EVE-22) — the same "not active" as any dead token.
+        notClosed(events.organizationId),
+      ),
+    )
     .limit(1);
   if (!row) return null;
   await db()

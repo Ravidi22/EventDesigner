@@ -45,6 +45,8 @@ export async function requireStudio(): Promise<Session> {
   // A studio account that has not named its business yet has no organisation, and every screen
   // behind this guard is scoped by one. /welcome is where it gets it.
   if (!session.organizationId) redirect("/welcome");
+  // A closed business is locked (EVE-22): its owner and its members see only /closed.
+  if (session.closed) redirect("/closed");
   return session;
 }
 

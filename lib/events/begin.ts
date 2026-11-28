@@ -34,7 +34,7 @@ export async function beginEvent(input: {
   mmPerUnit?: number;
   /** A saved sketch to open the event on (lib/studio/sketch-actions.ts); absent = a blank plan. */
   sketchTemplateId?: string;
-}): Promise<EventSummary> {
+}): Promise<EventSummary | { error: string }> {
   const ev: EventSummary = {
     id: input.id ?? crypto.randomUUID(),
     clientName: input.clientName,
@@ -58,7 +58,9 @@ export async function beginEvent(input: {
   // The id is minted in the browser, and the row is written with it — so the document below and the
   // event it belongs to agree on an id without waiting to be told one. saveEvent is an upsert on the
   // id: a retry under the same id writes the same row again, never a second event.
-  await saveEvent(ev);
+  // A refusal the designer can act on (a venue whose business closed) comes back to the form.
+  const saved = await saveEvent(ev);
+  if (!Array.isArray(saved)) return saved;
   setActiveEventId(ev.id);
   // Seeded under this event's own id, explicitly — not dependent on setActiveEventId having run
   // first, which was an ordering rule enforced only by a comment. Awaited now that it is a round

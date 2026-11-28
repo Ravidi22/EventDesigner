@@ -40,7 +40,14 @@ import { emptyStructure, type VenueStructure } from "@/lib/venues/structure";
 import type { Zone } from "@/lib/venues/zone";
 import { fetchMembers, inviteMember, regenerateInvite, removeMember } from "@/lib/team/actions";
 import { inviteInfo, signUp } from "@/lib/auth/actions";
-import { confirmEvent, fetchEvents, saveEvent, patchEvent, reachStep } from "@/lib/events/actions";
+import { confirmEvent, fetchEvents, saveEvent as saveEventAction, patchEvent as patchEventAction, reachStep } from "@/lib/events/actions";
+// The two answer { error } for a correction the designer can make; here that is a failed run.
+const listOf = <T,>(r: T[] | { error: string }): T[] => {
+  if (!Array.isArray(r)) throw new Error(r.error);
+  return r;
+};
+const saveEvent = async (...a: Parameters<typeof saveEventAction>) => listOf(await saveEventAction(...a));
+const patchEvent = async (...a: Parameters<typeof patchEventAction>) => listOf(await patchEventAction(...a));
 import type { EventSummary } from "@/lib/events/types";
 import {
   fetchAppointments,

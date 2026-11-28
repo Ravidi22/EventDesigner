@@ -26,7 +26,12 @@ actAsOrgForScript(ORG);
 
 import { db } from "@/lib/db";
 import { billingDocuments, documentCounters, events, organizations, studioSettings } from "@/lib/db/schema";
-import { saveEvent } from "@/lib/events/actions";
+import { saveEvent as saveEventAction } from "@/lib/events/actions";
+const saveEvent = async (...a: Parameters<typeof saveEventAction>) => {
+  const r = await saveEventAction(...a);
+  if (!Array.isArray(r)) throw new Error(r.error);
+  return r;
+};
 import { issueQuote } from "@/lib/quotes/actions";
 import { DEFAULT_LAYOUT } from "@/lib/quotes/layout";
 import { cancelDocument, creditDocument, fetchEventBilling, fetchLedger, issueInvoice, issueOrder, markOriginal, recordPayment, setCounterStart } from "./actions";

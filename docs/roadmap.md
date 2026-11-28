@@ -161,7 +161,8 @@ The plan here was Clerk. It was replaced on 2026-10-17 by **Better Auth, in-proc
 - [x] **Password change** — `changePassword` in `lib/auth/actions.ts`, on the account screen. Needs no email, which is why it did not wait for one: it requires the CURRENT password (a session cookie is a bearer token, so a borrowed laptop must not be enough to take an account away from its owner) and ends every other session, which is what a person actually wants when they change a password they think someone else knows
 - [x] **Reset by email** — `/forgot` → `/reset`, Better Auth + Resend
 - [ ] Changing your sign-in address (needs verification of the new one before the old stops working; the field is deliberately read-only until then) — EVE-50
-- [ ] Delete my account / close my business, and a full export first — EVE-22, EVE-51
+- [x] **Close the business, delete my account, the full export, the audit log** — EVE-22, EVE-51, EVE-52 (2026-11-27, spec docs/superpowers/specs/2026-11-27-account-lifecycle-design.md). The owner closes the business in settings (it locks at once; reopenable for 30 days, then erased — keeping only the billing documents the tax law needs and the venues other businesses still use); a member or a client deletes their own account; the owner downloads the whole business as one zip and reads a log of sensitive actions. The erase runs by script (`npm run accounts:erase-due`) until there is a timer — EVE-53, parked with the environment
+- [ ] Two-step sign-in — EVE-49 (PR B of the account lifecycle)
 
 ### 6. Known rough edges
 

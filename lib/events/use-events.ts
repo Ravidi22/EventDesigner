@@ -72,7 +72,11 @@ export function useEvents(initial?: EventSummary[]): EventsHandle {
   }, [load]);
 
   const patch = useCallback(async (id: string, fields: EventPatch) => {
-    setEvents(await patchEvent(id, fields));
+    const result = await patchEvent(id, fields);
+    // A refusal the person can act on (a venue whose business closed): thrown HERE, in the browser,
+    // where its words survive — the caller's catch shows them.
+    if (!Array.isArray(result)) throw new Error(result.error);
+    setEvents(result);
   }, []);
 
   // The whole list back, like patch — the action already re-read it, and splicing the row out here

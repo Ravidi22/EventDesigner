@@ -11,7 +11,7 @@
 // dishes' NAMES — never a package's prices.
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { eventHosting, eventLinks, eventZones, events, menuDishes, menuPackages, organizations, studioSettings, venues } from "@/lib/db/schema";
+import { eventHosting, eventLinks, eventZones, events, menuDishes, menuPackages, organizationClosures, organizations, studioSettings, venues } from "@/lib/db/schema";
 import { toHosting } from "@/lib/hosting/db-mapping";
 import { SERVICE_STYLE_LABEL, SLOT_LABEL, SPECIAL_MEALS, SPECIAL_MEAL_LABEL } from "@/lib/hosting/types";
 import { COURSE_LABEL, isDishTag, servedDishes, type Dish } from "@/lib/menus/types";
@@ -43,18 +43,23 @@ export async function venueSideLinks(venueEventIds: string[]): Promise<Map<strin
   const out = new Map<string, VenueSideLink>();
   if (venueEventIds.length === 0) return out;
   const rows = await db()
-    .select({ link: eventLinks, studioOrg: organizations.name, business: studioSettings.businessName })
+    .select({ link: eventLinks, studioOrg: organizations.name, business: studioSettings.businessName, closed: organizationClosures.closedAt })
     .from(eventLinks)
     .leftJoin(organizations, eq(organizations.id, eventLinks.studioOrgId))
     .leftJoin(studioSettings, eq(studioSettings.organizationId, eventLinks.studioOrgId))
+    .leftJoin(organizationClosures, eq(organizationClosures.organizationId, eventLinks.studioOrgId))
     .where(inArray(eventLinks.venueEventId, venueEventIds));
-  for (const { link, studioOrg, business } of rows) {
+  for (const { link, studioOrg, business, closed } of rows) {
+    // A designer whose business closed (EVE-22) is no longer on the other end: the link reads as
+    // ended, so the hall may link someone else.
+    const gone = !!closed && link.state === "active";
     out.set(link.venueEventId, {
       id: link.id,
-      state: link.state,
+      state: gone ? "ended" : link.state,
       invitedEmail: link.invitedEmail,
       studioName: business || studioOrg || undefined,
-      studioEventId: link.state === "active" ? (link.studioEventId ?? undefined) : undefined,
+      studioEventId: !gone && link.state === "active" ? (link.studioEventId ?? undefined) : undefined,
+      ...(gone ? { designerGone: true } : {}),
     });
   }
   return out;

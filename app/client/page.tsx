@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { requireClient } from "@/lib/auth/guard";
 import { fetchMyEvents } from "@/lib/client-portal/actions";
+import { hasPasswordLogin } from "@/lib/auth/logins";
 import { ClientHome } from "./client-home";
 
 export const metadata: Metadata = { title: "האירוע שלי · Eve" };
@@ -14,6 +15,6 @@ export const metadata: Metadata = { title: "האירוע שלי · Eve" };
 // would add a loading flash to a page that does not need one.
 export default async function ClientPage() {
   const session = await requireClient();
-  const eventList = await fetchMyEvents();
-  return <ClientHome name={session.name} email={session.email} events={eventList} />;
+  const [eventList, needsPassword] = await Promise.all([fetchMyEvents(), hasPasswordLogin(session.userId)]);
+  return <ClientHome name={session.name} email={session.email} events={eventList} needsPassword={needsPassword} />;
 }

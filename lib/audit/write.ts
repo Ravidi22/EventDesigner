@@ -1,0 +1,63 @@
+// Writing the audit log (EVE-52). A PLAIN module, never "use server": it takes ids and trusts them —
+// the server actions that call it have already proved who is acting (the same rule as
+// lib/notifications/write.ts).
+//
+// Unlike `notify`, it THROWS: it runs inside the writer's own transaction, and a sensitive change that
+// cannot be recorded is not made. Every writer passes its `tx` — db:verify:account refuses the insert
+// at the database and checks that each audited change is then not made (PR #5 review).
+//
+// Two changes are made by Better Auth in its own transaction, which ours cannot join:
+//   · a password change (lib/auth/actions.ts changePassword) — the row is written once Better Auth has
+//     committed it, so a row that cannot be written leaves the change unrecorded and the action fails;
+//   · a person's own delete (lib/account/member.ts beforePersonErased, from Better Auth's beforeDelete
+//     hook) — the row is written BEFORE the delete, so a row that cannot be written stops it.
+// The export route (app/api/account/export/data) writes its row before it answers: no row, no data.
+import { and, eq, sql } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { auditLog, users } from "@/lib/db/schema";
+import type { AuditEntry, AuditPeople } from "./types";
+
+/** `db()` or a transaction handed in by the caller. */
+export type Database = ReturnType<typeof db> | Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0];
+
+export async function recordAudit(database: Database, entry: AuditEntry): Promise<void> {
+  await database.insert(auditLog).values({
+    organizationId: entry.organizationId,
+    actorUserId: entry.actorUserId,
+    action: entry.action,
+    targetKind: entry.target?.kind ?? null,
+    targetId: entry.target?.id ?? null,
+    summary: entry.summary,
+    people: entry.people,
+    details: entry.details ?? null,
+  });
+}
+
+/** The `people` map for these users, read now: their names and whether each is a member or a client.
+ *  An id with no row (already gone) is left out — the line then reads "former member". */
+export async function peopleOf(database: Database, ids: readonly (string | null | undefined)[]): Promise<AuditPeople> {
+  const wanted = [...new Set(ids.filter((x): x is string => !!x))];
+  const people: AuditPeople = {};
+  for (const id of wanted) {
+    const [row] = await database.select({ name: users.name, email: users.email, kind: users.kind }).from(users).where(eq(users.id, id)).limit(1);
+    if (row) people[id] = { name: row.name || row.email, kind: row.kind === "studio" ? "member" : "client" };
+  }
+  return people;
+}
+
+/** Erase a person from the business's log: their name goes from every row's `people`; the rows stay,
+ *  and every line they appear in reads "former member" (or "former client"). */
+/** A client belongs to no business and may be named in many businesses' logs: wipe the name in all. */
+export async function forgetPersonEverywhere(database: Database, userId: string): Promise<void> {
+  await database
+    .update(auditLog)
+    .set({ people: sql`jsonb_set(${auditLog.people}, ARRAY[${userId}, 'name'], 'null'::jsonb)` })
+    .where(sql`${auditLog.people} ? ${userId}`);
+}
+
+export async function forgetPerson(database: Database, organizationId: string, userId: string): Promise<void> {
+  await database
+    .update(auditLog)
+    .set({ people: sql`jsonb_set(${auditLog.people}, ARRAY[${userId}, 'name'], 'null'::jsonb)` })
+    .where(and(eq(auditLog.organizationId, organizationId), sql`${auditLog.people} ? ${userId}`));
+}

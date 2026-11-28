@@ -59,7 +59,8 @@ export interface VenuesHandle {
   remove: (id: string) => Promise<VenueDeleteRefusal | null>;
   /** Put another business's property on this list (followVenue) and open it — everybody sees the
    *  same venue, so a designer picks the plan its owner drew rather than tracing it again. */
-  follow: (id: string) => Promise<void>;
+  /** null when it is on the list; else why not, in words for the person. */
+  follow: (id: string) => Promise<string | null>;
   reload: () => Promise<void>;
 }
 
@@ -170,10 +171,12 @@ export function VenuesProvider({
     return null;
   }, []);
 
-  const follow = useCallback(async (id: string) => {
-    const { venues: next } = await followVenue(id);
-    setVenues(next);
+  const follow = useCallback(async (id: string): Promise<string | null> => {
+    const result = await followVenue(id);
+    if ("error" in result) return result.error;
+    setVenues(result.venues);
     setActiveVenueId(id);
+    return null;
   }, []);
 
   const value = useMemo<VenuesHandle>(

@@ -20,7 +20,13 @@ export type NotificationKind =
   | "link.accepted"
   | "link.declined"
   /** To the designer's studio: the venue moved a fact the linked event follows (date, rooms, guests). */
-  | "link.updated";
+  | "link.updated"
+  /** To the designer's studio: the linked venue's business was erased — the event stays, unlinked. */
+  | "link.venue_closed"
+  /** To the owner: a member deleted their own account (lib/account/member.ts). */
+  | "member.left"
+  /** To the studio: a client of one of its events deleted their login. */
+  | "client.left";
 
 /** Whose bell a notification rings in. Every kind is written to exactly ONE side, so a notification's
  *  event id names an event in that side's own world — the studio's event, the hall's booking, the
@@ -32,6 +38,9 @@ export const KIND_SIDE: Record<NotificationKind, NotificationSide> = {
   "client.joined": "studio",
   "link.invited": "studio",
   "link.updated": "studio",
+  "link.venue_closed": "studio",
+  "member.left": "studio",
+  "client.left": "studio",
   "link.accepted": "venue",
   "link.declined": "venue",
   "proposal.resolved": "client",
@@ -107,6 +116,11 @@ export function notificationText(n: Pick<AppNotification, "kind" | "payload">): 
         title: `עדכון ${fromName(p.actorName || "האולם")}: ${p.facts?.length ? p.facts.join(", ") : "פרטי האירוע"}`,
         detail: p.eventLabel,
       };
+    case "link.venue_closed":
+      return { title: `${p.actorName ? `האולם ${p.actorName}` : "האולם"} סגר את החשבון — האירוע נשאר, בלי הקישור`, detail: p.eventLabel };
+    case "member.left":
+    case "client.left":
+      return { title: `החשבון של ${p.actorName || "משתמש"} נמחק`, detail: p.eventLabel };
   }
 }
 
@@ -119,7 +133,11 @@ export function notificationHref(n: Pick<AppNotification, "kind" | "eventId" | "
     // The dashboard opens an event's drawer from `?event=`.
     case "client.joined":
     case "link.updated":
+    case "link.venue_closed":
+    case "client.left":
       return n.eventId ? `/dashboard?event=${n.eventId}` : "/dashboard";
+    case "member.left":
+      return "/settings";
     case "proposal.resolved":
     case "event.shared":
       return n.eventId ? `/client/events/${n.eventId}` : "/client";

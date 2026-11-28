@@ -11,6 +11,7 @@
 import { and, eq, inArray, or, sql, type SQLWrapper } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { currentActor, currentOrg } from "@/lib/db/org";
+import { peopleOf, recordAudit } from "@/lib/audit/write";
 import { revalidateCatalog } from "@/lib/db/revalidate";
 import { products, productVariants, designDocuments, sketchProposals, sketchTemplates, studioSettings } from "@/lib/db/schema";
 import { COMPOSITION_VARIANT_PATHS, DRAWING_VARIANT_PATHS, STAGE_TEMPLATE_VARIANT_PATHS, namesAny } from "./variant-refs";
@@ -391,10 +392,20 @@ export async function removeProduct(
       .set({ archived: true, updatedAt: new Date() })
       .where(and(eq(products.id, id), eq(products.organizationId, organizationId)));
   } else {
-    // Variants cascade from the product's own foreign key.
-    await database
-      .delete(products)
-      .where(and(eq(products.id, id), eq(products.organizationId, organizationId)));
+    // Variants cascade from the product's own foreign key. The delete and its audit row are one
+    // transaction: a delete that cannot be recorded is not made (lib/audit/write.ts; PR #5 review).
+    const { userId } = await currentActor();
+    await database.transaction(async (tx) => {
+      await tx.delete(products).where(and(eq(products.id, id), eq(products.organizationId, organizationId)));
+      await recordAudit(tx, {
+        organizationId,
+        actorUserId: userId,
+        action: "product.deleted",
+        target: { kind: "product", id },
+        summary: `מחיקת פריט מהקטלוג: ${row.name}`,
+        people: await peopleOf(tx, [userId]),
+      });
+    });
   }
 
   revalidateCatalog();

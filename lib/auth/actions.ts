@@ -26,9 +26,11 @@ import { authAccounts, eventClients, events, organizations, studioSettings, user
 import { settleNewAccount } from "./new-account";
 import { SINGLE_ORG_ID } from "@/lib/db/org";
 import { notify, studioRecipients } from "@/lib/notifications/write";
+import { peopleOf, recordAudit } from "@/lib/audit/write";
 import { termsAcceptance } from "@/lib/legal/acceptance";
 import { LEGAL_STATUS, LEGAL_VERSION } from "@/lib/legal/status";
 import { callAuth } from "./auth-call";
+import { hasPasswordLogin } from "./logins";
 import { hashInviteToken } from "./invite-token";
 import { HOME_FOR, ORG_HOME, isOrgKind, type AccountKind, type OrgKind } from "./kinds";
 import { hashPassword, passwordProblem } from "./password";
@@ -521,7 +523,46 @@ export async function changePassword(input: {
     }
     return { error: "הסיסמה הנוכחית שגויה", field: "password" };
   }
+  // A client has no business, so no log to write to.
+  if (session.organizationId) {
+    await recordAudit(db(), {
+      organizationId: session.organizationId,
+      actorUserId: session.userId,
+      action: "security.password_changed",
+      summary: "שינוי סיסמה",
+      people: await peopleOf(db(), [session.userId]),
+    });
+  }
   return {};
+}
+
+/**
+ * "מחיקת החשבון" (EVE-22, spec §5.6–5.7) — a designer, crew member or client deletes their own
+ * account. The owner cannot: their way out is closing the business (settings → סגירת העסק).
+ *
+ * Through Better Auth's delete-user, so the router's checks run: an account with a password must
+ * send it (insisted on here — Better Auth alone would accept a session under a day old instead), a
+ * Google-only account needs a session that fresh. lib/auth/auth.ts's `beforeDelete` writes the audit
+ * row, wipes the name from the log, revokes Google and rings the bells (lib/account/member.ts).
+ */
+export async function deleteMyAccount(input: { password?: string }): Promise<{ ok: true } | { error: string }> {
+  const session = await currentSession();
+  if (!session) return { error: "יש להתחבר מחדש" };
+  if (session.kind === "studio" && session.role === "owner") {
+    return { error: "בעלים לא יכולים למחוק את החשבון — אפשר לסגור את העסק בהגדרות" };
+  }
+  const password = String(input?.password ?? "");
+  const credential = await hasPasswordLogin(session.userId);
+  if (credential && !password) return { error: "יש להזין את הסיסמה" };
+
+  const result = await callAuth("/delete-user", credential ? { password } : {});
+  if (!result.ok) {
+    if (result.status === 429) return { error: TOO_MANY };
+    if (result.code === "INVALID_PASSWORD") return { error: "הסיסמה שגויה" };
+    if (result.code === "SESSION_EXPIRED") return { error: "יש להתחבר מחדש ואז למחוק" };
+    return { error: "המחיקה לא הצליחה" };
+  }
+  return { ok: true };
 }
 
 /**

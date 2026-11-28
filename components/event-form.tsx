@@ -279,21 +279,30 @@ export function EventForm({
       // This WAITS for the write, unlike the meeting's later stages. The whole meeting hangs off the
       // event existing — the sketch stages save a document under its id, the quote stamps it — so
       // handing control on before the row is there would leave the next stage drawing into nothing.
+      // A refusal the designer can act on — a venue whose business has closed (PR #5 review) — comes
+      // back as { error } and is shown as it is; anything thrown is the generic line below.
       if (event) {
         const list = await patchEvent(event.id, fields);
+        if (!Array.isArray(list)) {
+          setError(list.error);
+          return;
+        }
         await onSaved(list.find((x) => x.id === event.id) ?? event);
       } else {
         // The venue list is already in state from the picker below — no need to go back to the
         // server for a scale we are holding.
         newEventId.current ??= crypto.randomUUID();
-        await onSaved(
-          await beginEvent({
-            ...fields,
-            id: newEventId.current,
-            mmPerUnit: venue?.plan.mmPerUnit ?? 1,
-            sketchTemplateId: sketchId || undefined,
-          }),
-        );
+        const made = await beginEvent({
+          ...fields,
+          id: newEventId.current,
+          mmPerUnit: venue?.plan.mmPerUnit ?? 1,
+          sketchTemplateId: sketchId || undefined,
+        });
+        if ("error" in made) {
+          setError(made.error);
+          return;
+        }
+        await onSaved(made);
         newEventId.current = null;
       }
     } catch {
@@ -406,7 +415,11 @@ export function EventForm({
                 value={venueId}
                 onChange={changeVenue}
                 aria-label="מתחם"
-                options={[{ value: "", label: "טרם נבחר" }, ...venues.map((v) => ({ value: v.id, label: v.name }))]}
+                options={[
+                  { value: "", label: "טרם נבחר" },
+                  // A closed business's venue takes no new event (EVE-22): offered only to the event already in it.
+                  ...venues.filter((v) => !v.ownerClosed || v.id === event?.venueId).map((v) => ({ value: v.id, label: v.name })),
+                ]}
                 className="w-full"
               />
             </div>

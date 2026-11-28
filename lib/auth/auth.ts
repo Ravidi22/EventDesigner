@@ -21,19 +21,21 @@
 //
 // ⚠ SERVER ONLY. Built lazily (auth()), because building it opens the database handle and an import
 // must never do that (see lib/db/index.ts).
-import { after } from "next/server";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { nextCookies } from "better-auth/next-js";
+import { APIError } from "better-auth/api";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { authAccounts, authRateLimits, authSessions, authVerifications, users } from "@/lib/db/schema";
 import { appOrigin } from "@/lib/app-url";
 import { emailEnabled } from "@/lib/email/config";
 import { sendEmail } from "@/lib/email/send";
+import { sendLater } from "@/lib/email/send-later";
 import { resetPasswordEmail, verifyEmailEmail } from "@/lib/email/templates";
 import { googleConfig } from "@/lib/google/config";
 import { hashPassword, verifyPassword } from "./password";
+import { beforePersonErased, personRow, type AfterErased } from "@/lib/account/member";
 
 /** The longest a "remembered" session lives; an unremembered one is a day (Better Auth's
  *  dontRememberMe) and its cookie dies with the browser — the same two numbers as before. */
@@ -49,25 +51,16 @@ export function authOrigin(): string {
   return appOrigin() ?? "http://localhost:3000";
 }
 
-/**
- * Mail goes out AFTER the response, never awaited inside it: a reset request for an address that
- * exists must take the same time as one for an address that does not, or the delay itself says
- * which addresses have accounts. Outside a request (a script) there is no after(); send inline.
- */
-function sendLater(task: () => Promise<unknown>): void {
-  try {
-    after(task);
-  } catch {
-    void task();
-  }
-}
-
 type Database = ReturnType<typeof db>;
 
 /** Exported for verification scripts, which hand it a throwaway database; the app uses auth(). */
 export function buildAuth(database: Database = db()) {
   const google = googleConfig();
   const origin = authOrigin();
+  // A self-delete's after-work (lib/account/member.ts AfterErased), from beforeDelete to afterDelete —
+  // Better Auth calls afterDelete only once the person is deleted. One per person; a delete that
+  // failed leaves its entry until that person's next try overwrites it.
+  const afterErased = new Map<string, AfterErased>();
   return betterAuth({
     appName: "Eve",
     baseURL: origin,
@@ -97,6 +90,28 @@ export function buildAuth(database: Database = db()) {
         organizationId: { type: "string", input: false, required: false },
         role: { type: "string", input: false, required: false, defaultValue: "designer" },
         state: { type: "string", input: false, required: false, defaultValue: "active" },
+      },
+      // "מחיקת החשבון" (EVE-22, lib/account/member.ts). A designer, crew member or client deletes
+      // their own account; an OWNER cannot — closing the business is their way out. A credential
+      // account must send its password (lib/auth/actions.ts deleteMyAccount insists); a Google-only one
+      // needs a fresh session (Better Auth's freshAge).
+      deleteUser: {
+        enabled: true,
+        beforeDelete: async (user) => {
+          const person = await personRow(database, user.id);
+          if (!person) return;
+          if (person.kind === "studio" && person.role === "owner") {
+            throw new APIError("FORBIDDEN", { message: "an owner closes the business instead" });
+          }
+          afterErased.set(user.id, await beforePersonErased(database, person, "self"));
+        },
+        // Their Google token is revoked and the bells ring only now: a delete that failed must not
+        // have done either (PR #5 re-review).
+        afterDelete: async (user) => {
+          const after = afterErased.get(user.id);
+          afterErased.delete(user.id);
+          await after?.().catch((e) => console.error("after a self-delete", e));
+        },
       },
     },
 
