@@ -19,7 +19,7 @@
 // the room origin and the ribbon's path carries the room coordinates, so the caller places the
 // build at `transform(vec3(0, 0, 0), 0)` and nothing else.
 //
-// Pure: no React, no three. `npx tsx lib/scene/overhead.ts` runs the self-check.
+// Pure: no React, no three. `npm run check:overhead` runs the self-check.
 import type { Point } from "@/lib/studio/hall";
 import type { CurtainStyle, SymbolKind } from "@/lib/catalog/symbols";
 import { FORMS, type FlowerDrawSpec, isPale } from "@/lib/catalog/flower-draw";

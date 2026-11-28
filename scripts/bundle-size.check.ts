@@ -18,6 +18,12 @@ assert(carriesChecks(leaked), "a minified isMain guard is caught");
 assert(carriesChecks('console.log("check:scene-card — all passed")'), "a check:<name> — message is caught");
 assert(!carriesChecks('const label = "בדיקות"; t("check the stage")'), "ordinary app text is not");
 assert(!carriesChecks("mainIsOpen&&isMainland"), "…nor a word that merely contains isMain");
+// Since lib/self-check.ts is gone no chunk can say isMain, and few checks print a check:<name> line —
+// so the two strings most checks DO print are fingerprints too (PR #3 review).
+assert(carriesChecks('console.error(`FAIL: ${e}`),process.exit(1)'), "a check's `FAIL: ` assertion is caught (template)");
+assert(carriesChecks('console.error("FAIL: "+e)'), "…and as a string");
+assert(carriesChecks('console.log("tape self-check passed")'), "a `self-check passed` line is caught");
+assert(!carriesChecks('const reason = "FAILED"; t("passed the check")'), "FAILED and passed-the-check are not");
 
 const dir = mkdtempSync(join(tmpdir(), "bundle-size-"));
 try {

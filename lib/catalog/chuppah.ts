@@ -14,7 +14,7 @@
 // size (`postR`, by its finish) — the chandelier round's lesson that the plan's sizes are not the
 // room's.
 //
-// Pure. Run: npx tsx lib/catalog/chuppah.ts
+// Pure. Run: npm run check:chuppah
 import type { ChuppahFinish, ChuppahFlowers, ChuppahRoof, ChuppahSpec, MapAppearance, RevolvePoint } from "./types";
 import { profileAt } from "../element/revolve";
 import { seedOf, type FlowerDrawSpec } from "./flower-draw";

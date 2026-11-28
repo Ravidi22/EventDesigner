@@ -1,7 +1,7 @@
 // npm run check:style — the self-check of ./element-style.ts, kept beside it so it never ships in the browser bundle (EVE-54).
 import { resolveStyle, type StyleDefaults } from "./element-style";
 
-// ponytail: self-check. Run: node --experimental-strip-types lib/element-style.ts
+// ponytail: self-check. Run: npm run check:style
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

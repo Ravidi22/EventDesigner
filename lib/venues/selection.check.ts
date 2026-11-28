@@ -3,7 +3,7 @@ import { type VenueStructure } from "./structure";
 import type { ResolvedZone } from "./zone";
 import { hitsInBox, mergeSelection, soleKind, toggleSelection, type PlanSelection } from "./selection";
 
-// ponytail: self-check. Run: node --experimental-strip-types lib/venues/selection.ts
+// ponytail: self-check. Run: npm run check:selection
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

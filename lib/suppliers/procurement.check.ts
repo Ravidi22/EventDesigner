@@ -2,7 +2,7 @@
 import { procurementReport, type EventDemand, type ProcurementItem, type ProcurementLookup } from "./procurement";
 
 // ponytail: self-check for the three reductions. Run:
-//   node --experimental-strip-types lib/suppliers/procurement.ts
+//   npm run check:procurement
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

@@ -1,7 +1,7 @@
 // npm run check:organic — the self-check of ./organic.ts, kept beside it so it never ships in the browser bundle (EVE-54).
 import { bladeHalfWidth, frondSpan, frondSpine, frondTriangles, lumpField, seeded, SPINE_STEPS, type FrondSpec, type V3 } from "./organic";
 
-// ponytail: self-check. Run: npx tsx lib/scene/organic.ts
+// ponytail: self-check. Run: npm run check:organic
 const assert = (ok: boolean, msg: string) => {
   if (!ok) {
     console.error("FAIL", msg);

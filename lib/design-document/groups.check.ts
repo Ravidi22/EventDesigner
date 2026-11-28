@@ -3,7 +3,7 @@ import type { DesignDocumentContent, DesignTable, Placement } from "./types";
 import { type BenchLookup } from "./bench";
 import { duplicateNumbers, expandToGroups, freeNumbers, groupSeated, groupSeats, nextTableNumber, numberedUnits, orderedNumbering, refitBlock, shownNumbers, soleGroupId, spreadSeated, spreadSeats, tableLabel, tableNumber, type NumberingAxis, type NumberingCorner, type NumberingOptions } from "./groups";
 
-// ponytail: self-check. Run: node --experimental-strip-types lib/design-document/groups.ts
+// ponytail: self-check. Run: npm run check:groups
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

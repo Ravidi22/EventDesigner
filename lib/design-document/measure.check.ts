@@ -1,7 +1,7 @@
 // npm run check:measure — the self-check of ./measure.ts, kept beside it so it never ships in the browser bundle (EVE-54).
 import { measure, measureTotals, rodLengthMm, type MeasureContext } from "./measure";
 
-// ponytail: self-check. Run: node --experimental-strip-types lib/design-document/measure.ts
+// ponytail: self-check. Run: npm run check:measure
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

@@ -9,6 +9,39 @@
 //   - report-uri (Firefox, Safari):  { "csp-report": { "effective-directive", "blocked-uri", "document-uri" } }
 //   - Reporting API (Chrome):        [ { "type": "csp-violation", "body": { effectiveDirective, blockedURL, documentURL } } ]
 
+/** Read a request's body as text, up to `max` bytes, or null when it is longer — refused on its declared
+ *  length before anything is read, and otherwise cut off as soon as the stream passes the cap, so a
+ *  public endpoint never holds a large body in memory (PR #2 review). */
+export async function readCapped(request: Request, max: number): Promise<string | null> {
+  const declared = Number(request.headers.get("content-length") ?? 0);
+  if (declared > max) return null;
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    all.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return new TextDecoder().decode(all);
+}
+
+/** Control characters and the line breaks some log viewers honour — a caller must not forge a log line. */
+const CONTROL = new RegExp(`[${String.fromCharCode(0)}-${String.fromCharCode(0x1f)}${String.fromCharCode(0x7f)}${String.fromCharCode(0x85)}${String.fromCharCode(0x2028)}${String.fromCharCode(0x2029)}]`, "g");
+const printable = (value: string) => value.replace(CONTROL, "?");
+
 /** At most this many lines from one POST — a page can batch reports, a poster can batch thousands. */
 const MAX_LINES = 20;
 
@@ -87,5 +120,5 @@ export function reportLines(body: unknown): string[] {
   return violationsOf(body)
     .filter((v) => v.directive)
     .slice(0, MAX_LINES)
-    .map((v) => `[csp] ${directiveName(v.directive)} blocked ${blockedSource(v.blocked) || "?"} on ${pagePath(v.page)}`);
+    .map((v) => printable(`[csp] ${directiveName(v.directive)} blocked ${blockedSource(v.blocked) || "?"} on ${pagePath(v.page)}`));
 }

@@ -2,7 +2,7 @@
 import type { Point } from "./hall";
 import { constrainAngleDeg, gridStepMm, snapPoint, snapTurned, type SnapBox } from "./snap";
 
-// ponytail: self-check. Run: node --experimental-strip-types lib/studio/snap.ts
+// ponytail: self-check. Run: npm run check:snap
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

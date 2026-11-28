@@ -2,7 +2,7 @@
 import type { Point } from "@/lib/studio/hall";
 import { CHARGER_R_MM, CORE, EDGE_GAP_MM, hitsKeepout, laySettings, placed, type Keepout, type SettingPlace, type SettingSeat } from "./tableware";
 
-// ponytail: self-check. Run: npx tsx lib/scene/tableware.ts
+// ponytail: self-check. Run: npm run check:tableware
 const assert = (ok: boolean, msg: string) => {
   if (!ok) {
     console.error("FAIL", msg);

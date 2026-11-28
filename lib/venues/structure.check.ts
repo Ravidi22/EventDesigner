@@ -4,7 +4,7 @@ import { footprintBounds, type Footprint } from "@/lib/studio/footprint";
 import { absoluteControlPoints, bulgeToCurve, cubicPointAt, setBulgeDepth, wallAngleDeg, wallLengthMm } from "@/lib/studio/geometry";
 import { addEntrance, addFeature, bulgeWall, canRestack, doorDistanceFrom, doorOffsets, doorsOf, DUPLICATE_OFFSET_MM, duplicateFeatures, emptyStructure, featureEdgeItems, featureFootprint, featureMovable, featureStage, isDoor, isVitrine, isWindow, moveWallControlPoint, nearestWall, newFeature, newFeatureFromProduct, openingsOn, removeEntrance, removeFeature, removeNode, removeWall, restackFeatures, setWallAngle, setWallBulge, setWallHeight, setWallLength, updateEntrance, updateFeature, wallBulgeMm, wallPoints, WINDOW_HEAD_MM, WINDOW_SILL_MM, windowHeights, type VenueStructure } from "./structure";
 
-// ponytail: self-check. Run: node --experimental-strip-types lib/venues/structure.ts
+// ponytail: self-check. Run: npm run check:structure
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

@@ -3,7 +3,7 @@ import { footprintOutlines } from "./footprint";
 import { buildArcOutline } from "./footprint";
 import { CHAIR_D_MM, CHAIR_OFFSET_MM, CHAIR_TUCK_MM, seatsAround, seatSides, seatTransform, type Seat } from "./seating";
 
-// ponytail: self-check. Run: node --experimental-strip-types lib/studio/seating.ts
+// ponytail: self-check. Run: npm run check:seats
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

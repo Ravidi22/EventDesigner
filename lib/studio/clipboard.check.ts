@@ -2,7 +2,7 @@
 import type { DesignDocumentContent, DesignTable, Placement } from "../design-document/types";
 import { clipCount, copySelection, heldClip, holdClip, nextPasteStep, pasteInto } from "./clipboard";
 
-// ponytail: self-check. Run: node --experimental-strip-types lib/studio/clipboard.ts
+// ponytail: self-check. Run: npm run check:clipboard
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

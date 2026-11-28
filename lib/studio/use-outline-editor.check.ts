@@ -3,7 +3,7 @@ import type { Entrance, Point } from "./hall";
 import { absoluteControlPoints, cubicPointAt, wallLengthMm } from "./geometry";
 import { closedOutline, closeRefusal, COALESCE_MS, continuesEntry, initialState, MAX_HISTORY, patchToken, pushPast, reconcileSelection, redoStore, sanitizeEdgeCurves, sanitizeLockedEdges, sideIndicesAfterInsert, sideIndicesAfterRemove, undoStore, withEdgeReshaped, withFixturesSet, withSelectionMoved, withSelectionRemoved, withSideLength, withVertexInserted, withVertexMoved, withVertexRemoved, withWallMoved, type OutlineState, type Store } from "./use-outline-editor";
 
-// ponytail: self-check. Run: node --experimental-strip-types lib/studio/use-outline-editor.ts
+// ponytail: self-check. Run: npm run check:outline
 const assert = (c: boolean, m: string) => {
   if (!c) throw new Error("FAIL: " + m);
 };

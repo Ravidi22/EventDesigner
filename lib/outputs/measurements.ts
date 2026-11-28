@@ -33,7 +33,6 @@ import { pointInPolygon } from "@/lib/venues/faces";
 import { overallDimensions } from "./dimensions";
 import { cluster, settingOut } from "./setting-out";
 import { centreOffset, wallTies } from "@/lib/studio/hang";
- // the self-check's oval stage only
 
 export type DimKind = "overall" | "chain" | "size" | "tie" | "gap" | "aisle" | "offset";
 

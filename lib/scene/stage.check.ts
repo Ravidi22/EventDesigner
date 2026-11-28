@@ -12,7 +12,7 @@ import { applyTransform, turn } from "./frame";
 import { type Part, vec3 } from "./types";
 import { BARRIER_HEIGHT_MM, benchParts, DECK_TOP_MM, RAIL_HEIGHT_MM, rampParts, RECESS_INSET_MM, SKIRT_PLEAT_MM, SOFA_BACK_HEIGHT_MM, stageNodes, treadParts, venueStageNodes, type StageChair, type StageOpts } from "./stage";
 
-// ponytail: self-check. Run: npx tsx lib/scene/stage.ts
+// ponytail: self-check. Run: npm run check:scene-stage
 {
   const assert = (ok: boolean, msg: string) => {
     if (!ok) {

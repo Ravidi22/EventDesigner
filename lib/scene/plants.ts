@@ -27,7 +27,7 @@
 //
 // One body per species × size × colour, shared by every plant like it (./collect.ts); the
 // instances turn by a hash of the feature's id, so a row of identical trees is not a row of
-// clones. Deterministic. `npx tsx lib/scene/plants.ts` holds the shapes.
+// clones. Deterministic. `npm run check:plants` holds the shapes.
 import { TREE_CLUMPS } from "@/components/item-symbol";
 import { profileAt } from "@/lib/element/revolve";
 import { CROWN_THIN } from "@/lib/catalog/body-profiles";

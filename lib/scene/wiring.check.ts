@@ -1,4 +1,13 @@
-// npm run check:scene — the self-check of ./check.ts, kept beside it so it never ships in the browser bundle (EVE-54).
+// npm run check:scene — the fixture (./fixture.ts) built by ./build.ts, asserted by hand. Its own
+// file because the fixture primes the catalog, which nothing a page imports may do — build.ts is
+// imported by the scene screens, this is imported by nobody.
+//
+// Each module also checks itself (check:envelope, check:tables, check:items, check:flowers,
+// check:floor-kinds, check:overhead, check:stage). This one checks the WIRING: that the build hands
+// every placement to the right builder, at the right height, and that the pieces agree — a chair
+// on a banquette shares its geometry with the chairs round the tables, a vase on a banquette stands
+// on its top, a chandelier hangs where its row says.
+// (Kept as a *.check.ts so it never ships in the browser bundle — EVE-54.)
 import { buildScene, wallCurtainTop } from "./build";
 import { fixtureInput, SECRET_PRICE } from "./fixture";
 import { DOOR_HEIGHT_MM, KERB_MM, type BodyNode } from "./types";
