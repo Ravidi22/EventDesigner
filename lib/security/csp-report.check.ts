@@ -1,5 +1,5 @@
 // npm run check:csp-report — what a browser's CSP report becomes in the server log, and what it never carries.
-import { reportLines } from "./csp-report";
+import { readCapped, reportLines } from "./csp-report";
 
 const assert = (ok: boolean, what: string) => {
   if (!ok) {
@@ -90,4 +90,36 @@ const long = reportLines({
 });
 assert(long.length === 1 && long[0].length < 200, "long fields are cut short");
 
-console.log("csp-report self-check passed");
+// A caller cannot forge a log line (PR #2 review): control characters never reach the log.
+const ch = (...codes: number[]) => String.fromCharCode(...codes);
+const CONTROL = new RegExp(`[${ch(0)}-${ch(0x1f)}${ch(0x7f)}${ch(0x85)}${ch(0x2028)}${ch(0x2029)}]`);
+const forged = reportLines({
+  "csp-report": { "effective-directive": "img-src", "blocked-uri": `x${ch(10)}[csp] script-src blocked https://evil`, "document-uri": "https://app.test/" },
+});
+assert(forged.length === 1 && !CONTROL.test(forged[0]), `no control character in a line (${JSON.stringify(forged)})`);
+const crafted = reportLines([
+  { type: "csp-violation", body: { effectiveDirective: `img-src${ch(0x2028)}x`, blockedURL: `a${ch(13)}b${ch(0)}c`, documentURL: "https://app.test/" } },
+]);
+assert(crafted.length === 1 && !CONTROL.test(crafted[0]), `…in any field (${JSON.stringify(crafted)})`);
+
+// The body is read up to the cap and no further — the route is public (PR #2 review).
+const post = (body: BodyInit, headers: Record<string, string> = {}) =>
+  new Request("https://app.test/api/csp-report", { method: "POST", body, headers, duplex: "half" } as RequestInit);
+async function bodies() {
+  assert((await readCapped(post("{}"), 8192)) === "{}", "a small body is read");
+  assert((await readCapped(post("x".repeat(8192)), 8192))?.length === 8192, "a body of exactly the cap is read");
+  assert((await readCapped(post("x".repeat(8193)), 8192)) === null, "one byte over the cap is refused");
+  assert((await readCapped(post("{}", { "content-length": "999999" }), 8192)) === null, "a declared length over the cap is refused before reading");
+  let pulled = 0;
+  const endless = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulled++;
+      controller.enqueue(new Uint8Array(1024));
+    },
+  });
+  assert((await readCapped(post(endless), 8192)) === null, "an endless stream with no length is refused…");
+  assert(pulled < 20, `…after reading about the cap, not the whole stream (${pulled} chunks)`);
+  assert((await readCapped(post("שלום"), 8192)) === "שלום", "UTF-8 is decoded");
+  console.log("csp-report self-check passed");
+}
+void bodies();

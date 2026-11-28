@@ -165,6 +165,7 @@
     "check:run-checks": "tsx scripts/run-checks.check.ts",
     "check:shrink": "tsx lib/files/shrink-rules.check.ts",
     "check:isolation-inventory": "tsx lib/db/isolation/inventory.check.ts",
+    "check:isolation-env": "tsx lib/db/isolation/env.check.ts",
     "check:isolation-judge": "tsx lib/db/isolation/judge.check.ts",
     "checks": "tsx scripts/run-checks.ts",
     "check:password": "tsx lib/auth/password.ts",
